@@ -2615,7 +2615,23 @@ body {
     font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
     margin: 0;
 }
-.bps-app { padding: 12px 22px 40px; }
+/* -------------------------------------------------------------------------
+   APP SHELL
+   The panel used to be a scrolling document: setup forms on top, then the map,
+   then the history bar, with a sticky sidebar hack to stop a long receiver list
+   running off-screen. The map - the whole point of the panel - ended up boxed
+   in the middle of the page with dead space below it.
+   It is now a fixed-height shell that never scrolls as a whole; the map takes
+   whatever space is left, and the lists that can grow scroll inside themselves.
+   ------------------------------------------------------------------------- */
+body { overflow: hidden; }
+.bps-app {
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    padding: 0 22px 12px;
+    box-sizing: border-box;
+}
 .bps-header h1 {
     font-size: 22px;
     font-weight: 700;
@@ -2649,11 +2665,62 @@ body {
     border-bottom-color: hsl(var(--sidebar-primary));
 }
 .bps-tabpanel { display: none; }
-.bps-tabpanel.active { display: block; }
+/* The active panel is the shell's only growing row. min-height:0 is load-bearing:
+   without it a flex item refuses to shrink below its content and the map pushes
+   the history bar off-screen instead of shrinking. */
+.bps-tabpanel.active {
+    display: flex;
+    flex: 1 1 auto;
+    min-height: 0;
+}
+/* Panels that are lists rather than a map keep their own scroll. */
+.bps-tabpanel[data-tabpanel="calibration"].active,
+.bps-tabpanel[data-tabpanel="debugging"].active { overflow: auto; display: block; }
+
+/* Setup drawer toggle: pushed to the right of the tab row. */
+.bps-setup-toggle {
+    appearance: none;
+    margin-left: auto;
+    align-self: center;
+    background: none;
+    border: 1px solid hsl(var(--border));
+    border-radius: 8px;
+    padding: 5px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    color: hsl(var(--muted-foreground));
+    cursor: pointer;
+    transition: color .12s, border-color .12s, background .12s;
+}
+.bps-setup-toggle:hover { color: hsl(var(--foreground)); border-color: hsl(var(--muted-foreground)); }
+.bps-setup-toggle[aria-expanded="true"] {
+    color: hsl(var(--foreground));
+    border-color: hsl(var(--sidebar-primary));
+    background: hsl(var(--sidebar-primary) / 0.12);
+}
+/* Collapsed is the default state, set on .bps-app so the drawer's own markup
+   stays free of inline styles. */
+.bps-app.setup-collapsed #setupDrawer { display: none; }
 
 /* Main split: content (setup + map) + sidebar */
-.bps-main { display: flex; gap: 16px; align-items: flex-start; }
-.bps-content { flex: 1 1 auto; min-width: 0; }
+.bps-main {
+    display: flex;
+    gap: 16px;
+    align-items: stretch;   /* was flex-start: the sidebar now runs full height */
+    flex: 1 1 auto;
+    min-height: 0;
+    min-width: 0;
+}
+.bps-content {
+    flex: 1 1 auto;
+    min-width: 0;
+    /* Column so the canvas can claim the leftover height and the zone bar,
+       adjust strip and history bar keep their natural size around it. */
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    gap: 8px;
+}
 
 /* Ultrawide (e.g. 32:9): setup stacked on the left, map centered, zones right.
    .bps-content becomes display:contents so its children (setup row, zone bar,
@@ -2892,7 +2959,13 @@ select.bps-input { cursor: pointer; }
 /* Canvas */
 .bps-canvas-wrap {
     position: relative;
-    margin-top: 10px;
+    /* The one element that absorbs spare height. Centring the canvas inside it
+       keeps a portrait plan in the middle of a wide box instead of jammed left. */
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     border: 1px solid hsl(var(--border));
     border-radius: 12px;
     overflow: hidden;
@@ -2905,11 +2978,14 @@ select.bps-input { cursor: pointer; }
        drawing buffer and centers with margin:auto). Without the max-height, a
        square/portrait floor-plan on a wide monitor would grow taller than the
        viewport and push the map (and Reset-view button) below the fold. */
+    /* The magic-number max-height (100vh minus a guess at the chrome above)
+       is gone: the wrapper is now a flex item that already knows exactly how
+       much room is left, so the canvas just fills it and keeps its ratio. */
     max-width: 100%;
+    max-height: 100%;
     width: auto;
     height: auto;
-    max-height: calc(100vh - 320px);
-    margin: 0 auto;
+    margin: 0;
 }
 /* In the ultrawide grid the map fills the 80% column. This must come AFTER the
    fit-to-box rule above: media queries don't add specificity, so an override
@@ -3006,9 +3082,13 @@ select.bps-input { cursor: pointer; }
 /* Sidebar: zones with their receivers */
 .bps-sidebar {
     flex: 0 0 320px;
-    position: sticky;
-    top: 12px;
-    max-height: calc(100vh - 24px); /* refined at runtime to the viewport bottom */
+    /* Was sticky with a JS height cap (syncSidebarHeight) to stop a long
+       receiver list running off the bottom of a scrolling page. In the shell
+       the sidebar is simply a full-height flex item, so the cap is unnecessary
+       - and syncSidebarHeight already no-ops on a non-sticky sidebar, clearing
+       any max-height it had set. */
+    position: relative;
+    min-height: 0;
     overflow-y: auto;
     background: hsl(var(--sidebar-background));
     color: hsl(var(--sidebar-foreground));
@@ -3334,6 +3414,21 @@ input[type="checkbox"] { accent-color: hsl(var(--sidebar-primary)); }
 @media (max-width: 1100px) {
     .bps-main { flex-direction: column; }
     .bps-sidebar { flex: 1 1 auto; width: 100%; position: static; max-height: none; }
+
+    /* Below the stacking breakpoint the shell is wrong: the map, history bar and
+       sidebar sit one under another and total far more than a viewport, so a
+       fixed-height, non-scrolling shell would strand everything under the fold.
+       Hand this width back to normal document flow. */
+    body { overflow: auto; }
+    .bps-app { height: auto; display: block; padding-bottom: 40px; }
+    .bps-tabpanel.active { display: block; }
+    .bps-main { min-height: 0; }
+    .bps-content { display: block; }
+    .bps-canvas-wrap { display: block; }
+    /* Restore a sane cap so a portrait plan cannot fill the whole screen when
+       the wrapper is no longer a sized flex item. */
+    .bps-canvas-wrap canvas { max-height: 70vh; margin: 0 auto; }
+    .bps-sidebar { overflow-y: visible; }
 }
 
 /* ---- Position-history time scrubber -------------------------------------

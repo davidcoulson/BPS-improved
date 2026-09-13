@@ -12,13 +12,23 @@
             <button type="button" class="bps-tab active" data-tab="map" role="tab">Map &amp; Setup</button>
             <button type="button" class="bps-tab" data-tab="calibration" role="tab">Receiver Calibration</button>
             <button type="button" class="bps-tab" data-tab="debugging" role="tab">Debugging</button>
+            <!-- Right-aligned, outside the tablist semantics: it toggles the setup
+                 drawer within the Map tab rather than switching tab. -->
+            <button type="button" id="setupToggle" class="bps-setup-toggle"
+                    aria-expanded="false" aria-controls="setupDrawer"
+                    title="Show or hide the floor, tool and tracking controls">Setup</button>
         </nav>
 
         <!-- ============================ MAP & SETUP ============================ -->
         <section class="bps-tabpanel active" data-tabpanel="map">
             <div class="bps-main">
                 <div class="bps-content">
-                    <div class="bps-setup-row">
+                    <!-- Setup drawer. These are configure-once controls (floor name,
+                         plan image, tools, tracking options) that used to sit above
+                         the map permanently and pushed it below the fold. Collapsed
+                         by default; the Setup button in the tab bar toggles it and the
+                         choice is remembered. -->
+                    <div id="setupDrawer" class="bps-setup-row">
                         <div class="bps-setup-col">
                             <div class="bps-col-title">Floor</div>
                             <div class="bps-field-row">
