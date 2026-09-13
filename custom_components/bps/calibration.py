@@ -837,6 +837,24 @@ async def _stop_task(cal: dict) -> None:
             pass
 
 
+async def async_cancel_calibration(hass) -> None:
+    """Stop a run, whichever mode it is in.
+
+    Mirrors the "cancel" action of BPSCalibrationAPI so the service layer does
+    not have to reach for _stop_task, and so the two entry points can never
+    drift on what cancelling means: turning auto off is a different operation
+    from aborting a manual run, and only auto persists its state.
+    """
+    cal = get_calibration_state(hass)
+    if cal["mode"] == "auto":
+        await set_auto_calibration(hass, False)
+        return
+    await _stop_task(cal)
+    cal["state"] = "idle"
+    cal["mode"] = "off"
+    cal["error"] = None
+
+
 async def set_auto_calibration(hass, enabled: bool) -> None:
     """Enable/disable continuous calibration and persist the flag."""
     cal = get_calibration_state(hass)

@@ -1,0 +1,86 @@
+start_calibration:
+  name: Start receiver calibration
+  description: >-
+    Sample probe-to-probe BLE measurements on one floor and solve a
+    per-receiver distance correction. Equivalent to starting a run from the
+    panel's Receiver Calibration tab. The corrections are not applied until
+    apply_corrections is called.
+  fields:
+    floor:
+      name: Floor
+      description: >-
+        Name of the floor to calibrate, exactly as it appears in the panel
+        (for example "Ground Floor"). Matched case- and space-insensitively.
+      required: true
+      example: Ground Floor
+      selector:
+        text:
+    duration:
+      name: Duration
+      description: >-
+        How long to sample for. Longer runs fill more of the pair matrix;
+        ten minutes is a good default for a quiet house.
+      required: false
+      default: 600
+      selector:
+        number:
+          min: 60
+          max: 3600
+          step: 30
+          unit_of_measurement: seconds
+          mode: box
+
+cancel_calibration:
+  name: Cancel receiver calibration
+  description: >-
+    Stop a manual run in progress, or turn auto calibration off if that is
+    what is running. Samples already collected are kept, so apply_corrections
+    can still be used against the last solve.
+
+apply_corrections:
+  name: Apply calibration corrections
+  description: >-
+    Write the solved per-receiver correction factors into bpsdata.txt. Every
+    distance those receivers report is multiplied by their factor from then
+    on. Corrections are relative (normalised so they never rescale all
+    distances at once).
+  fields:
+    floor:
+      name: Floor
+      description: >-
+        Floor whose solve should be applied. Defaults to the floor of the
+        most recent run.
+      required: false
+      example: Ground Floor
+      selector:
+        text:
+
+reset_corrections:
+  name: Reset calibration corrections
+  description: >-
+    Remove the stored per-receiver corrections for a floor, returning every
+    receiver to an uncorrected distance.
+  fields:
+    floor:
+      name: Floor
+      description: >-
+        Floor to reset. Defaults to the floor of the most recent run.
+      required: false
+      example: Ground Floor
+      selector:
+        text:
+
+set_auto_calibration:
+  name: Set auto calibration
+  description: >-
+    Turn continuous calibration on or off. When on it samples every 30
+    seconds into a rolling ~6 hour window, re-solves every 15 minutes for
+    every floor, and re-applies corrections whenever they shift by more than
+    1%. The setting is persisted and survives a restart.
+  fields:
+    enabled:
+      name: Enabled
+      description: Whether continuous calibration should run.
+      required: true
+      selector:
+        boolean:

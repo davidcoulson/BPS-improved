@@ -16,6 +16,9 @@ from homeassistant.util import slugify
 import numpy as np
 from scipy.optimize import least_squares
 import voluptuous as vol
+from homeassistant.core import ServiceCall
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import config_validation as cv
 import logging
 import asyncio
 import math
@@ -34,11 +37,17 @@ from asyncio import Lock, Queue, wait_for, TimeoutError
 
 from .calibration import (
     BPSCalibrationAPI,
+    apply_corrections,
+    async_cancel_calibration,
     async_restore_calibration_state,
     async_shutdown_calibration,
     async_start_auto_if_enabled,
     get_calibration_state,
     refresh_receivers_from_coords,
+    reset_corrections,
+    save_calibration_state,
+    set_auto_calibration,
+    start_calibration,
 )
 from .storage import (
     BPS_FILE_LOCK,
@@ -2045,6 +2054,77 @@ def find_sub_zone_for_point(hass, data, entity, floor_name, point):
     return "unknown", None
 
 
+def _register_calibration_services(hass) -> None:
+    """Expose the calibration actions as HA services.
+
+    These mirror BPSCalibrationAPI exactly and call the same functions, so the
+    panel and an automation cannot diverge. The point of having both is that
+    the REST view needs a bearer token and a JSON body, which makes it awkward
+    from an automation or a script - and unusable from the Developer Tools
+    action UI, which is where anyone would look first.
+
+    ValueError is what the calibration layer raises for the expected refusals
+    (unknown floor, a run already going, a floor with no scale). Translating it
+    to HomeAssistantError surfaces the message in the UI as a normal action
+    failure instead of a traceback in the log.
+    """
+
+    async def _start(call: ServiceCall) -> None:
+        try:
+            await start_calibration(
+                hass, call.data["floor"], int(call.data.get("duration", 600))
+            )
+        except ValueError as err:
+            raise HomeAssistantError(str(err)) from err
+
+    async def _cancel(call: ServiceCall) -> None:
+        await async_cancel_calibration(hass)
+
+    async def _apply(call: ServiceCall) -> None:
+        cal = get_calibration_state(hass)
+        floor = call.data.get("floor") or cal.get("floor")
+        try:
+            await apply_corrections(hass, cal, floor)
+        except ValueError as err:
+            raise HomeAssistantError(str(err)) from err
+        await save_calibration_state(hass)
+
+    async def _reset(call: ServiceCall) -> None:
+        cal = get_calibration_state(hass)
+        floor = call.data.get("floor") or cal.get("floor")
+        try:
+            await reset_corrections(hass, cal, floor)
+        except ValueError as err:
+            raise HomeAssistantError(str(err)) from err
+        await save_calibration_state(hass)
+
+    async def _auto(call: ServiceCall) -> None:
+        await set_auto_calibration(hass, bool(call.data["enabled"]))
+
+    hass.services.async_register(
+        DOMAIN, "start_calibration", _start,
+        schema=vol.Schema({
+            vol.Required("floor"): cv.string,
+            vol.Optional("duration", default=600): vol.All(
+                vol.Coerce(int), vol.Range(min=60, max=3600)
+            ),
+        }),
+    )
+    hass.services.async_register(DOMAIN, "cancel_calibration", _cancel, schema=vol.Schema({}))
+    hass.services.async_register(
+        DOMAIN, "apply_corrections", _apply,
+        schema=vol.Schema({vol.Optional("floor"): cv.string}),
+    )
+    hass.services.async_register(
+        DOMAIN, "reset_corrections", _reset,
+        schema=vol.Schema({vol.Optional("floor"): cv.string}),
+    )
+    hass.services.async_register(
+        DOMAIN, "set_auto_calibration", _auto,
+        schema=vol.Schema({vol.Required("enabled"): cv.boolean}),
+    )
+
+
 async def async_setup(hass, config):
     """Set up the BPS integration."""
     _LOGGER.info("BPS integration initierad.")
@@ -2075,6 +2155,10 @@ async def async_setup(hass, config):
             hass.http.register_view(BPSTrackerTuneAPI())
             hass.http.register_view(BPSHistoryAPI(hass))
             hass.data["bps_views_registered"] = True
+
+        if "bps_services_registered" not in hass.data:
+            _register_calibration_services(hass)
+            hass.data["bps_services_registered"] = True
 
         config_path = hass.config.path()
         target_dir = os.path.join(config_path, "www", "bps_maps")
