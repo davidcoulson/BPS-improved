@@ -65,12 +65,6 @@
                             </div>
                         </div>
 
-                        <div class="bps-setup-col">
-                            <div class="bps-col-title">Tools</div>
-                            <div class="bps-btnrow" id="mapbuttondiv"></div>
-                            <div class="bps-btnrow" id="savebuttondiv"></div>
-                        </div>
-
                         <div id="trackdiv" class="bps-setup-col" style="display: none">
                             <div class="bps-col-title">Tracking</div>
                             <div class="bps-field-row">
@@ -249,6 +243,15 @@
 
                     <div class="bps-canvas-wrap">
                         <canvas id="canvas"></canvas>
+                        <!-- Layout tools, floating over the map's top-left. They used to
+                             live in a "Tools" column in the setup row, which meant the
+                             actions you use WHILE looking at the map were only reachable
+                             by opening a drawer. They act on the map, so they sit on it.
+                             Both ids are unchanged; JS still fills them by id. -->
+                        <div id="mapToolbar" class="bps-map-toolbar">
+                            <div class="bps-btnrow" id="mapbuttondiv"></div>
+                            <div class="bps-btnrow" id="savebuttondiv"></div>
+                        </div>
                         <!-- Colour-gradient key for the receiver-distances overlay. Shown by
                              JS only while that overlay is actually drawing; click-through so it
                              never blocks the map beneath it. -->

@@ -2752,7 +2752,17 @@ body { overflow: hidden; }
 }
 
 /* Setup: three side-by-side column cards (Floor / Tools / Tracking) */
-.bps-setup-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: stretch; }
+.bps-setup-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: stretch;
+    /* Was flex:1 on each column, so with the Tools column moved onto the map a
+       lone Floor card stretched the full width and its two fields drifted to
+       opposite ends of the screen. Columns now size to content up to a cap. */
+    flex: 0 1 auto;
+}
+.bps-setup-row > .bps-setup-col { flex: 0 1 480px; }
 .bps-setup-col {
     flex: 1 1 300px;
     min-width: 0;
@@ -3059,12 +3069,81 @@ select.bps-input { cursor: pointer; }
 /* Save/Cancel for the active layout tool: pinned to the map's top-left
    (viewReset owns bottom-left), shown only while a tool is active. Green Save
    confirms, red Cancel discards — the tool buttons themselves keep their label. */
+/* Moved from top-left to top-centre: the floating tool palette now owns the
+   left edge, and a tool's confirm/cancel deserves to be the thing your eye
+   lands on while the tool is live. */
 #mapToolActions {
     position: absolute;
-    left: 10px;
+    left: 50%;
+    transform: translateX(-50%);
     top: 10px;
     display: flex;
     gap: 8px;
+    z-index: 4;
+}
+
+/* -------------------------------------------------------------------------
+   FLOATING MAP TOOLBAR
+   These act on the map, so they live on it rather than in the setup drawer.
+   Translucent over the (white) floor plan, with a blur so labels stay legible
+   whatever is underneath.
+   ------------------------------------------------------------------------- */
+.bps-map-toolbar {
+    position: absolute;
+    left: 10px;
+    top: 10px;
+    z-index: 5;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 6px;
+    border-radius: 10px;
+    border: 1px solid hsl(var(--border));
+    background: hsl(var(--background) / 0.86);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    box-shadow: 0 4px 14px rgb(0 0 0 / 0.28);
+    /* Never taller than the map: with many tools it scrolls inside itself
+       rather than running off the bottom of the plan. */
+    max-height: calc(100% - 20px);
+    overflow-y: auto;
+}
+/* The two rows (tools, then Save) stack instead of the drawer's 2-up grid. */
+.bps-map-toolbar .bps-btnrow {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.bps-map-toolbar .bps-btnrow:empty { display: none; }
+/* Before a floor is loaded JS has appended nothing, and an empty translucent
+   box floating on the plan looks like a rendering fault. */
+.bps-map-toolbar:not(:has(button)) { display: none; }
+.bps-map-toolbar button {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    justify-content: flex-start;
+    padding: 6px 10px;
+    height: auto;
+    font-size: 12.5px;
+    font-weight: 600;
+    white-space: nowrap;
+    border-radius: 7px;
+}
+/* The inline lucide icons are authored at 24px; the toolbar wants them small
+   and non-shrinking so labels align in a column. */
+.bps-map-toolbar button svg {
+    width: 15px;
+    height: 15px;
+    flex: 0 0 auto;
+    margin: 0;
+}
+/* Separates Save Floor Plan from the tool list above it. */
+#savebuttondiv:not(:empty) {
+    margin-top: 2px;
+    padding-top: 6px;
+    border-top: 1px solid hsl(var(--border));
 }
 #mapToolActions button {
     padding: 6px 12px;
@@ -3094,7 +3173,9 @@ select.bps-input { cursor: pointer; }
     color: hsl(var(--sidebar-foreground));
     border: 1px solid hsl(var(--sidebar-border));
     border-radius: 12px;
-    padding: 14px;
+    /* No top padding: the sticky head supplies it. With padding here, sticky
+       top:0 parks the head below it and scrolled rows show through the gap. */
+    padding: 0 14px 14px;
 }
 .bps-sidebar h3 { font-size: 14px; font-weight: 600; margin: 0 0 10px; }
 .bps-zone-group {
@@ -3223,7 +3304,23 @@ select.bps-input { cursor: pointer; }
    would be if re-enabled). */
 .bps-zone-swatch.bps-swatch-off { opacity: 0.35; }
 /* Sidebar header with the global "Colours" toggle beside the title. */
-.bps-sidebar-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.bps-sidebar-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    /* Pinned: the receiver list below can run to dozens of rows, and scrolling
+       it used to carry the "Zones & Receivers" heading and the Colours toggle
+       off the top of the panel. The negative margins let the sticky background
+       span the sidebar's padding so rows do not show through beside it. */
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    margin: 0 -14px 10px;
+    padding: 14px 14px 10px;
+    background: hsl(var(--sidebar-background));
+    border-bottom: 1px solid hsl(var(--sidebar-border));
+}
 #zoneColorsToggle { height: 26px; padding: 0 10px; font-size: 12px; flex: 0 0 auto; }
 .bps-subzone-list { padding-left: 16px !important; }
 .bps-subzone-row { justify-content: flex-start; }
