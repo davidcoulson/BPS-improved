@@ -6262,37 +6262,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Tab switching: show one panel at a time. The Map tab is active in the
     // markup so the canvas is visible (and sized) on load; the calibration
     // poll keeps running regardless of which tab is showing.
-    // Setup drawer. The floor/tools/tracking controls are configure-once, so
-    // they start collapsed and the map owns the viewport. The choice is
-    // remembered per browser; wrapped in try/catch because localStorage throws
-    // outright in some embedded/private contexts rather than returning null.
-    const setupToggle = document.getElementById("setupToggle");
-    const bpsApp = document.querySelector(".bps-app");
-    if (setupToggle && bpsApp) {
-        let setupOpen = false;
-        try {
-            setupOpen = localStorage.getItem("bps.setupOpen") === "1";
-        } catch (e) { /* storage unavailable - fall back to collapsed */ }
-
-        const applySetupState = () => {
-            bpsApp.classList.toggle("setup-collapsed", !setupOpen);
-            setupToggle.setAttribute("aria-expanded", setupOpen ? "true" : "false");
-            // The map's flex box changes size when the drawer opens or closes,
-            // so anything measuring the canvas has to re-read it.
-            scheduleSidebarSync();
-            window.dispatchEvent(new Event("resize"));
-        };
-
-        setupToggle.addEventListener("click", () => {
-            setupOpen = !setupOpen;
-            try {
-                localStorage.setItem("bps.setupOpen", setupOpen ? "1" : "0");
-            } catch (e) { /* not fatal - the state just will not persist */ }
-            applySetupState();
-        });
-        applySetupState();
-    }
-
     const tabButtons = document.querySelectorAll(".bps-tab");
     const tabPanels = document.querySelectorAll(".bps-tabpanel");
     tabButtons.forEach((btn) => {
@@ -6328,6 +6297,71 @@ document.addEventListener('DOMContentLoaded', async () => {
     window.addEventListener("resize", scheduleSidebarSync);
     window.addEventListener("scroll", scheduleSidebarSync, { passive: true });
     syncSidebarHeight();
+
+    // Setup drawer. The floor/tools/tracking controls are configure-once, so
+    // they start collapsed and the map owns the viewport. The choice is
+    // remembered per browser; wrapped in try/catch because localStorage throws
+    // outright in some embedded/private contexts rather than returning null.
+    const setupToggle = document.getElementById("setupToggle");
+    const bpsApp = document.querySelector(".bps-app");
+    if (setupToggle && bpsApp) {
+        let setupOpen = false;
+        try {
+            setupOpen = localStorage.getItem("bps.setupOpen") === "1";
+        } catch (e) { /* storage unavailable - fall back to collapsed */ }
+
+        const applySetupState = () => {
+            bpsApp.classList.toggle("setup-collapsed", !setupOpen);
+            setupToggle.setAttribute("aria-expanded", setupOpen ? "true" : "false");
+            // The map's flex box changes size when the drawer opens or closes,
+            // so anything measuring the canvas has to re-read it.
+            scheduleSidebarSync();
+            window.dispatchEvent(new Event("resize"));
+        };
+
+        setupToggle.addEventListener("click", () => {
+            setupOpen = !setupOpen;
+            try {
+                localStorage.setItem("bps.setupOpen", setupOpen ? "1" : "0");
+            } catch (e) { /* not fatal - the state just will not persist */ }
+            applySetupState();
+        });
+        applySetupState();
+    }
+
+    // Sidebar collapse. Same persistence pattern as the setup drawer: the zone
+    // list is reference material, in the way while reading the map, so whether
+    // it is showing is a per-user preference rather than a session accident.
+    const sidebarCollapseBtn = document.getElementById("sidebarCollapse");
+    const sidebarExpandBtn = document.getElementById("sidebarExpand");
+    if (sidebarCollapseBtn && sidebarExpandBtn && bpsApp) {
+        let sidebarHidden = false;
+        try {
+            sidebarHidden = localStorage.getItem("bps.sidebarHidden") === "1";
+        } catch (e) { /* storage unavailable - default to showing it */ }
+
+        const applySidebarState = () => {
+            bpsApp.classList.toggle("sidebar-collapsed", sidebarHidden);
+            // The map's flex box just changed width; anything that measured the
+            // canvas needs to re-read it.
+            scheduleSidebarSync();
+            window.dispatchEvent(new Event("resize"));
+        };
+        const setSidebar = (hidden) => {
+            sidebarHidden = hidden;
+            try {
+                localStorage.setItem("bps.sidebarHidden", hidden ? "1" : "0");
+            } catch (e) { /* not fatal - the state just will not persist */ }
+            applySidebarState();
+            // Move focus to whichever control replaced the one just used, so a
+            // keyboard user is not stranded on a button that no longer exists.
+            (hidden ? sidebarExpandBtn : sidebarCollapseBtn).focus();
+        };
+        sidebarCollapseBtn.addEventListener("click", () => setSidebar(true));
+        sidebarExpandBtn.addEventListener("click", () => setSidebar(false));
+        applySidebarState();
+    }
+
 
     // Help tooltips open downward by default (so ones near the top of the page
     // aren't clipped), but the Tracking / Calibration controls sit low in the

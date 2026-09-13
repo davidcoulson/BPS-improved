@@ -3178,6 +3178,48 @@ select.bps-input { cursor: pointer; }
     padding: 0 14px 14px;
 }
 .bps-sidebar h3 { font-size: 14px; font-weight: 600; margin: 0 0 10px; }
+
+/* -------------------------------------------------------------------------
+   SIDEBAR COLLAPSE
+   The zone/receiver list is reference material - useful while placing things,
+   in the way while reading the map. Collapsing it hands its 320px to the plan
+   and leaves a thin rail to bring it back.
+   ------------------------------------------------------------------------- */
+.bps-rail-btn,
+.bps-sidebar-rail {
+    appearance: none;
+    background: none;
+    border: 1px solid hsl(var(--sidebar-border));
+    border-radius: 7px;
+    color: hsl(var(--muted-foreground));
+    cursor: pointer;
+    font-size: 15px;
+    line-height: 1;
+    padding: 4px 8px;
+    transition: color .12s, border-color .12s, background .12s;
+}
+.bps-rail-btn:hover,
+.bps-sidebar-rail:hover {
+    color: hsl(var(--foreground));
+    border-color: hsl(var(--muted-foreground));
+    background: hsl(var(--accent) / 0.4);
+}
+/* The rail replaces the panel, so only one of the two is ever present. */
+.bps-sidebar-rail {
+    display: none;
+    flex: 0 0 auto;
+    align-self: flex-start;
+    margin-top: 2px;
+}
+.bps-app.sidebar-collapsed .bps-sidebar { display: none; }
+.bps-app.sidebar-collapsed .bps-sidebar-rail { display: block; }
+/* Below the stacking breakpoint the sidebar is already full-width beneath the
+   map rather than beside it, so collapsing it buys nothing and the rail would
+   just be a stray button. */
+@media (max-width: 1100px) {
+    .bps-rail-btn, .bps-sidebar-rail { display: none !important; }
+    .bps-app.sidebar-collapsed .bps-sidebar { display: block; }
+}
 .bps-zone-group {
     border: 1px solid hsl(var(--sidebar-border));
     border-radius: 8px;

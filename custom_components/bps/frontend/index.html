@@ -325,6 +325,11 @@
                 <aside class="bps-sidebar">
                     <div class="bps-sidebar-head">
                         <h3>Zones &amp; Receivers</h3>
+                        <!-- Collapses the panel to a thin rail so the map can use the
+                             full width; the rail's button brings it back. -->
+                        <button type="button" id="sidebarCollapse" class="bps-rail-btn"
+                                title="Hide the zones and receivers panel"
+                                aria-label="Hide the zones and receivers panel">›</button>
                         <!-- Turns every zone's colour on/off at once. -->
                         <button type="button" id="zoneColorsToggle" class="bps-btn bps-btn-outline" style="display: none">Colours: on</button>
                     </div>
@@ -349,6 +354,10 @@
                     </div>
                     <div id="message"></div>
                 </aside>
+                <!-- Shown only while the sidebar is collapsed. -->
+                <button type="button" id="sidebarExpand" class="bps-sidebar-rail"
+                        title="Show the zones and receivers panel"
+                        aria-label="Show the zones and receivers panel">‹</button>
             </div>
         </section>
 
