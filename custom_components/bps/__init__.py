@@ -2101,6 +2101,54 @@ def _register_calibration_services(hass) -> None:
     async def _auto(call: ServiceCall) -> None:
         await set_auto_calibration(hass, bool(call.data["enabled"]))
 
+    async def _heights(call: ServiceCall) -> None:
+        """Write receiver mount heights through the layout store.
+
+        Deliberately a service rather than a file edit: the layout lives in
+        HA's Store, which keeps an in-memory cache and writes it back. Editing
+        config/.storage/bps underneath a running HA is silently lost the next
+        time anything saves. Going through save_bps_data persists atomically
+        and refreshes the cache, so calibration sees the change immediately -
+        _read_coords rebuilds the receiver map from it on every run.
+        """
+        heights = {str(k): float(v) for k, v in (call.data.get("heights") or {}).items()}
+        default = call.data.get("default")
+        for name, value in heights.items():
+            if not 0 <= value <= 10:
+                raise HomeAssistantError(f"height for {name!r} must be between 0 and 10 m, got {value}")
+
+        async with BPS_FILE_LOCK:
+            data = get_bps_data_for_edit(hass)
+            if not isinstance(data, dict) or not data.get("floor"):
+                raise HomeAssistantError("No BPS layout saved yet; place receivers first.")
+
+            seen: set[str] = set()
+            changed = 0
+            for floor in data["floor"]:
+                for receiver in floor.get("receivers", []):
+                    slug = str(receiver.get("entity_id") or "")
+                    if not slug:
+                        continue
+                    seen.add(slug)
+                    if slug in heights:
+                        receiver["height"] = heights[slug]
+                        changed += 1
+                    elif default is not None:
+                        receiver["height"] = float(default)
+                        changed += 1
+            await save_bps_data(hass, data)
+
+        unmatched = sorted(set(heights) - seen)
+        if unmatched:
+            # Not fatal: a typo should not silently do nothing, but it should
+            # also not discard the heights that did match.
+            _LOGGER.warning(
+                "bps.set_receiver_heights: %d receiver(s) updated; no receiver matched %s",
+                changed, ", ".join(unmatched),
+            )
+        else:
+            _LOGGER.info("bps.set_receiver_heights: %d receiver(s) updated", changed)
+
     hass.services.async_register(
         DOMAIN, "start_calibration", _start,
         schema=vol.Schema({
@@ -2119,9 +2167,45 @@ def _register_calibration_services(hass) -> None:
         DOMAIN, "reset_corrections", _reset,
         schema=vol.Schema({vol.Optional("floor"): cv.string}),
     )
+    async def _tracker_heights(call: ServiceCall) -> None:
+        """Write per-tracker carry heights into the layout store.
+
+        Same reasoning as _heights: the layout lives in HA's Store, so a direct
+        file edit is lost the next time anything saves. Keys are deliberately
+        NOT validated against seen devices - a tracker that has not been heard
+        yet should be configurable ahead of time, and the read path already
+        ignores anything out of range.
+        """
+        heights = {str(k): float(v) for k, v in call.data["heights"].items()}
+
+        async with BPS_FILE_LOCK:
+            data = get_bps_data_for_edit(hass)
+            if not isinstance(data, dict):
+                raise HomeAssistantError("No BPS layout saved yet.")
+            current = data.get("tracker_heights")
+            if not isinstance(current, dict):
+                current = {}
+            current.update(heights)
+            data["tracker_heights"] = current
+            await save_bps_data(hass, data)
+        _LOGGER.info("bps.set_tracker_heights: %d tracker(s) set", len(heights))
+
     hass.services.async_register(
         DOMAIN, "set_auto_calibration", _auto,
         schema=vol.Schema({vol.Required("enabled"): cv.boolean}),
+    )
+    hass.services.async_register(
+        DOMAIN, "set_tracker_heights", _tracker_heights,
+        schema=vol.Schema({
+            vol.Required("heights"): vol.Schema({cv.string: vol.All(vol.Coerce(float), vol.Range(min=0, max=5))}),
+        }),
+    )
+    hass.services.async_register(
+        DOMAIN, "set_receiver_heights", _heights,
+        schema=vol.Schema({
+            vol.Optional("heights", default=dict): vol.Schema({cv.string: vol.Coerce(float)}),
+            vol.Optional("default"): vol.All(vol.Coerce(float), vol.Range(min=0, max=10)),
+        }),
     )
 
 

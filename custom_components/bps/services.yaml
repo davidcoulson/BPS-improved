@@ -84,3 +84,57 @@ set_auto_calibration:
       required: true
       selector:
         boolean:
+
+set_receiver_heights:
+  name: Set receiver mount heights
+  description: >-
+    Record how high each receiver is mounted, in metres above the floor.
+    Calibration uses these to make the probe-to-probe truth distances 3D; with
+    them unset, a real height difference between two receivers is charged to
+    their radios as bias, which can make a solve worse rather than better.
+    Applied only to pairs where BOTH receivers have a height.
+  fields:
+    heights:
+      name: Heights
+      description: >-
+        Map of receiver entity slug (as shown in the panel, e.g.
+        "kitchen_shelly_0af6c0") to height in metres. Slugs not present on any
+        floor are reported back as unmatched rather than failing the call.
+      required: false
+      example: '{"kitchen_shelly_0af6c0": 1.0, "office_eth_d82ca8": 0.75}'
+      selector:
+        object:
+    default:
+      name: Default height
+      description: >-
+        Height for every receiver not named in the map. Omit to leave those
+        receivers untouched.
+      required: false
+      example: 0.5
+      selector:
+        number:
+          min: 0
+          max: 10
+          step: 0.05
+          unit_of_measurement: m
+          mode: box
+
+set_tracker_heights:
+  name: Set tracker heights
+  description: >-
+    Record how high above the floor each tracked device is carried, in metres.
+    Used for the slant-to-horizontal correction, and for the floor election,
+    which compares slant distances against a floor separation of a few metres -
+    so a wrong height biases the floor decision consistently in one direction.
+    Defaults to 1.0 m (a phone in a pocket) for anything not listed.
+  fields:
+    heights:
+      name: Heights
+      description: >-
+        Map of tracker key (as used in the layout, e.g. "primrose") to height
+        in metres, 0 to 5. Keys are not validated against existing trackers, so
+        a device that has not been seen yet can be configured ahead of time.
+      required: true
+      example: '{"primrose": 0.5, "leela": 0.2}'
+      selector:
+        object:
