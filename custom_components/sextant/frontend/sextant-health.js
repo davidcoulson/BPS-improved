@@ -280,10 +280,19 @@ class SextantHealth extends LitElement {
         <ul class="plain">${rx.unplaced.map((u) => html`<li><b>${u.name || u.slug}</b> <span class="muted small">${u.address}${u.area ? ` · ${u.area}` : ""} · ${fmtAge(u.last_seen_age)} ago</span></li>`)}</ul></details>` : nothing}
       ${(diag.unmatched_receivers || []).length ? html`<details open><summary>Naming mismatches (${diag.unmatched_receivers.length})</summary>
         <ul class="plain">${diag.unmatched_receivers.map((u) => html`<li><b>${u.entity_id}</b> on ${u.floor}${u.suggested ? html` → suggested <code>${u.suggested}</code>` : nothing}</li>`)}</ul></details>` : nothing}
-      <details @toggle=${(e) => { if (e.target.open && !this._linking) this._loadLinking(); }}><summary>Scanner linking detail</summary>
+      <details @toggle=${(e) => { if (e.target.open && !this._linking) this._loadLinking(); }}><summary>What each proxy hears right now</summary>
+        <p class="small muted">One row per placed proxy: which trackers it currently reports a distance for, and how far. A proxy with an empty row is online but hears nothing tracked; "unplaced and ignored" proxies are not shown because their readings are never used.</p>
         ${this._linking ? html`<div class="wrap"><table>
-          <tr><th>Proxy</th><th>Status</th><th>Readings</th></tr>
-          ${(this._linking.placed || []).map((p) => html`<tr><td>${proxyName(this.data, p.address || p.receiver || p.slug)}</td><td>${p.status}</td><td class="small">${(p.readings || []).map((d) => `${d.device || d.entity}: ${d.state ?? d.distance ?? "—"}`).join(", ")}</td></tr>`)}
+          <tr><th>Proxy</th><th>Status</th><th class="num">Reporting</th><th>Trackers heard</th></tr>
+          ${(this._linking.placed || []).map((p) => {
+            const rows = (p.sensors || p.readings || []).filter((d) => d.state != null && d.state !== "unknown" && d.state !== "unavailable");
+            return html`<tr>
+              <td>${proxyName(this.data, p.address || p.entity_id || p.receiver || p.slug)}<br><span class="muted small">${p.floor || ""}</span></td>
+              <td><span class="pill ${p.status === "live" ? "ok" : "warn"}">${p.status}</span></td>
+              <td class="num">${p.reporting_count ?? rows.length} / ${p.sensor_count ?? (p.sensors || []).length}</td>
+              <td class="small">${rows.length ? rows.map((d) => `${trackerName(this.data, d.device || d.entity)} ${fmtLen(Number(d.state ?? d.distance), this.hass)}`).join(" · ") : html`<span class="muted">nothing tracked in range</span>`}</td>
+            </tr>`;
+          })}
         </table></div>` : html`<div class="muted small">Loading…</div>`}
       </details>
     </section>`;

@@ -354,13 +354,27 @@ class SextantDevices extends LitElement {
     return !!hex && scanners.some((s) => `${s.slug || ""} ${s.name || ""}`.toLowerCase().includes(hex));
   }
 
+  /** Addresses of every proxy placed on a floor plan: the only ones whose hearing counts. */
+  _placedAddresses() {
+    const out = new Set();
+    for (const f of this.data?.layout?.floor || []) for (const r of f.receivers || []) if (r.address) out.add(String(r.address).toLowerCase());
+    return out;
+  }
+
+  /** Heard only by proxies that are not on any floor plan (a kiosk, a test board): not worth listing. */
+  _onlyUnplaced(c, placed) {
+    if (!Array.isArray(c.scanner_addresses) || !placed.size) return false;
+    return c.scanner_addresses.length > 0 && !c.scanner_addresses.some((a) => placed.has(String(a).toLowerCase()));
+  }
+
   _renderTrackers() {
     const layout = this.data?.layout || {};
+    const placed = this._placedAddresses();
     const heights = layout.tracker_heights || {}, offsets = layout.tracker_ref_offsets || {}, icons = layout.tracker_icons || {}, classes = layout.tracker_classes || {};
     const live = new Map((this.positions?.positions || []).map((p) => [p.ent, p]));
     const tracked = Object.entries(this._tracked || {}).sort((a, b) => trackerName(this.data, a[1].slug).localeCompare(trackerName(this.data, b[1].slug)));
     const filter = this._filter.toLowerCase();
-    const all = (this._candidates || []).filter((c) => !this._isProxyBeacon(c));
+    const all = (this._candidates || []).filter((c) => !this._isProxyBeacon(c) && !this._onlyUnplaced(c, placed));
     const recent = all.filter((c) => (c.last_seen_age ?? 1e9) <= RECENT_SECS);
     const candidates = (this._showAll ? all : recent)
       .filter((c) => (this._kind === "all" || c.kind === this._kind) && (!filter || `${c.name} ${c.address} ${c.manufacturer || ""} ${c.area_name || ""}`.toLowerCase().includes(filter)))
@@ -411,7 +425,7 @@ class SextantDevices extends LitElement {
           </tr>`)}
           ${candidates.length ? nothing : html`<tr><td colspan="6" class="muted">${this._candidates ? (this._showAll ? "No matching devices." : `Nothing heard in the last ${RECENT_SECS} s matches; switch on "Show all" for everything Bermuda remembers.`) : "Loading…"}</td></tr>`}
         </table></div>
-        <p class="small muted">Apple FindMy tags are not in this list: they need their pairing keys, added on the Bermuda page.</p>
+        <p class="small muted">Only what a placed proxy hears is listed; anything heard solely by an unplaced proxy (a kiosk, a test board) is left out. Apple FindMy tags are not in this list: they need their pairing keys, added on the Bermuda page.</p>
       </section>`;
   }
 

@@ -391,9 +391,15 @@ class SextantLive extends LitElement {
   _renderLinks(ent) {
     const row = (this._links || []).find((b) => b.device === ent);
     if (!row) return html`<div class="muted small">Loading proxies…</div>`;
-    const recs = row.receivers || [];
+    // Only proxies placed on a floor plan take part in positioning; the rest (a kiosk, a test board) are noise here.
+    const placedSlugs = new Set((this.data?.layout?.floor || []).flatMap((f) => (f.receivers || []).map((r) => r.entity_id)));
+    const placedAddr = new Set((this.data?.layout?.floor || []).flatMap((f) => (f.receivers || []).map((r) => String(r.address || "").toLowerCase())));
+    const addrOf = (slug) => Object.entries(this.data?.scanners || {}).find(([, s]) => s.slug === slug)?.[0];
+    const everything = row.receivers || [];
+    const recs = everything.filter((r) => placedSlugs.has(r.scanner) || placedAddr.has(String(addrOf(r.scanner) || "").toLowerCase()));
+    const dropped = everything.length - recs.length;
     return html`<details open class="links">
-      <summary>Heard by ${recs.length} proxy${recs.length === 1 ? "" : "ies"}</summary>
+      <summary>Heard by ${recs.length} placed proxy${recs.length === 1 ? "" : "ies"}${dropped ? html` <span class="muted small">(+${dropped} unplaced and ignored)</span>` : nothing}</summary>
       <table class="small"><tr><th>Proxy</th><th class="num">Distance</th></tr>
         ${recs.slice(0, 16).map((r) => html`<tr><td>${proxyName(this.data, r.scanner)}</td><td class="num">${fmtLen(r.distance, this.hass)}</td></tr>`)}
         ${recs.length > 16 ? html`<tr><td class="muted" colspan="2">and ${recs.length - 16} more</td></tr>` : nothing}
