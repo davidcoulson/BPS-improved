@@ -12,21 +12,21 @@ from . import bermuda_source
 
 _LOGGER = logging.getLogger(__name__)
 
-DOMAIN = "bps_sensors"
+DOMAIN = "sextant_sensors"
 
 # (entity_id suffix / unique_id prefix, display label) per tracked device.
 SENSOR_KINDS = [
-    ("bps_zone", "BPS-Optimized Zone"),
-    ("bps_floor", "BPS-Optimized Floor"),
-    ("bps_nearest_zone", "BPS-Optimized Nearest Zone"),
-    ("bps_sub_zone", "BPS-Optimized Sub-Zone"),
+    ("sextant_zone", "Sextant Zone"),
+    ("sextant_floor", "Sextant Floor"),
+    ("sextant_nearest_zone", "Sextant Nearest Zone"),
+    ("sextant_sub_zone", "Sextant Sub-Zone"),
 ]
 
 
 def find_bermuda_via_device(hass, entity):
     """Identifier of the Bermuda device that owns this tracker's distance_to
-    sensors, so the BPS device can nest under it (via_device). None when it
-    can't be resolved (e.g. Bermuda not loaded yet) — the BPS device then just
+    sensors, so the Sextant device can nest under it (via_device). None when it
+    can't be resolved (e.g. Bermuda not loaded yet) — the Sextant device then just
     stands on its own.
     """
     ent_reg = er.async_get(hass)
@@ -44,7 +44,7 @@ def find_bermuda_via_device(hass, entity):
 
 
 def ensure_sensors_for_entity(hass, entity, sensors_cache, new_sensors):
-    """Create any missing BPS sensors for a tracked device.
+    """Create any missing Sextant sensors for a tracked device.
 
     Only the in-memory cache decides whether a sensor exists. A registry
     entry without a live entity object is exactly the situation to recover
@@ -70,16 +70,16 @@ def ensure_sensors_for_entity(hass, entity, sensors_cache, new_sensors):
         new_sensors.append(sensor)
 
 
-def is_legacy_bps_entity_id(entity_id):
-    """Detect old duplicated-name entity IDs like sensor.name_name_bps_floor."""
-    if not entity_id.startswith("sensor.") or "_bps_" not in entity_id:
+def is_legacy_sextant_entity_id(entity_id):
+    """Detect old duplicated-name entity IDs like sensor.name_name_sextant_floor."""
+    if not entity_id.startswith("sensor.") or "_sextant_" not in entity_id:
         return False
 
-    if not (entity_id.endswith("_bps_floor") or entity_id.endswith("_bps_zone")):
+    if not (entity_id.endswith("_sextant_floor") or entity_id.endswith("_sextant_zone")):
         return False
 
     object_id = entity_id.replace("sensor.", "")
-    base_name = object_id.rsplit("_bps_", 1)[0]
+    base_name = object_id.rsplit("_sextant_", 1)[0]
     parts = base_name.split("_")
 
     # Legacy format duplicates the full object id: <name>_<name>
@@ -95,11 +95,11 @@ def get_filtered_entities(hass):
     Only entities from the `bermuda` integration count. Other integrations also
     expose `_distance_to_` sensors (e.g. an ESPHome mmWave presence sensor's
     `..._distance_to_detection_object`); those aren't trackers and must not get
-    BPS zone/floor sensors or a device.
+    Sextant zone/floor sensors or a device.
     """
     # Prefer what Bermuda says it is TRACKING over what happens to have an
     # entity. Bermuda ships its per-scanner distance entities disabled, so a
-    # states scan finds none of them and BPS would create no per-tracker
+    # states scan finds none of them and Sextant would create no per-tracker
     # sensors at all. The API answer is the same set, minus that dependency.
     tracked = bermuda_source.async_get_tracked_device_prefixes(hass)
     if tracked is not None:
@@ -127,16 +127,16 @@ class CustomDistanceSensor(SensorEntity):
         self._state = "unknown"
         self._attrs = {}
         self.entity_id = entity_id
-        # Group each tracked device's BPS sensors under their own device rather
+        # Group each tracked device's Sextant sensors under their own device rather
         # than one shared "BLE Positioning System" bucket. All four sensors for
         # a tracked device share the same identifier, so they land together, and
         # via_device nests that device under its Bermuda tracker device.
         if device_key:
             info = DeviceInfo(
-                identifiers={("bps", device_key)},
-                name=f"{device_key} (BPS-Optimized)",
-                manufacturer="BPS-Optimized",
-                model="BPS-Optimized (BLE Positioning)",
+                identifiers={("sextant", device_key)},
+                name=f"{device_key} (Sextant)",
+                manufacturer="Sextant",
+                model="Sextant (BLE Positioning)",
             )
             if via_device:
                 info["via_device"] = via_device
@@ -159,10 +159,10 @@ class CustomDistanceSensor(SensorEntity):
         # Used by the sub-zone sensor to carry "parent_zone"; empty for the rest.
         return self._attrs
 
-class BPSAccuracySensor(SensorEntity):
+class SextantAccuracySensor(SensorEntity):
     """Receiver self-localization accuracy (CEP95 in metres), a global diagnostic.
 
-    Its value is pushed by the backend loop (update_bps_sensor_state sets
+    Its value is pushed by the backend loop (update_sextant_sensor_state sets
     ``_state`` -> native_value); None reads as "unknown" until the first solve.
     """
 
@@ -172,15 +172,15 @@ class BPSAccuracySensor(SensorEntity):
 
     def __init__(self):
         self._attr_name = "Position Accuracy"
-        self._attr_unique_id = "bps_position_accuracy"
+        self._attr_unique_id = "sextant_position_accuracy"
         self.entity_id = ACCURACY_ENTITY_ID
         self._state = None
         self._attrs = {}
         self._attr_device_info = DeviceInfo(
-            identifiers={("bps", "bps_system")},
-            name="BPS-Optimized",
-            manufacturer="BPS-Optimized",
-            model="BPS-Optimized (BLE Positioning)",
+            identifiers={("sextant", "sextant_system")},
+            name="Sextant",
+            manufacturer="Sextant",
+            model="Sextant (BLE Positioning)",
         )
 
     @property
@@ -192,36 +192,36 @@ class BPSAccuracySensor(SensorEntity):
         return self._attrs
 
 
-def cleanup_legacy_bps_entities(hass):
-    """Remove old duplicated-name BPS entities from entity registry."""
+def cleanup_legacy_sextant_entities(hass):
+    """Remove old duplicated-name Sextant entities from entity registry."""
     entity_registry = er.async_get(hass)
     stale_entities = [
         entry.entity_id
         for entry in entity_registry.entities.values()
-        if is_legacy_bps_entity_id(entry.entity_id)
+        if is_legacy_sextant_entity_id(entry.entity_id)
     ]
 
     for entity_id in stale_entities:
-        _LOGGER.info("Removing legacy BPS entity: %s", entity_id)
+        _LOGGER.info("Removing legacy Sextant entity: %s", entity_id)
         entity_registry.async_remove(entity_id)
 
-    cleanup_legacy_bps_states(hass)
+    cleanup_legacy_sextant_states(hass)
 
 
-def cleanup_legacy_bps_states(hass):
+def cleanup_legacy_sextant_states(hass):
     """Remove lingering legacy states from the state machine."""
     legacy_state_ids = [
         state.entity_id
         for state in hass.states.async_all()
-        if is_legacy_bps_entity_id(state.entity_id)
+        if is_legacy_sextant_entity_id(state.entity_id)
     ]
     for entity_id in legacy_state_ids:
-        _LOGGER.info("Removing legacy BPS state: %s", entity_id)
+        _LOGGER.info("Removing legacy Sextant state: %s", entity_id)
         hass.states.async_remove(entity_id)
 
 
-def normalize_bps_registry_entity_ids(hass, entities):
-    """Ensure BPS registry entries use stable non-legacy entity_id by unique_id."""
+def normalize_sextant_registry_entity_ids(hass, entities):
+    """Ensure Sextant registry entries use stable non-legacy entity_id by unique_id."""
     entity_registry = er.async_get(hass)
     expected_by_uid = {}
     for entity in entities:
@@ -232,7 +232,7 @@ def normalize_bps_registry_entity_ids(hass, entities):
         expected_entity_id = expected_by_uid.get(entry.unique_id)
         if expected_entity_id and entry.entity_id != expected_entity_id:
             _LOGGER.info(
-                "Migrating BPS entity_id from %s to %s",
+                "Migrating Sextant entity_id from %s to %s",
                 entry.entity_id,
                 expected_entity_id,
             )
@@ -243,13 +243,13 @@ def normalize_bps_registry_entity_ids(hass, entities):
                 )
             except ValueError:
                 # If the target id is blocked by stale data/entry, remove old entry and recreate.
-                _LOGGER.info("Removing conflicting BPS registry entity: %s", entry.entity_id)
+                _LOGGER.info("Removing conflicting Sextant registry entity: %s", entry.entity_id)
                 entity_registry.async_remove(entry.entity_id)
 
 
-def normalize_bps_registry_entity_ids_from_cache(hass):
-    """Normalize BPS entity_ids using the in-memory sensor cache unique_ids."""
-    sensors_cache = hass.data.get("bps_sensors", {})
+def normalize_sextant_registry_entity_ids_from_cache(hass):
+    """Normalize Sextant entity_ids using the in-memory sensor cache unique_ids."""
+    sensors_cache = hass.data.get("sextant_sensors", {})
     if not sensors_cache:
         return
 
@@ -267,7 +267,7 @@ def normalize_bps_registry_entity_ids_from_cache(hass):
         expected_entity_id = expected_by_uid.get(entry.unique_id)
         if expected_entity_id and entry.entity_id != expected_entity_id:
             _LOGGER.info(
-                "Post-add migration of BPS entity_id from %s to %s",
+                "Post-add migration of Sextant entity_id from %s to %s",
                 entry.entity_id,
                 expected_entity_id,
             )
@@ -277,56 +277,56 @@ def normalize_bps_registry_entity_ids_from_cache(hass):
                     new_entity_id=expected_entity_id,
                 )
             except ValueError:
-                _LOGGER.info("Removing conflicting BPS registry entity: %s", entry.entity_id)
+                _LOGGER.info("Removing conflicting Sextant registry entity: %s", entry.entity_id)
                 entity_registry.async_remove(entry.entity_id)
 
 async def async_setup_entry(hass, config_entry, async_add_entities):
     """Set dynamic sensors based on the filtered entities"""
     _LOGGER.info("async_setup_entry in sensor.py has been called")
     
-    if "bps_sensors" not in hass.data:
-        hass.data["bps_sensors"] = {}
+    if "sextant_sensors" not in hass.data:
+        hass.data["sextant_sensors"] = {}
 
-    cleanup_legacy_bps_entities(hass)
+    cleanup_legacy_sextant_entities(hass)
 
     entities = get_filtered_entities(hass)
     _LOGGER.info(f"Creating sensors for entities: {entities}")
-    normalize_bps_registry_entity_ids(hass, entities)
+    normalize_sextant_registry_entity_ids(hass, entities)
 
     expected_entity_ids = set()
     for entity in entities:
         for suffix, _label in SENSOR_KINDS:
             expected_entity_ids.add(f"sensor.{entity}_{suffix}")
 
-    # Remove stale BPS registry entries that are no longer expected.
+    # Remove stale Sextant registry entries that are no longer expected.
     entity_registry = er.async_get(hass)
     if expected_entity_ids:
-        stale_bps_ids = [
+        stale_sextant_ids = [
             entry.entity_id
             for entry in entity_registry.entities.values()
-            if entry.platform == "bps" and entry.entity_id not in expected_entity_ids
+            if entry.platform == "sextant" and entry.entity_id not in expected_entity_ids
             and entry.entity_id != ACCURACY_ENTITY_ID  # keep the global diagnostic
         ]
-        for entity_id in stale_bps_ids:
-            _LOGGER.info("Removing stale BPS registry entity: %s", entity_id)
+        for entity_id in stale_sextant_ids:
+            _LOGGER.info("Removing stale Sextant registry entity: %s", entity_id)
             entity_registry.async_remove(entity_id)
 
     new_sensors = []
     # The global accuracy diagnostic (once), before the per-tracker sensors.
-    if ACCURACY_ENTITY_ID not in hass.data["bps_sensors"]:
-        accuracy = BPSAccuracySensor()
-        hass.data["bps_sensors"][ACCURACY_ENTITY_ID] = accuracy
+    if ACCURACY_ENTITY_ID not in hass.data["sextant_sensors"]:
+        accuracy = SextantAccuracySensor()
+        hass.data["sextant_sensors"][ACCURACY_ENTITY_ID] = accuracy
         new_sensors.append(accuracy)
     for entity in entities:
-        ensure_sensors_for_entity(hass, entity, hass.data["bps_sensors"], new_sensors)
+        ensure_sensors_for_entity(hass, entity, hass.data["sextant_sensors"], new_sensors)
 
     if new_sensors:
         async_add_entities(new_sensors, update_before_add=True)
-        normalize_bps_registry_entity_ids_from_cache(hass)
+        normalize_sextant_registry_entity_ids_from_cache(hass)
 
     @callback
     def state_changed_listener(event):
-        """Create BPS sensors when a NEW distance sensor appears.
+        """Create Sextant sensors when a NEW distance sensor appears.
 
         This is bound to the GLOBAL state bus, so it fires for every entity's
         every state change in all of HA (the busiest event there is). It must be
@@ -337,7 +337,7 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
         handler ran a full states + entity-registry scan on every state change
         and stalled the event loop (issue #51).
         """
-        sensors_cache = hass.data.get("bps_sensors")
+        sensors_cache = hass.data.get("sextant_sensors")
         if sensors_cache is None:
             # Integration is unloading/reloading; ignore late state events.
             return
@@ -354,58 +354,58 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
 
         if new_sensors:
             async_add_entities(new_sensors, update_before_add=True)
-            normalize_bps_registry_entity_ids_from_cache(hass)
+            normalize_sextant_registry_entity_ids_from_cache(hass)
 
-    old_unsub = hass.data.pop("bps_state_listener_unsub", None)
+    old_unsub = hass.data.pop("sextant_state_listener_unsub", None)
     if old_unsub:
         old_unsub()
-    hass.data["bps_state_listener_unsub"] = hass.bus.async_listen("state_changed", state_changed_listener)
+    hass.data["sextant_state_listener_unsub"] = hass.bus.async_listen("state_changed", state_changed_listener)
 
     # The state_changed hook above can only spot a new tracker when a distance
     # ENTITY appears. With those entities disabled none ever appears, so a
-    # device newly tracked in Bermuda would never get BPS sensors. Subscribe to
+    # device newly tracked in Bermuda would never get Sextant sensors. Subscribe to
     # Bermuda's coordinator as well - it is a plain DataUpdateCoordinator, so
     # this is its supported listener, not a bespoke event, and nothing crosses
     # the websocket.
     @callback
     def bermuda_updated():
-        sensors_cache = hass.data.get("bps_sensors")
+        sensors_cache = hass.data.get("sextant_sensors")
         if sensors_cache is None:
             return  # unloading/reloading
         # Cheap guard: only do the (registry-walking) discovery when the set of
         # tracked devices has actually changed.
         tracked = bermuda_source.async_get_tracked_device_prefixes(hass)
-        if tracked is None or tracked == hass.data.get("bps_known_trackers"):
+        if tracked is None or tracked == hass.data.get("sextant_known_trackers"):
             return
-        hass.data["bps_known_trackers"] = set(tracked)
+        hass.data["sextant_known_trackers"] = set(tracked)
 
         new_sensors = []
         for entity in sorted(tracked):
             ensure_sensors_for_entity(hass, entity, sensors_cache, new_sensors)
         if new_sensors:
             async_add_entities(new_sensors, update_before_add=True)
-            normalize_bps_registry_entity_ids_from_cache(hass)
+            normalize_sextant_registry_entity_ids_from_cache(hass)
 
-    old_berm_unsub = hass.data.pop("bps_bermuda_listener_unsub", None)
+    old_berm_unsub = hass.data.pop("sextant_bermuda_listener_unsub", None)
     if old_berm_unsub:
         old_berm_unsub()
 
     def _try_subscribe(_now=None):
         """Attach to Bermuda's coordinator, retrying until it exists.
 
-        BPS and Bermuda both load at startup and the order is not guaranteed.
+        Sextant and Bermuda both load at startup and the order is not guaranteed.
         If Bermuda's config entry is not ready when this platform sets up,
-        async_subscribe returns None - and without a retry BPS would sit with
+        async_subscribe returns None - and without a retry Sextant would sit with
         no per-tracker sensors forever, because the state_changed hook it used
         to rely on never fires for disabled distance entities.
         """
-        if hass.data.get("bps_sensors") is None:
+        if hass.data.get("sextant_sensors") is None:
             return  # unloading/reloading; stop retrying
         unsub = bermuda_source.async_subscribe(hass, bermuda_updated)
         if unsub is None:
-            hass.data["bps_bermuda_retry_unsub"] = async_call_later(hass, 30, _try_subscribe)
+            hass.data["sextant_bermuda_retry_unsub"] = async_call_later(hass, 30, _try_subscribe)
             return
-        hass.data["bps_bermuda_listener_unsub"] = unsub
+        hass.data["sextant_bermuda_listener_unsub"] = unsub
         # Deliberately NOT calling bermuda_updated() here. It ends in
         # async_add_entities, which must run on the event loop, and this
         # function can be reached from a non-loop context - doing so raised

@@ -16,7 +16,7 @@ jobs:
       - name: Install test dependencies
         run: pip install -r requirements_test.txt
       - name: Byte-compile the integration
-        run: python -m py_compile custom_components/bps/*.py
+        run: python -m py_compile custom_components/sextant/*.py
       - name: Run unit tests
         run: pytest tests/ -q
 
@@ -30,5 +30,5 @@ jobs:
           node-version: "20"
       - name: node --check the frontend
         run: |
-          node --check custom_components/bps/frontend/script.js
-          node --check custom_components/bps/frontend/bps-map-card.js
+          node --check custom_components/sextant/frontend/script.js
+          node --check custom_components/sextant/frontend/sextant-map-card.js

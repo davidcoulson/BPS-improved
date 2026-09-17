@@ -2,9 +2,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d');
 
-    // --- API auth token (see bps-panel.js) ---------------------------------
-    // The BPS panel element couriers the HA access token in via postMessage;
-    // every /api/bps/* call goes through bpsFetch(), which attaches it as a
+    // --- API auth token (see sextant-panel.js) ---------------------------------
+    // The Sextant panel element couriers the HA access token in via postMessage;
+    // every /api/sextant/* call goes through bpsFetch(), which attaches it as a
     // Bearer header (those endpoints now require auth). API calls hold until
     // the first token arrives so none fire unauthenticated — but never block
     // forever: if the app is opened outside the panel, calls proceed after a
@@ -41,11 +41,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         // with it until a different one is couriered in. The 503 is treated by
         // callers as "no data this cycle".
         if (bpsAuthToken && bpsAuthToken === _authDeadToken && _authFails >= 5) {
-            return new Response(null, { status: 503, statusText: "BPS auth stuck" });
+            return new Response(null, { status: 503, statusText: "Sextant auth stuck" });
         }
         // Rate backoff between the allowed attempts.
         if (Date.now() < _authFailUntil) {
-            return new Response(null, { status: 503, statusText: "BPS auth backoff" });
+            return new Response(null, { status: 503, statusText: "Sextant auth backoff" });
         }
         const headers = Object.assign({}, opts.headers || {});
         if (bpsAuthToken) headers["Authorization"] = "Bearer " + bpsAuthToken;
@@ -135,7 +135,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // with no matching Bermuda sensor (each with a suggested live scanner), and
     // scanners reporting a distance that aren't placed anywhere.
     let scannerDiagnostics = { unmatched_receivers: [], unplaced_scanners: [] };
-    // Receiver-linking snapshot from /api/bps/scanner_linking (issue #64): every
+    // Receiver-linking snapshot from /api/sextant/scanner_linking (issue #64): every
     // placed receiver with its Bermuda distance sensors + live states. Feeds the
     // full Debugging tab and the compact "not reporting" heads-up in the map
     // sidebar. Refreshed on load, on Refresh, and when the Debugging tab opens.
@@ -157,7 +157,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // picks up the new set on its own).
     async function fetchReceiverStatus() {
         try {
-            const res = await bpsFetch('/api/bps/receiver_status');
+            const res = await bpsFetch('/api/sextant/receiver_status');
             if (!res.ok) return;
             const data = await res.json();
             const next = Array.isArray(data.offline) ? data.offline : [];
@@ -417,7 +417,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     let trackedDevices = [];
     let activeDevice = "";
     let myScaleVal = null;
-    const DEFAULT_TRACKER_ICON = "/bps/person.svg";
+    const DEFAULT_TRACKER_ICON = "/sextant/person.svg";
     const GOLDEN_ANGLE = 137.508;
 
     function ensureTrackerIconsStore() {
@@ -501,7 +501,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const send = async () => {
             let ok = false;
             try {
-                const res = await bpsFetch("/api/bps/tracker_tune", {
+                const res = await bpsFetch("/api/sextant/tracker_tune", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ entity: entKey, ref_offset_db: db }),
@@ -535,15 +535,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     // The icon URL a given tracked device should draw with (its saved choice,
-    // else the default person glyph). Legacy bare filenames map to /bps/ paths.
+    // else the default person glyph). Legacy bare filenames map to /sextant/ paths.
     function trackerIconFor(entKey) {
         ensureTrackerIconsStore();
         const storedIcon = finalcords.tracker_icons[entKey];
         if (storedIcon === "person.svg") {
-            return "/bps/person.svg";
+            return "/sextant/person.svg";
         }
         if (storedIcon === "beacon.svg") {
-            return "/bps/beacon.svg";
+            return "/sextant/beacon.svg";
         }
         return storedIcon || DEFAULT_TRACKER_ICON;
     }
@@ -573,10 +573,10 @@ document.addEventListener('DOMContentLoaded', async () => {
             return;
         }
         // Keep defaults available even if API call fails.
-        ensureIconOption("/bps/person.svg", "Person (default)");
-        ensureIconOption("/bps/beacon.svg", "Beacon");
+        ensureIconOption("/sextant/person.svg", "Person (default)");
+        ensureIconOption("/sextant/beacon.svg", "Beacon");
         try {
-            const response = await bpsFetch("/api/bps/tracker_icons");
+            const response = await bpsFetch("/api/sextant/tracker_icons");
             if (!response.ok) {
                 return;
             }
@@ -605,7 +605,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         async function getSavedMaps(){
-            const mapsResponse = await bpsFetch('/api/bps/maps');
+            const mapsResponse = await bpsFetch('/api/sextant/maps');
             if (!mapsResponse.ok) {
                 console.error('Failed to fetch maps:', mapsResponse.statusText);
                 bpsToast('Could not load maps.');
@@ -672,7 +672,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 if (!Array.isArray(apiresponse) || apiresponse.length === 0) {
                     return;
                 }
-                // /api/bps/cords returns every tracked device; pick out each one
+                // /api/sextant/cords returns every tracked device; pick out each one
                 // we're following and stash its latest fix keyed by entity. The
                 // list is read fresh each tick, so adding/removing a device mid-
                 // session takes effect on the next poll.
@@ -1622,7 +1622,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Position history — replaying where a device has been
     // =================================================================
     // The "Trace path" overlay above only knows this browser session. This one
-    // reads /api/bps/history, which the integration keeps on disk, so it
+    // reads /api/sextant/history, which the integration keeps on disk, so it
     // survives a reload, a restart, and being away from the tab entirely.
     //
     // Points arrive in METRES in their own floor's frame (plus the scale that
@@ -1669,7 +1669,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const historyState = {
         ent: null,
-        data: null,      // last /api/bps/history response for `ent`
+        data: null,      // last /api/sextant/history response for `ent`
         idx: 0,          // slider position (index into data.t)
         live: true,      // follow the newest fix
         playing: false,
@@ -1776,7 +1776,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (!historyDeviceSel) return;
         let index = null;
         try {
-            const res = await bpsFetch("/api/bps/history");
+            const res = await bpsFetch("/api/sextant/history");
             if (res.ok) index = await res.json();
         } catch (e) { /* keep whatever the picker already offers */ }
         if (index && index.config) historyApplyRetention(index.config.max_age);
@@ -1882,7 +1882,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         historyState.loading = true;
         let data = null;
         try {
-            const res = await bpsFetch(`/api/bps/history?entity=${encodeURIComponent(historyState.ent)}`
+            const res = await bpsFetch(`/api/sextant/history?entity=${encodeURIComponent(historyState.ent)}`
                 + `&from=${from.toFixed(0)}&to=${to.toFixed(0)}&max_points=${HISTORY_MAX_POINTS}`);
             if (res.ok) data = await res.json();
         } catch (e) { /* leave the previous window on screen */ }
@@ -2553,7 +2553,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 { confirmText: "Clear history", danger: true });
             if (!ok) return;
             try {
-                const res = await bpsFetch("/api/bps/history", {
+                const res = await bpsFetch("/api/sextant/history", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ action: "clear" }),
@@ -2632,13 +2632,13 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         // Function to fetch data from the API and display it on page
         async function fetchBPSData() {
-            const apiUrl = "/api/bps/read_text"; // API endpoint to read the file
+            const apiUrl = "/api/sextant/read_text"; // API endpoint to read the file
         
             try {
                 const response = await bpsFetch(apiUrl); // Make a GET request to the API
         
             if (!response.ok) {
-                console.error("Failed to fetch BPS data:", response.statusText); // Handle error status
+                console.error("Failed to fetch Sextant data:", response.statusText); // Handle error status
                 return;
             }
         
@@ -2678,18 +2678,18 @@ document.addEventListener('DOMContentLoaded', async () => {
             });
 
             } catch (error) {
-                console.error("Error fetching BPS data:", error); // Handle possible error during fetch-call
+                console.error("Error fetching Sextant data:", error); // Handle possible error during fetch-call
             }
         }
 
         async function fetchBPSCords() {
-            const apiUrl = "/api/bps/cords"; 
+            const apiUrl = "/api/sextant/cords"; 
         
             try {
                 const response = await bpsFetch(apiUrl); // Make a GET request to the API
         
             if (!response.ok) {
-                console.error("Failed to fetch BPS data:", response.statusText); // Handle error status
+                console.error("Failed to fetch Sextant data:", response.statusText); // Handle error status
                 return [];
             }
         
@@ -2698,7 +2698,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             } catch (error) {
             // Handle possible error during fetch-call
-            console.error("Error fetching BPS data:", error);
+            console.error("Error fetching Sextant data:", error);
             return [];
             }
         }
@@ -2930,7 +2930,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const uploadData = new FormData();
                 uploadData.append("icon", iconFile);
                 try {
-                    const response = await bpsFetch("/api/bps/upload_tracker_icon", {
+                    const response = await bpsFetch("/api/sextant/upload_tracker_icon", {
                         method: "POST",
                         body: uploadData,
                     });
@@ -4941,7 +4941,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         renderDebugView();
         let data = { placed: [], unplaced: [], beacons: [] };
         try {
-            const res = await bpsFetch('/api/bps/scanner_linking');
+            const res = await bpsFetch('/api/sextant/scanner_linking');
             if (res.ok) {
                 const parsed = await res.json();
                 if (parsed && typeof parsed === 'object') {
@@ -5495,7 +5495,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         selectedVertex = null;
         draggingZone = false;
         editTarget = null;
-        img.src = `/local/bps_maps/${value}`;
+        img.src = `/local/sextant_maps/${value}`;
         imgfilename = value;
         mapname.value = removeExtension(value);
         SelMapName = mapname.value;
@@ -5725,7 +5725,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const square = squareEl.checked;
         summary.textContent = 'Computing…';
         try {
-            const res = await bpsFetch('/api/bps/adjust_zones', {
+            const res = await bpsFetch('/api/sextant/adjust_zones', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -5936,7 +5936,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         try {
-            const response = await bpsFetch('/api/bps/save_text', {
+            const response = await bpsFetch('/api/sextant/save_text', {
                 method: 'POST',
                 body: data,
             });
@@ -5984,7 +5984,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     async function calibRequest(body) {
-        const res = await bpsFetch('/api/bps/calibration', {
+        const res = await bpsFetch('/api/sextant/calibration', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
@@ -6151,7 +6151,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     async function pollCalibration() {
         try {
-            const res = await bpsFetch('/api/bps/calibration');
+            const res = await bpsFetch('/api/sextant/calibration');
             if (!res.ok) return;
             const status = await res.json();
             renderCalibration(status);
@@ -6307,7 +6307,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (setupToggle && bpsApp) {
         let setupOpen = false;
         try {
-            setupOpen = localStorage.getItem("bps.setupOpen") === "1";
+            setupOpen = localStorage.getItem("sextant.setupOpen") === "1";
         } catch (e) { /* storage unavailable - fall back to collapsed */ }
 
         const applySetupState = () => {
@@ -6322,7 +6322,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         setupToggle.addEventListener("click", () => {
             setupOpen = !setupOpen;
             try {
-                localStorage.setItem("bps.setupOpen", setupOpen ? "1" : "0");
+                localStorage.setItem("sextant.setupOpen", setupOpen ? "1" : "0");
             } catch (e) { /* not fatal - the state just will not persist */ }
             applySetupState();
         });
@@ -6337,7 +6337,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (sidebarCollapseBtn && sidebarExpandBtn && bpsApp) {
         let sidebarHidden = false;
         try {
-            sidebarHidden = localStorage.getItem("bps.sidebarHidden") === "1";
+            sidebarHidden = localStorage.getItem("sextant.sidebarHidden") === "1";
         } catch (e) { /* storage unavailable - default to showing it */ }
 
         const applySidebarState = () => {
@@ -6350,7 +6350,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const setSidebar = (hidden) => {
             sidebarHidden = hidden;
             try {
-                localStorage.setItem("bps.sidebarHidden", hidden ? "1" : "0");
+                localStorage.setItem("sextant.sidebarHidden", hidden ? "1" : "0");
             } catch (e) { /* not fatal - the state just will not persist */ }
             applySidebarState();
             // Move focus to whichever control replaced the one just used, so a

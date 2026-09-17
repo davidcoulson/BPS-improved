@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Room-stability KPI for BPS: how often the published zone/floor sensors change.
+Room-stability KPI for Sextant: how often the published zone/floor sensors change.
 
 Positional error in metres is hard to measure on a live install (there is no
 ground truth for a phone in a pocket), but the thing automations actually
 suffer from is easy to measure: a tracker that is not moving must not change
-room. This reads the Home Assistant recorder history for every ``_bps_zone``
-and ``_bps_floor`` sensor and reports, per sensor:
+room. This reads the Home Assistant recorder history for every ``_sextant_zone``
+and ``_sextant_floor`` sensor and reports, per sensor:
 
   changes/h      state changes per tracker-hour (lower is better)
   flip%          share of changes that are an A -> B -> A round trip within
@@ -17,7 +17,7 @@ and ``_bps_floor`` sensor and reports, per sensor:
 
 Run it BEFORE and AFTER a positioning change on the same window length, and
 compare with ``--baseline``. That is the number every accuracy change should
-move; positional CEP from ``bps_eval.py`` is the second opinion.
+move; positional CEP from ``sextant_eval.py`` is the second opinion.
 
 Usage::
 
@@ -44,7 +44,7 @@ import urllib.request
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 
-SUFFIXES = ("_bps_zone", "_bps_floor")
+SUFFIXES = ("_sextant_zone", "_sextant_floor")
 DEAD_STATES = {"unknown", "unavailable", "", None}
 
 
@@ -160,7 +160,7 @@ def _get(url, token, path, params=None):
 
 
 def discover_entities(url, token, include_nearest=False):
-    suffixes = SUFFIXES + (("_bps_nearest_zone",) if include_nearest else ())
+    suffixes = SUFFIXES + (("_sextant_nearest_zone",) if include_nearest else ())
     states = _get(url, token, "/api/states")
     return sorted(s["entity_id"] for s in states if s["entity_id"].endswith(suffixes))
 
@@ -219,7 +219,7 @@ def print_report(per_entity, summary, baseline=None):
             + _fmt(m["dead"], 6)
         )
         if baseline:
-            b = base_entities.get(eid)
+            b = base_entities.get(eid) or base_entities.get(eid.replace("_sextant_", "_bps_"))
             if b and b.get("changes_per_hour") is not None and m["changes_per_hour"] is not None:
                 line += _fmt(m["changes_per_hour"] - b["changes_per_hour"], 9)
             else:
@@ -250,8 +250,8 @@ def main(argv=None):
     ap.add_argument("--url", default=os.environ.get("HASS_URL"), help="HA base URL (or $HASS_URL)")
     ap.add_argument("--token", default=os.environ.get("HASS_TOKEN"), help="long-lived token (or $HASS_TOKEN)")
     ap.add_argument("--hours", type=float, default=12.0, help="window to score (default 12)")
-    ap.add_argument("--entities", nargs="*", help="explicit entity ids (default: every *_bps_zone / *_bps_floor)")
-    ap.add_argument("--nearest", action="store_true", help="also score *_bps_nearest_zone")
+    ap.add_argument("--entities", nargs="*", help="explicit entity ids (default: every *_sextant_zone / *_sextant_floor)")
+    ap.add_argument("--nearest", action="store_true", help="also score *_sextant_nearest_zone")
     ap.add_argument("--json", metavar="FILE", help="write the metrics to FILE")
     ap.add_argument("--baseline", metavar="FILE", help="compare against a run saved with --json")
     ap.add_argument("--from-json", metavar="FILE", help="re-print a saved run instead of querying HA")
@@ -274,7 +274,7 @@ def main(argv=None):
     try:
         entity_ids = args.entities or discover_entities(args.url, args.token, args.nearest)
         if not entity_ids:
-            print("no BPS zone/floor sensors found", file=sys.stderr)
+            print("no Sextant zone/floor sensors found", file=sys.stderr)
             return 1
         history = fetch_history(args.url, args.token, entity_ids, args.hours)
     except urllib.error.HTTPError as e:

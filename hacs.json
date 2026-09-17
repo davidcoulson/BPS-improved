@@ -1,6 +1,6 @@
 {
-  "name": "BPS-Optimized (BLE Positioning)",
+  "name": "Sextant",
   "render_readme": true,
   "zip_release": true,
-  "filename": "bps.zip"
+  "filename": "sextant.zip"
 }

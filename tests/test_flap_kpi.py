@@ -67,24 +67,24 @@ def test_window_defaults_to_the_span_of_the_rows():
 
 def test_summary_rolls_up_by_kind():
     per = {
-        "sensor.phone_bps_zone": kpi.compute_metrics(_rows((0, "A"), (60, "B"), (120, "A")), 1),
-        "sensor.watch_bps_zone": kpi.compute_metrics(_rows((0, "A")), 1),
-        "sensor.phone_bps_floor": kpi.compute_metrics(_rows((0, "G"), (600, "S")), 1),
+        "sensor.phone_sextant_zone": kpi.compute_metrics(_rows((0, "A"), (60, "B"), (120, "A")), 1),
+        "sensor.watch_sextant_zone": kpi.compute_metrics(_rows((0, "A")), 1),
+        "sensor.phone_sextant_floor": kpi.compute_metrics(_rows((0, "G"), (600, "S")), 1),
     }
     s = kpi.summarise(per)
-    assert s["bps_zone"]["entities"] == 2
-    assert s["bps_zone"]["changes"] == 2
-    assert s["bps_zone"]["changes_per_tracker_hour"] == 1.0  # 2 changes over 2 tracker-hours
-    assert s["bps_zone"]["flip_ratio"] == 0.5
-    assert s["bps_floor"]["changes"] == 1
+    assert s["sextant_zone"]["entities"] == 2
+    assert s["sextant_zone"]["changes"] == 2
+    assert s["sextant_zone"]["changes_per_tracker_hour"] == 1.0  # 2 changes over 2 tracker-hours
+    assert s["sextant_zone"]["flip_ratio"] == 0.5
+    assert s["sextant_floor"]["changes"] == 1
 
 
 def test_report_prints_without_error(capsys):
-    per = {"sensor.phone_bps_zone": kpi.compute_metrics(_rows((0, "A"), (60, "B"), (120, "A")), 1)}
-    base = {"entities": {"sensor.phone_bps_zone": {"changes_per_hour": 5.0, "flip_ratio": 0.9}},
-            "summary": {"bps_zone": {"changes_per_tracker_hour": 5.0, "flip_ratio": 0.9}}}
+    per = {"sensor.phone_sextant_zone": kpi.compute_metrics(_rows((0, "A"), (60, "B"), (120, "A")), 1)}
+    base = {"entities": {"sensor.phone_sextant_zone": {"changes_per_hour": 5.0, "flip_ratio": 0.9}},
+            "summary": {"sextant_zone": {"changes_per_tracker_hour": 5.0, "flip_ratio": 0.9}}}
     kpi.print_report(per, kpi.summarise(per), base)
     out = capsys.readouterr().out
-    assert "sensor.phone_bps_zone" in out
+    assert "sensor.phone_sextant_zone" in out
     assert "-3.00" in out  # 2.0 - 5.0 change-rate delta
     assert "was 5.0/h" in out

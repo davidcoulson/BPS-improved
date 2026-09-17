@@ -1,23 +1,23 @@
 /**
- * Makes the BPS app's colors follow Home Assistant's actual theme instead of
+ * Makes the Sextant app's colors follow Home Assistant's actual theme instead of
  * a fixed, self-contained dark palette.
  *
  * The app is a small shadcn/Tailwind build whose entire color system cascades
  * from a handful of HSL-triple custom properties (--background, --foreground,
- * --primary, --border, etc.) declared once in bpsstyle.css under :root/.dark.
+ * --primary, --border, etc.) declared once in sextant.css under :root/.dark.
  * Those were always the shadcn defaults - never connected to Home Assistant's
  * own theme - which is why the app looked the same regardless of the user's
  * light/dark mode or accent color, and why a manual light/dark toggle button
  * existed here at all (see the now-removed #themeToggle).
  *
- * This runs inside the same-origin iframe panel_custom mounts BPS in
- * (bps-panel.js), so `window.parent.document` is Home Assistant's own page.
+ * This runs inside the same-origin iframe panel_custom mounts Sextant in
+ * (sextant-panel.js), so `window.parent.document` is Home Assistant's own page.
  * HA exposes its live theme as CSS custom properties there (--primary-color,
  * --card-background-color, etc, as hex/rgb strings). This reads those,
  * converts each to the "H S% L%" triple shadcn's variables expect, and sets
  * them as inline styles on this document's <html> - which beats any
  * :root/.dark stylesheet rule on specificity, so the static block in
- * bpsstyle.css becomes a fallback rather than something that needs editing
+ * sextant.css becomes a fallback rather than something that needs editing
  * or staying in sync by hand.
  *
  * Falls back to doing nothing (the static dark theme applies) if there's no
@@ -138,7 +138,7 @@
 
         const parentStyle = getComputedStyle(parentDoc.documentElement);
         // <body> keeps its own "dark" class alongside <html>'s, and .dark {}
-        // re-declares every variable directly on it in bpsstyle.css - a
+        // re-declares every variable directly on it in sextant.css - a
         // declaration targeting an element directly always wins over an
         // inherited one, even a low-specificity class selector beating an
         // inline style up on <html>. So the override has to land on both

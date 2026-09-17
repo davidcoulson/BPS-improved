@@ -1,4 +1,4 @@
-"""Zone geometry cleanup for the BPS floor-plan editor ("Adjust zones").
+"""Zone geometry cleanup for the Sextant floor-plan editor ("Adjust zones").
 
 Given a floor's zones — independent polygons drawn by hand in the 2000px panel
 coordinate space, with no shared-edge topology — this proposes a cleaner plan:

@@ -12,8 +12,8 @@ import asyncio
 import json
 import os
 
-import bps
-from bps import history as H
+import sextant
+from sextant import history as H
 from conftest import make_hass
 
 
@@ -381,13 +381,13 @@ class _Req:
 
 
 def api(hass):
-    return bps.BPSHistoryAPI(hass)
+    return sextant.SextantHistoryAPI(hass)
 
 
 def seeded_hass(tmp_path, **layout):
     hass = make_hass(tmp_path)
-    hass.data["bps"] = {"layout": dict(layout)}
-    h = bps.get_position_history(hass)
+    hass.data["sextant"] = {"layout": dict(layout)}
+    h = sextant.get_position_history(hass)
     import time as _t
     t0 = _t.time() - 300
     for i in range(60):
@@ -436,7 +436,7 @@ def test_reversed_window_is_normalised(tmp_path):
 
 def test_layout_settings_reach_the_recorder(tmp_path):
     hass, h, _ = seeded_hass(tmp_path)
-    hass.data["bps"]["layout"]["history_max_age"] = 900
+    hass.data["sextant"]["layout"]["history_max_age"] = 900
     run(api(hass).get(_Req()))
     assert h.cfg["max_age"] == 900.0
 
@@ -450,35 +450,35 @@ def test_post_requires_a_known_action(tmp_path):
 
 def test_clear_forgets_memory_and_disk(tmp_path):
     hass, h, _ = seeded_hass(tmp_path)
-    run(bps.flush_position_history(hass))
-    assert H.list_day_keys(bps.history_dir(hass))
+    run(sextant.flush_position_history(hass))
+    assert H.list_day_keys(sextant.history_dir(hass))
     res = run(api(hass).post(_Req(body={"action": "clear"})))
     assert res.status == 200
     assert h.entities() == []
-    assert H.list_day_keys(bps.history_dir(hass)) == []
+    assert H.list_day_keys(sextant.history_dir(hass)) == []
 
 
 def test_clear_of_one_tracker_leaves_the_others(tmp_path):
     hass, h, _ = seeded_hass(tmp_path)
     import time as _t
     h.record("other", _t.time(), 1.0, 1.0, FLOOR, SCALE)
-    run(bps.flush_position_history(hass))
+    run(sextant.flush_position_history(hass))
     run(api(hass).post(_Req(body={"action": "clear", "entity": ENT})))
     assert h.entities() == ["other"]
-    rows = H.read_segments(bps.history_dir(hass), H.list_day_keys(bps.history_dir(hass)))
+    rows = H.read_segments(sextant.history_dir(hass), H.list_day_keys(sextant.history_dir(hass)))
     assert {r["e"] for r in rows} == {"other"}
 
 
 def test_restore_after_a_restart_reloads_and_breaks_the_line(tmp_path):
     hass, h, _ = seeded_hass(tmp_path)
     kept = h.retained(ENT)["points"]
-    run(bps.flush_position_history(hass))
+    run(sextant.flush_position_history(hass))
 
     # "Restart": same config dir, fresh in-memory history.
     fresh = make_hass(tmp_path)
-    fresh.data["bps"] = {"layout": {}}
-    run(bps.restore_position_history(fresh))
-    back = bps.get_position_history(fresh)
+    fresh.data["sextant"] = {"layout": {}}
+    run(sextant.restore_position_history(fresh))
+    back = sextant.get_position_history(fresh)
     assert back.retained(ENT)["points"] == kept
     # Nothing must be written back out: the rows are already on disk.
     assert back.pending_count() == 0
@@ -492,7 +492,7 @@ def test_history_is_stored_outside_the_web_root(tmp_path):
     # www/ is served to anyone who can guess a URL; the movement record is not
     # something to publish. It lives under .storage with the rest of the state.
     hass = make_hass(tmp_path)
-    path = bps.history_dir(hass).replace("\\", "/")
+    path = sextant.history_dir(hass).replace("\\", "/")
     assert "/.storage/" in path and "/www/" not in path
 
 
@@ -505,13 +505,13 @@ def test_a_reload_does_not_duplicate_the_ring(tmp_path):
     # there appended a second copy of every point and left the arrays unsorted,
     # which breaks every bisect in query() and evict().
     hass, h, _ = seeded_hass(tmp_path)
-    run(bps.flush_position_history(hass))
+    run(sextant.flush_position_history(hass))
     import time as _t
     h.record(ENT, _t.time(), 42.0, 42.0, FLOOR, SCALE)   # not yet flushed
     before = h.retained(ENT)["points"]
     pending = h.pending_count()
 
-    run(bps.restore_position_history(hass))              # the reload
+    run(sextant.restore_position_history(hass))              # the reload
 
     assert h.retained(ENT)["points"] == before
     assert list(h.tracks[ENT].t) == sorted(h.tracks[ENT].t)
@@ -547,12 +547,12 @@ def test_clear_is_not_undone_by_a_concurrent_flush(tmp_path):
 
     async def both():
         await asyncio.gather(
-            bps.flush_position_history(hass),
+            sextant.flush_position_history(hass),
             api(hass).post(_Req(body={"action": "clear"})),
         )
 
     asyncio.new_event_loop().run_until_complete(both())
-    d = bps.history_dir(hass)
+    d = sextant.history_dir(hass)
     assert H.read_segments(d, H.list_day_keys(d)) == []
     assert h.entities() == []
 
@@ -563,16 +563,16 @@ def test_pruning_is_skipped_when_the_retention_cannot_be_trusted(tmp_path):
     # 6 h default, which would take a configured 7-day record down to six hours.
     import time as _t
     hass = make_hass(tmp_path)
-    hass.data["bps"] = {"layout": []}          # not a dict
-    d = bps.history_dir(hass)
+    hass.data["sextant"] = {"layout": []}          # not a dict
+    d = sextant.history_dir(hass)
     old_day = H.day_key(_t.time() - 3 * 86400)
     H.append_segments(d, {old_day: [json.dumps(
         {"e": ENT, "t": 1.0, "x": 0, "y": 0, "f": FLOOR})]})
-    run(bps.flush_position_history(hass, prune=True))
+    run(sextant.flush_position_history(hass, prune=True))
     assert H.list_day_keys(d) == [old_day]     # still there
 
-    hass.data["bps"]["layout"] = {"history_max_age": 3600}
-    run(bps.flush_position_history(hass, prune=True))
+    hass.data["sextant"]["layout"] = {"history_max_age": 3600}
+    run(sextant.flush_position_history(hass, prune=True))
     assert H.list_day_keys(d) == []            # now it is safe to prune
 
 

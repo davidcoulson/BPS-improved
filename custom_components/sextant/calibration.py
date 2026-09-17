@@ -49,14 +49,14 @@ _LOGGER = logging.getLogger(__name__)
 # without an import cycle.
 from . import bermuda_source
 from .storage import (
-    BPS_FILE_LOCK,
-    get_bps_data_for_edit,
-    save_bps_data,
+    LAYOUT_LOCK,
+    get_layout_for_edit,
+    save_layout,
     load_calib_state,
     save_calib_state,
 )
 
-DOMAIN = "bps"
+DOMAIN = "sextant"
 SAMPLE_INTERVAL = 10  # seconds between dump_devices calls (manual run)
 DEFAULT_DURATION = 600  # seconds of sampling (manual run)
 MIN_DURATION = 60
@@ -194,7 +194,7 @@ async def _read_coords(hass):
     read-modify-write below can't leak a half-mutated layout to the tracking
     loop before the save lands.
     """
-    return get_bps_data_for_edit(hass)
+    return get_layout_for_edit(hass)
 
 
 def _find_floor(coords, floor_name):
@@ -734,7 +734,7 @@ async def _auto_solve_and_apply(hass, cal: dict) -> None:
     # or re-linked since would be misreported as "no matching scanner" (a
     # rename hint) for a whole solve interval despite matching perfectly. And
     # dump_devices is an external RPC with no timeout — awaiting it under
-    # BPS_FILE_LOCK would let a wedged Bermuda hang every bpsdata writer
+    # LAYOUT_LOCK would let a wedged Bermuda hang every bpsdata writer
     # (panel saves included), where pre-lock it only delays this solve.
     coords = await _read_coords(hass)
     if not coords:
@@ -745,7 +745,7 @@ async def _auto_solve_and_apply(hass, cal: dict) -> None:
         _ingest_dump(cal, await _dump_devices(hass))
     except Exception as e:
         _LOGGER.debug("Pre-solve dump failed; missing-receiver buckets may lag one cycle: %s", e)
-    async with BPS_FILE_LOCK:
+    async with LAYOUT_LOCK:
         await _auto_solve_and_apply_locked(hass, cal)
 
 
@@ -796,7 +796,7 @@ async def _auto_solve_and_apply_locked(hass, cal: dict) -> None:
         changed = True
 
     if changed:
-        await save_bps_data(hass, coords)
+        await save_layout(hass, coords)
         _LOGGER.info("Auto-calibration updated receiver corrections")
 
 
@@ -812,7 +812,7 @@ async def start_calibration(hass, floor_name: str, duration: int) -> dict:
 
     coords = await _read_coords(hass)
     if not coords:
-        raise ValueError("No BPS data saved yet.")
+        raise ValueError("No Sextant data saved yet.")
     floor = _find_floor(coords, floor_name)
     if floor is None:
         raise ValueError(f'No floor named "{floor_name}".')
@@ -858,7 +858,7 @@ async def _stop_task(cal: dict) -> None:
 async def async_cancel_calibration(hass) -> None:
     """Stop a run, whichever mode it is in.
 
-    Mirrors the "cancel" action of BPSCalibrationAPI so the service layer does
+    Mirrors the "cancel" action of SextantCalibrationAPI so the service layer does
     not have to reach for _stop_task, and so the two entry points can never
     drift on what cancelling means: turning auto off is a different operation
     from aborting a manual run, and only auto persists its state.
@@ -878,14 +878,14 @@ async def set_auto_calibration(hass, enabled: bool) -> None:
     cal = get_calibration_state(hass)
     coords = await _read_coords(hass)
     if not coords:
-        raise ValueError("No BPS data saved yet.")
+        raise ValueError("No Sextant data saved yet.")
 
     if bool(coords.get("auto_calibration")) != bool(enabled):
-        async with BPS_FILE_LOCK:
+        async with LAYOUT_LOCK:
             # Re-read inside the lock so a concurrent writer is not clobbered.
             coords = await _read_coords(hass) or coords
             coords["auto_calibration"] = bool(enabled)
-            await save_bps_data(hass, coords)
+            await save_layout(hass, coords)
 
     await _stop_task(cal)
     if enabled:
@@ -969,10 +969,12 @@ APPLY_MIN_DB = 0.5  # smallest offset change worth writing into Bermuda
 
 
 def _calibration_target(coords) -> str:
-    """"bps" (multiplier in the layout) or "bermuda" (rssi offset in Bermuda)."""
+    """"sextant" (multiplier in the layout) or "bermuda" (rssi offset in Bermuda)."""
     tuning = coords.get("tuning") if isinstance(coords, dict) else None
     target = tuning.get("calibration_target") if isinstance(tuning, dict) else None
-    return target if target in ("bps", "bermuda") else "bps"
+    if target == "bps":  # layouts saved before the rename
+        target = "sextant"
+    return target if target in ("sextant", "bermuda") else "sextant"
 
 
 def _push_corrections_to_bermuda(hass, coords, floor, result) -> int:
@@ -984,7 +986,7 @@ def _push_corrections_to_bermuda(hass, coords, floor, result) -> int:
     what the solver fitted. Offsets ACCUMULATE: the samples the next solve
     sees already carry the offsets written now, so that solve fits the
     residual, and the residual is added to what is there. Bermuda's own value
-    before BPS first touched a scanner is remembered per address
+    before Sextant first touched a scanner is remembered per address
     (``bermuda_offset_base`` in the layout) so reset can restore it.
 
     Returns the number of scanners written. Raises ValueError when the
@@ -994,8 +996,8 @@ def _push_corrections_to_bermuda(hass, coords, floor, result) -> int:
     slug_to_addr = bermuda_source.async_get_scanner_addresses_by_slug(hass)
     if info is None or slug_to_addr is None:
         raise ValueError(
-            "This Bermuda build has no rssi_offsets API; set calibration_target to bps "
-            "(bps.set_tuning) or update Bermuda."
+            "This Bermuda build has no rssi_offsets API; set calibration_target to sextant "
+            "(sextant.set_tuning) or update Bermuda."
         )
     attenuation = info.get("attenuation")
     if not isinstance(attenuation, (int, float)) or attenuation <= 0:
@@ -1058,14 +1060,14 @@ async def apply_corrections(hass, cal: dict, floor_name: str) -> int:
             break
     if not result:
         raise ValueError("No calibration result to apply for this floor.")
-    async with BPS_FILE_LOCK:
+    async with LAYOUT_LOCK:
         return await _apply_result_locked(hass, cal, result)
 
 
 async def _apply_result_locked(hass, cal: dict, result: dict) -> int:
     coords = await _read_coords(hass)
     if not coords:
-        raise ValueError("No BPS data saved.")
+        raise ValueError("No Sextant data saved.")
     floor = _find_floor(coords, result["floor"])
     if floor is None:
         raise ValueError(f'Floor "{result["floor"]}" no longer exists.')
@@ -1073,15 +1075,15 @@ async def _apply_result_locked(hass, cal: dict, result: dict) -> int:
     updated = _write_floor_corrections(hass, coords, floor, result, auto=False)
     cal["applied"][floor.get("name")] = dict(result["receivers"])
 
-    await save_bps_data(hass, coords)
+    await save_layout(hass, coords)
     return updated
 
 
 async def reset_corrections(hass, cal: dict, floor_name: str) -> int:
-    async with BPS_FILE_LOCK:
+    async with LAYOUT_LOCK:
         coords = await _read_coords(hass)
         if not coords:
-            raise ValueError("No BPS data saved.")
+            raise ValueError("No Sextant data saved.")
         floor = _find_floor(coords, floor_name)
         if floor is None:
             raise ValueError(f'No floor named "{floor_name}".')
@@ -1090,8 +1092,8 @@ async def reset_corrections(hass, cal: dict, floor_name: str) -> int:
         for receiver in floor.get("receivers", []):
             if receiver.pop("correction", None) is not None:
                 removed += 1
-        # Offsets BPS wrote into Bermuda for this floor's scanners go back to
-        # what Bermuda had before BPS first touched them (whatever the target
+        # Offsets Sextant wrote into Bermuda for this floor's scanners go back to
+        # what Bermuda had before Sextant first touched them (whatever the target
         # is set to now).
         base = coords.get("bermuda_offset_base")
         slug_to_addr = bermuda_source.async_get_scanner_addresses_by_slug(hass) or {}
@@ -1109,7 +1111,7 @@ async def reset_corrections(hass, cal: dict, floor_name: str) -> int:
         floor.pop("calibration", None)
         cal["applied"].pop(floor.get("name"), None)
 
-        await save_bps_data(hass, coords)
+        await save_layout(hass, coords)
         return removed
 
 
@@ -1131,11 +1133,11 @@ def _status_payload(cal: dict) -> dict:
     return payload
 
 
-class BPSCalibrationAPI(HomeAssistantView):
+class SextantCalibrationAPI(HomeAssistantView):
     """Start, watch, apply, and reset receiver calibration."""
 
-    url = "/api/bps/calibration"
-    name = "api:bps:calibration"
+    url = "/api/sextant/calibration"
+    name = "api:sextant:calibration"
     requires_auth = True
 
     async def get(self, request):

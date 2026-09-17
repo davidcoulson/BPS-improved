@@ -1,18 +1,18 @@
 {
   "generated_at": "2026-09-16T22:30:00-04:00",
   "window_hours": 24,
-  "note": "Baseline before any week-1 changes; BPS 2.2.0-bermuda-api.21, Bermuda 0.8.7-fork-testing.7, 48 receivers, 10 s cycle. Fetched via the HA history API (significant changes, minimal response).",
+  "note": "Baseline before any week-1 changes; Sextant 2.2.0-bermuda-api.21, Bermuda 0.8.7-fork-testing.7, 48 receivers, 10 s cycle. Fetched via the HA history API (significant changes, minimal response).",
   "truncated_entities": [
-    "sensor.fry_bps_zone",
-    "sensor.leela_bps_zone",
-    "sensor.lilibet_bps_zone",
-    "sensor.meg_bps_zone",
-    "sensor.private_ble_device_david_s_phone_bps_zone",
-    "sensor.socks_bps_zone",
-    "sensor.willow_bps_zone"
+    "sensor.fry_sextant_zone",
+    "sensor.leela_sextant_zone",
+    "sensor.lilibet_sextant_zone",
+    "sensor.meg_sextant_zone",
+    "sensor.private_ble_device_david_s_phone_sextant_zone",
+    "sensor.socks_sextant_zone",
+    "sensor.willow_sextant_zone"
   ],
   "entities": {
-    "sensor.fry_bps_zone": {
+    "sensor.fry_sextant_zone": {
       "changes": 999,
       "hours": 24.0,
       "changes_per_hour": 41.62,
@@ -46,7 +46,7 @@
         }
       ]
     },
-    "sensor.leela_bps_zone": {
+    "sensor.leela_sextant_zone": {
       "changes": 999,
       "hours": 24.0,
       "changes_per_hour": 41.62,
@@ -80,7 +80,7 @@
         }
       ]
     },
-    "sensor.lilibet_bps_zone": {
+    "sensor.lilibet_sextant_zone": {
       "changes": 999,
       "hours": 24.0,
       "changes_per_hour": 41.62,
@@ -114,7 +114,7 @@
         }
       ]
     },
-    "sensor.meg_bps_zone": {
+    "sensor.meg_sextant_zone": {
       "changes": 999,
       "hours": 24.0,
       "changes_per_hour": 41.62,
@@ -148,7 +148,7 @@
         }
       ]
     },
-    "sensor.primrose_bps_zone": {
+    "sensor.primrose_sextant_zone": {
       "changes": 926,
       "hours": 24.0,
       "changes_per_hour": 38.58,
@@ -182,7 +182,7 @@
         }
       ]
     },
-    "sensor.private_ble_device_7b1695_bps_zone": {
+    "sensor.private_ble_device_7b1695_sextant_zone": {
       "changes": 4,
       "hours": 24.0,
       "changes_per_hour": 0.17,
@@ -194,7 +194,7 @@
       "states": 0,
       "top_pairs": []
     },
-    "sensor.private_ble_device_david_s_phone_bps_zone": {
+    "sensor.private_ble_device_david_s_phone_sextant_zone": {
       "changes": 999,
       "hours": 24.0,
       "changes_per_hour": 41.62,
@@ -228,7 +228,7 @@
         }
       ]
     },
-    "sensor.private_ble_device_david_s_watch_bps_zone": {
+    "sensor.private_ble_device_david_s_watch_sextant_zone": {
       "changes": 569,
       "hours": 24.0,
       "changes_per_hour": 23.71,
@@ -262,7 +262,7 @@
         }
       ]
     },
-    "sensor.private_ble_device_eilee_phone_bps_zone": {
+    "sensor.private_ble_device_eilee_phone_sextant_zone": {
       "changes": 465,
       "hours": 24.0,
       "changes_per_hour": 19.38,
@@ -296,7 +296,7 @@
         }
       ]
     },
-    "sensor.private_ble_device_eilee_watch_bps_zone": {
+    "sensor.private_ble_device_eilee_watch_sextant_zone": {
       "changes": 262,
       "hours": 24.0,
       "changes_per_hour": 10.92,
@@ -330,7 +330,7 @@
         }
       ]
     },
-    "sensor.private_ble_michelle_phone_bps_zone": {
+    "sensor.private_ble_michelle_phone_sextant_zone": {
       "changes": 443,
       "hours": 24.0,
       "changes_per_hour": 18.46,
@@ -364,7 +364,7 @@
         }
       ]
     },
-    "sensor.private_ble_michelle_watch_bps_zone": {
+    "sensor.private_ble_michelle_watch_sextant_zone": {
       "changes": 463,
       "hours": 24.0,
       "changes_per_hour": 19.29,
@@ -398,7 +398,7 @@
         }
       ]
     },
-    "sensor.socks_bps_zone": {
+    "sensor.socks_sextant_zone": {
       "changes": 999,
       "hours": 24.0,
       "changes_per_hour": 41.62,
@@ -432,7 +432,7 @@
         }
       ]
     },
-    "sensor.willow_bps_zone": {
+    "sensor.willow_sextant_zone": {
       "changes": 999,
       "hours": 24.0,
       "changes_per_hour": 41.62,
@@ -466,7 +466,7 @@
         }
       ]
     },
-    "sensor.fry_bps_floor": {
+    "sensor.fry_sextant_floor": {
       "changes": 75,
       "hours": 24.0,
       "changes_per_hour": 3.12,
@@ -486,7 +486,7 @@
         }
       ]
     },
-    "sensor.leela_bps_floor": {
+    "sensor.leela_sextant_floor": {
       "changes": 81,
       "hours": 24.0,
       "changes_per_hour": 3.38,
@@ -506,7 +506,7 @@
         }
       ]
     },
-    "sensor.lilibet_bps_floor": {
+    "sensor.lilibet_sextant_floor": {
       "changes": 71,
       "hours": 24.0,
       "changes_per_hour": 2.96,
@@ -526,7 +526,7 @@
         }
       ]
     },
-    "sensor.meg_bps_floor": {
+    "sensor.meg_sextant_floor": {
       "changes": 74,
       "hours": 24.0,
       "changes_per_hour": 3.08,
@@ -546,7 +546,7 @@
         }
       ]
     },
-    "sensor.primrose_bps_floor": {
+    "sensor.primrose_sextant_floor": {
       "changes": 110,
       "hours": 24.0,
       "changes_per_hour": 4.58,
@@ -566,7 +566,7 @@
         }
       ]
     },
-    "sensor.private_ble_device_7b1695_bps_floor": {
+    "sensor.private_ble_device_7b1695_sextant_floor": {
       "changes": 4,
       "hours": 24.0,
       "changes_per_hour": 0.17,
@@ -578,7 +578,7 @@
       "states": 0,
       "top_pairs": []
     },
-    "sensor.private_ble_device_david_s_phone_bps_floor": {
+    "sensor.private_ble_device_david_s_phone_sextant_floor": {
       "changes": 59,
       "hours": 24.0,
       "changes_per_hour": 2.46,
@@ -598,7 +598,7 @@
         }
       ]
     },
-    "sensor.private_ble_device_david_s_watch_bps_floor": {
+    "sensor.private_ble_device_david_s_watch_sextant_floor": {
       "changes": 65,
       "hours": 24.0,
       "changes_per_hour": 2.71,
@@ -618,7 +618,7 @@
         }
       ]
     },
-    "sensor.private_ble_device_eilee_phone_bps_floor": {
+    "sensor.private_ble_device_eilee_phone_sextant_floor": {
       "changes": 51,
       "hours": 24.0,
       "changes_per_hour": 2.12,
@@ -638,7 +638,7 @@
         }
       ]
     },
-    "sensor.private_ble_device_eilee_watch_bps_floor": {
+    "sensor.private_ble_device_eilee_watch_sextant_floor": {
       "changes": 59,
       "hours": 24.0,
       "changes_per_hour": 2.46,
@@ -658,7 +658,7 @@
         }
       ]
     },
-    "sensor.private_ble_michelle_phone_bps_floor": {
+    "sensor.private_ble_michelle_phone_sextant_floor": {
       "changes": 67,
       "hours": 24.0,
       "changes_per_hour": 2.79,
@@ -678,7 +678,7 @@
         }
       ]
     },
-    "sensor.private_ble_michelle_watch_bps_floor": {
+    "sensor.private_ble_michelle_watch_sextant_floor": {
       "changes": 65,
       "hours": 24.0,
       "changes_per_hour": 2.71,
@@ -698,7 +698,7 @@
         }
       ]
     },
-    "sensor.socks_bps_floor": {
+    "sensor.socks_sextant_floor": {
       "changes": 136,
       "hours": 24.0,
       "changes_per_hour": 5.67,
@@ -718,7 +718,7 @@
         }
       ]
     },
-    "sensor.willow_bps_floor": {
+    "sensor.willow_sextant_floor": {
       "changes": 105,
       "hours": 24.0,
       "changes_per_hour": 4.38,
@@ -740,14 +740,14 @@
     }
   },
   "summary": {
-    "bps_zone": {
+    "sextant_zone": {
       "entities": 14,
       "changes": 10125,
       "changes_per_tracker_hour": 30.13,
       "flip_ratio": 0.558,
       "median_of_median_dwell_s": 21.1
     },
-    "bps_floor": {
+    "sextant_floor": {
       "entities": 14,
       "changes": 1022,
       "changes_per_tracker_hour": 3.04,

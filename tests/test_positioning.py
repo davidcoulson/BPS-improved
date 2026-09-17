@@ -1,4 +1,4 @@
-"""Regression tests for the positioning maths, run against the real `bps`
+"""Regression tests for the positioning maths, run against the real `sextant`
 module (Home Assistant stubbed by conftest). Covers the pieces most likely to
 regress silently: the trilateration solver, receiver mount-height slant
 correction, 3D calibration ground truth, and the floor hypothesis-competition
@@ -8,8 +8,8 @@ import asyncio
 import types
 import math
 
-import bps
-from bps import calibration as cal_mod
+import sextant
+from sextant import calibration as cal_mod
 from conftest import make_hass
 
 SCALE = 40.0  # px per metre
@@ -25,13 +25,13 @@ def run(coro):
 def test_trilaterate_recovers_known_point():
     d = math.hypot(5, 5)
     pts = [(0, 0, d), (10, 0, d), (0, 10, d)]
-    x, y = bps.trilaterate(pts)
+    x, y = sextant.trilaterate(pts)
     assert abs(x - 5) < 0.05 and abs(y - 5) < 0.05
 
 
 def test_trilaterate_zero_radius_survives():
     # Regression: a 0 radius must not divide-by-zero and abort the solve.
-    res = bps.trilaterate([(0, 0, 0.0), (10, 0, 10.0), (0, 10, 10.0)])
+    res = sextant.trilaterate([(0, 0, 0.0), (10, 0, 10.0), (0, 10, 10.0)])
     assert res is not None
 
 
@@ -41,12 +41,12 @@ def test_stable_hint_solves_once_instead_of_the_full_battery():
     d = math.hypot(5, 5)
     pts = [(0, 0, d), (10, 0, d), (0, 10, d)]
     calls = []
-    real_least_squares = bps.least_squares_bounded_soft_l1
+    real_least_squares = sextant.least_squares_bounded_soft_l1
     try:
-        bps.least_squares_bounded_soft_l1 = lambda *a, **kw: calls.append(1) or real_least_squares(*a, **kw)
-        x, y = bps.trilaterate(pts, stable_hint=(5.0, 5.0))
+        sextant.least_squares_bounded_soft_l1 = lambda *a, **kw: calls.append(1) or real_least_squares(*a, **kw)
+        x, y = sextant.trilaterate(pts, stable_hint=(5.0, 5.0))
     finally:
-        bps.least_squares_bounded_soft_l1 = real_least_squares
+        sextant.least_squares_bounded_soft_l1 = real_least_squares
     assert len(calls) == 1
     assert abs(x - 5) < 0.05 and abs(y - 5) < 0.05
 
@@ -57,7 +57,7 @@ def test_stable_hint_falls_back_to_full_battery_when_it_fails():
     were given, not the failed hint solve's own (unreliable) answer."""
     d = math.hypot(5, 5)
     pts = [(0, 0, d), (10, 0, d), (0, 10, d)]
-    real_least_squares = bps.least_squares_bounded_soft_l1
+    real_least_squares = sextant.least_squares_bounded_soft_l1
     calls = []
 
     def fake(*a, **kw):
@@ -68,13 +68,13 @@ def test_stable_hint_falls_back_to_full_battery_when_it_fails():
         return r
 
     try:
-        bps.least_squares_bounded_soft_l1 = fake
-        x_hint, y_hint = bps.trilaterate(pts, stable_hint=(5.0, 5.0))
+        sextant.least_squares_bounded_soft_l1 = fake
+        x_hint, y_hint = sextant.trilaterate(pts, stable_hint=(5.0, 5.0))
     finally:
-        bps.least_squares_bounded_soft_l1 = real_least_squares
+        sextant.least_squares_bounded_soft_l1 = real_least_squares
 
     assert len(calls) > 1  # fell through to the full battery, not just the hint
-    x_plain, y_plain = bps.trilaterate(pts)
+    x_plain, y_plain = sextant.trilaterate(pts)
     assert abs(x_hint - x_plain) < 1e-6 and abs(y_hint - y_plain) < 1e-6
 
 
@@ -88,8 +88,8 @@ def test_min_weight_radius_tames_a_spuriously_short_reading():
     liar = (100.0, 100.0, 0.01)          # claims the tracker is basically on it
     honest = (140.0, 140.0, 20.0)        # 0.5 m at 40 px/m, corroborated
     pts = far + [liar, honest]
-    d_unclamped = math.dist(bps.trilaterate(pts), truth)
-    d_clamped = math.dist(bps.trilaterate(pts, min_weight_radius=20.0), truth)
+    d_unclamped = math.dist(sextant.trilaterate(pts), truth)
+    d_clamped = math.dist(sextant.trilaterate(pts, min_weight_radius=20.0), truth)
     assert d_clamped < d_unclamped - 15.0  # the clamp pulls the fit off the liar
 
 
@@ -97,9 +97,9 @@ def test_min_weight_radius_tames_a_spuriously_short_reading():
 # Tracker height + slant correction
 # --------------------------------------------------------------------------- #
 def test_tracker_height_default_and_override():
-    assert bps._tracker_height({}) == bps.TRACKER_HEIGHT_M
-    assert bps._tracker_height({"tracker_height": 0.3}) == 0.3
-    assert bps._tracker_height({"tracker_height": 99}) == bps.TRACKER_HEIGHT_M  # out of range
+    assert sextant._tracker_height({}) == sextant.TRACKER_HEIGHT_M
+    assert sextant._tracker_height({"tracker_height": 0.3}) == 0.3
+    assert sextant._tracker_height({"tracker_height": 99}) == sextant.TRACKER_HEIGHT_M  # out of range
 
 
 def _run_radii(state, unit="m", height=None, tracker_height=None):
@@ -117,7 +117,7 @@ def _run_radii(state, unit="m", height=None, tracker_height=None):
     data = {"floor": [{"name": "F", "scale": SCALE, "receivers": [rec]}]}
     if tracker_height is not None:
         data["tracker_height"] = tracker_height
-    run(bps.update_receiver_radii(Hass(), {"entity": "phone", "data": data}))
+    run(sextant.update_receiver_radii(Hass(), {"entity": "phone", "data": data}))
     return rec
 
 
@@ -139,7 +139,7 @@ def test_height_underneath_floors_radius_at_min_weight_radius():
     # slant < vertical leg used to collapse to EXACTLY 0 px — the singularity
     # behind the 1.7.0 regression. Now floored at MIN_WEIGHT_RADIUS_M (0.5 m).
     r = _run_radii("1.0", height=2.2)
-    assert abs(r["cords"]["r"] - bps.MIN_WEIGHT_RADIUS_M * SCALE) < 1e-9
+    assert abs(r["cords"]["r"] - sextant.MIN_WEIGHT_RADIUS_M * SCALE) < 1e-9
 
 
 def test_nan_and_out_of_range_height_ignored():
@@ -174,47 +174,47 @@ def test_true_distance_3d_when_both_heights_present():
 def test_score_rewards_agreement_and_coverage():
     good = [(x, y, math.hypot(x - 400, y - 400), 1.0)
             for (x, y) in [(0, 0), (800, 0), (0, 800), (800, 800), (400, 0)]]
-    conf, rms, cov = bps._score_floor_fit((400.0, 400.0), good, SCALE)
+    conf, rms, cov = sextant._score_floor_fit((400.0, 400.0), good, SCALE)
     assert rms < 1e-6 and cov == 1.0 and conf > 0.99
 
     bad = [(0, 0, 40.0, 1.0), (800, 0, 40.0, 1.0), (0, 800, 40.0, 1.0)]
-    conf_bad, rms_bad, _ = bps._score_floor_fit((400.0, 400.0), bad, SCALE)
+    conf_bad, rms_bad, _ = sextant._score_floor_fit((400.0, 400.0), bad, SCALE)
     assert rms_bad > 5.0 and conf_bad < conf
 
 
 def test_probabilities_converge_and_drop_renamed():
-    bps._floor_probability.clear()
+    sextant._floor_probability.clear()
     for _ in range(30):
-        probs = bps._update_floor_probabilities("e", {"a": 0.8, "b": 0.2})
+        probs = sextant._update_floor_probabilities("e", {"a": 0.8, "b": 0.2})
     assert abs(probs["a"] - 0.8) < 0.02
-    probs = bps._update_floor_probabilities("e", {"c": 1.0}, valid_floors={"c"})
+    probs = sextant._update_floor_probabilities("e", {"c": 1.0}, valid_floors={"c"})
     assert "a" not in probs and "b" not in probs
 
 
 def test_elect_hysteresis_and_dwell():
     # No incumbent: adopt the best immediately.
-    floor, ch = bps._elect_floor({"a": 0.6, "b": 0.4}, None, {"a", "b"}, None, now=0.0)
+    floor, ch = sextant._elect_floor({"a": 0.6, "b": 0.4}, None, {"a", "b"}, None, now=0.0)
     assert floor == "a" and ch is None
     # Incumbent holds within the margin.
-    floor, _ = bps._elect_floor({"a": 0.52, "b": 0.48}, "b", {"a", "b"}, None, now=0.0)
+    floor, _ = sextant._elect_floor({"a": 0.52, "b": 0.48}, "b", {"a", "b"}, None, now=0.0)
     assert floor == "b"
     # A leading challenger must persist for switch_secs of WALL CLOCK before
     # switching - however many cycles that takes.
     ch, incumbent = None, "b"
     seen = []
     for t in (0.0, 10.0, 20.0, 59.0, 60.0, 70.0):
-        incumbent, ch = bps._elect_floor({"a": 0.7, "b": 0.3}, incumbent, {"a", "b"}, ch, now=t, switch_secs=60.0)
+        incumbent, ch = sextant._elect_floor({"a": 0.7, "b": 0.3}, incumbent, {"a", "b"}, ch, now=t, switch_secs=60.0)
         seen.append(incumbent)
     assert seen == ["b", "b", "b", "b", "a", "a"]
     # A lapse in the lead ends the challenge; the clock restarts.
     ch = None
-    _, ch = bps._elect_floor({"a": 0.7, "b": 0.3}, "b", {"a", "b"}, ch, now=0.0, switch_secs=60.0)
-    _, ch = bps._elect_floor({"a": 0.5, "b": 0.5}, "b", {"a", "b"}, ch, now=30.0, switch_secs=60.0)
+    _, ch = sextant._elect_floor({"a": 0.7, "b": 0.3}, "b", {"a", "b"}, ch, now=0.0, switch_secs=60.0)
+    _, ch = sextant._elect_floor({"a": 0.5, "b": 0.5}, "b", {"a", "b"}, ch, now=30.0, switch_secs=60.0)
     assert ch is None
-    floor, ch = bps._elect_floor({"a": 0.7, "b": 0.3}, "b", {"a", "b"}, ch, now=61.0, switch_secs=60.0)
+    floor, ch = sextant._elect_floor({"a": 0.7, "b": 0.3}, "b", {"a", "b"}, ch, now=61.0, switch_secs=60.0)
     assert floor == "b" and ch["since"] == 61.0
     # A wider margin (incumbent tenure bonus) can hold off the same lead.
-    floor, ch = bps._elect_floor({"a": 0.56, "b": 0.44}, "b", {"a", "b"}, None, now=0.0, margin=0.15)
+    floor, ch = sextant._elect_floor({"a": 0.56, "b": 0.44}, "b", {"a", "b"}, None, now=0.0, margin=0.15)
     assert floor == "b" and ch is None
 
 
@@ -222,7 +222,7 @@ def test_elect_hysteresis_and_dwell():
 # Receiver leave-one-out self-localization (run_selftest)
 # --------------------------------------------------------------------------- #
 def _hass_with(receivers, samples, scale=SCALE, floor="F"):
-    """Fake hass carrying a BPS layout + calibration samples for run_selftest."""
+    """Fake hass carrying a Sextant layout + calibration samples for run_selftest."""
     hass = make_hass()
     recs = []
     for r in receivers:
@@ -230,10 +230,10 @@ def _hass_with(receivers, samples, scale=SCALE, floor="F"):
         if len(r) > 3 and r[3] is not None:
             d["height"] = r[3]
         recs.append(d)
-    hass.data.setdefault("bps", {})["layout"] = {
+    hass.data.setdefault("sextant", {})["layout"] = {
         "floor": [{"name": floor, "scale": scale, "receivers": recs}]
     }
-    hass.data["bps"]["calibration"] = {"samples": samples}
+    hass.data["sextant"]["calibration"] = {"samples": samples}
     return hass
 
 
@@ -259,21 +259,21 @@ SQUARE = [("r1", 0, 0), ("r2", 100, 0), ("r3", 0, 100), ("r4", 100, 100)]
 
 
 def test_selftest_recovers_receivers():
-    res = bps.run_selftest(_hass_with(SQUARE, _exact_samples(SQUARE)))
+    res = sextant.run_selftest(_hass_with(SQUARE, _exact_samples(SQUARE)))
     assert res["counts"]["solved"] == 4
     assert all(r["error_m"] < 0.5 for r in res["receivers"])
 
 
 def test_selftest_recovers_with_mount_heights():
     recs = [("r1", 0, 0, 1.0), ("r2", 100, 0, 3.0), ("r3", 0, 100, 2.0), ("r4", 100, 100, 3.0)]
-    res = bps.run_selftest(_hass_with(recs, _exact_samples(recs)))
+    res = sextant.run_selftest(_hass_with(recs, _exact_samples(recs)))
     assert res["counts"]["solved"] == 4          # slant correction round-trips
     assert all(r["error_m"] < 0.5 for r in res["receivers"])
 
 
 def test_selftest_unsolved_when_too_few_neighbors():
     recs = SQUARE + [("r5", 200, 200)]           # r5 has no samples at all
-    res = bps.run_selftest(_hass_with(recs, _exact_samples(SQUARE)))
+    res = sextant.run_selftest(_hass_with(recs, _exact_samples(SQUARE)))
     solved = {r["entity"] for r in res["receivers"]}
     unsolved = {u["entity"] for u in res["unsolved"]}
     assert solved == {"r1", "r2", "r3", "r4"} and "r5" in unsolved
@@ -283,14 +283,14 @@ def test_selftest_error_grows_with_bad_distance():
     s = _exact_samples(SQUARE)
     for o in ("r2", "r3", "r4"):                  # inflate only r1's incoming links
         s[f"r1|{o}"] = [v * 1.6 for v in s[f"r1|{o}"]]
-    res = bps.run_selftest(_hass_with(SQUARE, s))
+    res = sextant.run_selftest(_hass_with(SQUARE, s))
     err = {r["entity"]: r["error_m"] for r in res["receivers"]}
     # Only the distorted receiver is dragged off; the others still solve clean.
     assert err["r1"] > 0.2 and max(err["r2"], err["r3"], err["r4"]) < 0.05
 
 
 def test_selftest_empty_layout_is_safe():
-    res = bps.run_selftest(make_hass())
+    res = sextant.run_selftest(make_hass())
     assert res["counts"]["placed"] == 0 and res["counts"]["solved"] == 0
 
 
@@ -299,7 +299,7 @@ def test_selftest_bounds_include_left_out_perimeter_receiver():
     # the solver bounds cover ALL placed receivers (mirroring the live path), not
     # just the ones feeding this solve — otherwise it would clamp and over-report.
     recs = [("a", 0, 0), ("b", 50, 0), ("c", 0, 50), ("r", 200, 200)]
-    res = bps.run_selftest(_hass_with(recs, _exact_samples(recs)))
+    res = sextant.run_selftest(_hass_with(recs, _exact_samples(recs)))
     err = {x["entity"]: x["error_m"] for x in res["receivers"]}
     assert err["r"] < 0.5   # not clamped to the a/b/c bounding box
 
@@ -313,7 +313,7 @@ def test_selftest_summary_reports_cep_and_worst():
         ],
         "unsolved": [{"entity": "c"}],
     }
-    state, attrs = bps._selftest_summary(result)
+    state, attrs = sextant._selftest_summary(result)
     assert abs(state - attrs["cep95_m"]) < 1e-9        # state is CEP95
     assert abs(attrs["cep50_m"] - 2.0) < 1e-9          # median of [1, 3]
     assert abs(attrs["max_m"] - 3.0) < 1e-9 and abs(attrs["mean_m"] - 2.0) < 1e-9
@@ -323,14 +323,14 @@ def test_selftest_summary_reports_cep_and_worst():
 
 
 def test_selftest_summary_unknown_when_none_solved():
-    state, attrs = bps._selftest_summary(
+    state, attrs = sextant._selftest_summary(
         {"counts": {"placed": 4, "solved": 0, "unsolved": 4}, "receivers": [], "unsolved": []})
     assert state is None and "cep95_m" not in attrs and attrs["solved"] == 0
 
 
 def test_selftest_summary_end_to_end_near_zero():
-    res = bps.run_selftest(_hass_with(SQUARE, _exact_samples(SQUARE)))
-    state, attrs = bps._selftest_summary(res)
+    res = sextant.run_selftest(_hass_with(SQUARE, _exact_samples(SQUARE)))
+    state, attrs = sextant._selftest_summary(res)
     assert state is not None and state < 0.5 and attrs["solved"] == 4
 
 
@@ -338,7 +338,7 @@ def test_selftest_accepts_explicit_samples_snapshot():
     # The executor path passes a pre-snapshotted samples dict; run_selftest must
     # use it instead of reading the (possibly concurrently-mutated) live deques.
     hass = _hass_with(SQUARE, {})            # empty LIVE samples
-    res = bps.run_selftest(hass, samples=_exact_samples(SQUARE))
+    res = sextant.run_selftest(hass, samples=_exact_samples(SQUARE))
     assert res["counts"]["solved"] == 4      # solved from the snapshot, not live state
 
 
@@ -367,7 +367,7 @@ def test_robust_loss_beats_linear_on_an_outlier():
     good = [(0.0, 200.0, 200.0), (400.0, 200.0, 200.0),
             (200.0, 0.0, 200.0), (200.0, 400.0, 200.0)]
     pts = good + [(400.0, 400.0, 141.0)]
-    d_soft = math.dist(bps.trilaterate(pts), truth)
+    d_soft = math.dist(sextant.trilaterate(pts), truth)
     d_linear = math.dist(_linear_fit(pts), truth)
     assert d_soft < d_linear              # robust loss helps...
     assert d_soft < 0.75 * d_linear       # ...by a clear margin (here ~0.62x)
@@ -389,17 +389,17 @@ def test_collapsed_radius_cannot_hijack_the_fix():
             (80, 80), (340, 100), (100, 340), (360, 300)]
     honest = [(x, y, math.dist((x, y), truth)) for (x, y) in recs]
     liar_at = (360.0, 360.0)
-    r_floor = bps.MIN_WEIGHT_RADIUS_M * SCALE   # collapsed projection (20 px)
+    r_floor = sextant.MIN_WEIGHT_RADIUS_M * SCALE   # collapsed projection (20 px)
     slant_px = 1.5 * SCALE                      # measured slant ~ dz = 1.5 m
-    min_wr = bps.MIN_WEIGHT_RADIUS_M * SCALE
+    min_wr = sextant.MIN_WEIGHT_RADIUS_M * SCALE
 
     old = [(x, y, r, 1.0) for (x, y, r) in honest]
     old.append((liar_at[0], liar_at[1], r_floor, 1.0))            # weight from projection
     new = [(x, y, r, 1.0, r) for (x, y, r) in honest]             # honest: slant == radius
     new.append((liar_at[0], liar_at[1], r_floor, 1.0, slant_px))  # weight from slant
 
-    d_old = math.dist(bps.trilaterate(old, min_weight_radius=min_wr), truth)
-    d_new = math.dist(bps.trilaterate(new, min_weight_radius=min_wr), truth)
+    d_old = math.dist(sextant.trilaterate(old, min_weight_radius=min_wr), truth)
+    d_new = math.dist(sextant.trilaterate(new, min_weight_radius=min_wr), truth)
     assert d_old > 2.0 * SCALE      # the old weighting really was hijacked (~3 m)
     assert d_new < 1.0 * SCALE      # the fix now stays within 1 m of truth
 
@@ -407,22 +407,22 @@ def test_collapsed_radius_cannot_hijack_the_fix():
 def test_jump_weight_ignores_sub_clamp_noise():
     min_wr = 20.0  # 0.5 m at 40 px/m
     # First sighting: fully trusted.
-    assert bps._jump_weight(10.0, None, min_wr) == 1.0
+    assert sextant._jump_weight(10.0, None, min_wr) == 1.0
     # Steady radius: fully trusted (above or below the clamp).
-    assert bps._jump_weight(100.0, 100.0, min_wr) == 1.0
-    assert bps._jump_weight(2.0, 2.0, min_wr) == 1.0
+    assert sextant._jump_weight(100.0, 100.0, min_wr) == 1.0
+    assert sextant._jump_weight(2.0, 2.0, min_wr) == 1.0
     # Sub-clamp bouncing is RSSI noise, not motion: a tracker genuinely next
     # to a receiver (readings jittering 0.05 <-> 0.45 m) must keep its most
     # informative receiver at full weight — the clamp exists to protect this.
     # (The slant-collapse case needs no gate: the projection floor keeps a
     # collapsed radius constant, and the slant weight radius bounds its pull.)
-    assert bps._jump_weight(2.0, 18.0, min_wr) == 1.0
-    assert bps._jump_weight(0.0, 18.0, min_wr) == 1.0
+    assert sextant._jump_weight(2.0, 18.0, min_wr) == 1.0
+    assert sextant._jump_weight(0.0, 18.0, min_wr) == 1.0
     # Genuine above-clamp jumps register as before.
-    assert bps._jump_weight(100.0, 150.0, min_wr) < 1.0
-    assert bps._jump_weight(100.0, 102.0, min_wr) > 0.9
+    assert sextant._jump_weight(100.0, 150.0, min_wr) < 1.0
+    assert sextant._jump_weight(100.0, 102.0, min_wr) > 0.9
     # A sub-clamp <-> far transition still reads as a big jump.
-    assert bps._jump_weight(10.0, 200.0, min_wr) < 0.05
+    assert sextant._jump_weight(10.0, 200.0, min_wr) < 0.05
 
 
 def test_projection_floor_never_exceeds_raw_slant():
@@ -438,20 +438,20 @@ def test_projection_floor_never_exceeds_raw_slant():
 def test_tracker_height_per_tracker_precedence():
     data = {"tracker_height": 0.7, "tracker_heights": {"ankle": 0.1, "bogus": 99}}
     # Per-tracker entry wins over the global override.
-    assert bps._tracker_height(data, "ankle") == 0.1
+    assert sextant._tracker_height(data, "ankle") == 0.1
     # Unknown / no entity falls back to the global override.
-    assert bps._tracker_height(data, "phone") == 0.7
-    assert bps._tracker_height(data) == 0.7
+    assert sextant._tracker_height(data, "phone") == 0.7
+    assert sextant._tracker_height(data) == 0.7
     # Out-of-range per-tracker value falls through to the global.
-    assert bps._tracker_height(data, "bogus") == 0.7
+    assert sextant._tracker_height(data, "bogus") == 0.7
     # Nothing configured at all: the 1.0 m default.
-    assert bps._tracker_height({}, "ankle") == bps.TRACKER_HEIGHT_M
-    assert bps._tracker_height({"tracker_heights": "junk"}, "ankle") == bps.TRACKER_HEIGHT_M
+    assert sextant._tracker_height({}, "ankle") == sextant.TRACKER_HEIGHT_M
+    assert sextant._tracker_height({"tracker_heights": "junk"}, "ankle") == sextant.TRACKER_HEIGHT_M
     # Bools are ints in Python: a hand-edited true/false must fall through,
     # not read as a valid 1.0/0.0 m height (frontend rejects them too).
-    assert bps._tracker_height({"tracker_height": 0.7,
+    assert sextant._tracker_height({"tracker_height": 0.7,
                                 "tracker_heights": {"x": False}}, "x") == 0.7
-    assert bps._tracker_height({"tracker_height": True}) == bps.TRACKER_HEIGHT_M
+    assert sextant._tracker_height({"tracker_height": True}) == sextant.TRACKER_HEIGHT_M
 
 
 def test_per_tracker_height_feeds_slant_correction():
@@ -468,7 +468,7 @@ def test_per_tracker_height_feeds_slant_correction():
         rec = {"entity_id": "probe", "cords": {"x": 0, "y": 0}, "height": 2.2}
         d = dict(data)
         d["floor"] = [{"name": "F", "scale": SCALE, "receivers": [rec]}]
-        run(bps.update_receiver_radii(Hass(), {"entity": "ankle", "data": d}))
+        run(sextant.update_receiver_radii(Hass(), {"entity": "ankle", "data": d}))
         return rec["cords"]["r"]
 
     r_default = radius({})                                   # dz = 1.2
@@ -483,21 +483,21 @@ def test_per_tracker_height_feeds_slant_correction():
 # --------------------------------------------------------------------------- #
 def test_ref_offset_reads_and_validates():
     data = {"tracker_ref_offsets": {"cat": -6.0, "big": 99, "boolish": True, "txt": "3"}}
-    assert bps._tracker_ref_offset(data, "cat") == -6.0
-    assert bps._tracker_ref_offset(data, "big") == 0.0        # out of range
-    assert bps._tracker_ref_offset(data, "boolish") == 0.0    # bool is not a number here
-    assert bps._tracker_ref_offset(data, "txt") == 0.0        # wrong type
-    assert bps._tracker_ref_offset(data, "unknown") == 0.0    # no entry
-    assert bps._tracker_ref_offset({}, "cat") == 0.0
-    assert bps._tracker_ref_offset({"tracker_ref_offsets": "junk"}, "cat") == 0.0
+    assert sextant._tracker_ref_offset(data, "cat") == -6.0
+    assert sextant._tracker_ref_offset(data, "big") == 0.0        # out of range
+    assert sextant._tracker_ref_offset(data, "boolish") == 0.0    # bool is not a number here
+    assert sextant._tracker_ref_offset(data, "txt") == 0.0        # wrong type
+    assert sextant._tracker_ref_offset(data, "unknown") == 0.0    # no entry
+    assert sextant._tracker_ref_offset({}, "cat") == 0.0
+    assert sextant._tracker_ref_offset({"tracker_ref_offsets": "junk"}, "cat") == 0.0
 
 
 def test_ref_offset_distance_factor_matches_path_loss_model():
     # delta dB scales distance by 10 ** (delta / (10 * attenuation)).
-    n = bps.PATH_LOSS_EXPONENT
-    assert bps._tracker_distance_factor({}, "cat") == 1.0     # unset = no-op
-    f_up = bps._tracker_distance_factor({"tracker_ref_offsets": {"cat": 6.0}}, "cat")
-    f_dn = bps._tracker_distance_factor({"tracker_ref_offsets": {"cat": -6.0}}, "cat")
+    n = sextant.PATH_LOSS_EXPONENT
+    assert sextant._tracker_distance_factor({}, "cat") == 1.0     # unset = no-op
+    f_up = sextant._tracker_distance_factor({"tracker_ref_offsets": {"cat": 6.0}}, "cat")
+    f_dn = sextant._tracker_distance_factor({"tracker_ref_offsets": {"cat": -6.0}}, "cat")
     assert abs(f_up - 10 ** (6.0 / (10 * n))) < 1e-12
     assert f_up > 1.0 and f_dn < 1.0                          # + reads farther, - nearer
     assert abs(f_up * f_dn - 1.0) < 1e-12                     # symmetric in dB
@@ -518,12 +518,12 @@ def test_ref_trim_scales_the_live_radius():
         data = {"floor": [{"name": "F", "scale": SCALE, "receivers": [rec]}]}
         if offsets is not None:
             data["tracker_ref_offsets"] = offsets
-        run(bps.update_receiver_radii(Hass(), {"entity": "cat", "data": data}))
+        run(sextant.update_receiver_radii(Hass(), {"entity": "cat", "data": data}))
         return rec
 
     plain = run_with(None)
     trimmed = run_with({"cat": -6.0})
-    factor = 10 ** (-6.0 / (10 * bps.PATH_LOSS_EXPONENT))
+    factor = 10 ** (-6.0 / (10 * sextant.PATH_LOSS_EXPONENT))
     assert abs(plain["cords"]["r"] - 4.0 * SCALE) < 1e-6
     assert abs(trimmed["cords"]["r"] - 4.0 * factor * SCALE) < 1e-6
     assert abs(trimmed["distance"] - 4.0 * factor) < 1e-9
@@ -560,7 +560,7 @@ def _run_radii_aged(state, age_secs, max_age=None, stamp_attr="last_updated"):
     data = {"floor": [{"name": "F", "scale": SCALE, "receivers": [rec]}]}
     if max_age is not None:
         data["reading_max_age"] = max_age
-    run(bps.update_receiver_radii(Hass(), {"entity": "cat", "data": data}))
+    run(sextant.update_receiver_radii(Hass(), {"entity": "cat", "data": data}))
     return rec
 
 
@@ -573,7 +573,7 @@ def test_fresh_reading_is_used():
 def test_stuck_reading_is_dropped_from_the_solve():
     # Older than READING_MAX_AGE_SECS: no "distance" key, so
     # extract_candidate_floors leaves this receiver out of the fix entirely.
-    rec = _run_radii_aged("3.0", age_secs=bps.READING_MAX_AGE_SECS + 10)
+    rec = _run_radii_aged("3.0", age_secs=sextant.READING_MAX_AGE_SECS + 10)
     assert "distance" not in rec
 
 
@@ -582,7 +582,7 @@ def test_stale_receiver_is_excluded_from_candidates():
     stale = {"entity_id": "b", "cords": {"x": 80, "y": 0, "r": 40.0}}  # gate popped it
     data = [{"entity": "cat", "data": {"floor": [
         {"name": "F", "scale": SCALE, "receivers": [fresh, stale]}]}}]
-    cands = bps.extract_candidate_floors(data, "cat")
+    cands = sextant.extract_candidate_floors(data, "cat")
     assert len(cands) == 1 and len(cands[0]["cords"]) == 1   # only the fresh one
 
 
@@ -610,7 +610,7 @@ def test_age_falls_back_to_last_changed_and_fails_open():
         states = type("S", (), {"get": staticmethod(lambda _eid: St())})()
 
     rec = {"entity_id": "probe", "cords": {"x": 0, "y": 0}}
-    run(bps.update_receiver_radii(
+    run(sextant.update_receiver_radii(
         Hass(), {"entity": "cat", "data": {"floor": [
             {"name": "F", "scale": SCALE, "receivers": [rec]}]}}))
     assert rec["distance"] == 3.0
@@ -626,7 +626,7 @@ def _weighted_cost(pts, x, y, min_weight_radius=1e-3):
     residual scaled by f_scale.
     """
     total = 0.0
-    fs = bps.SOLVER_ROBUST_F_SCALE
+    fs = sextant.SOLVER_ROBUST_F_SCALE
     for pt in pts:
         xi, yi, ri = pt[0], pt[1], pt[2]
         wi = pt[3] if len(pt) > 3 else 1.0
@@ -651,7 +651,7 @@ def test_the_fit_is_a_local_minimum_of_the_weighted_cost():
          (600.0, 300.0, 400.0), (120.0, 300.0, 130.0)],
     ]
     for pts in cases:
-        got = bps.trilaterate(pts)
+        got = sextant.trilaterate(pts)
         assert got is not None
         x, y = got
         here = _weighted_cost(pts, x, y)
@@ -666,7 +666,7 @@ def test_a_fit_sitting_exactly_on_a_receiver_is_finite():
     # receiver, which is 0 when the fit lands exactly on one. Without the floor
     # that row is NaN and poisons the whole step.
     pts = [(100.0, 100.0, 0.0), (300.0, 100.0, 200.0), (100.0, 300.0, 200.0)]
-    got = bps.trilaterate(pts)
+    got = sextant.trilaterate(pts)
     assert got is not None
     x, y = got
     assert math.isfinite(x) and math.isfinite(y)
@@ -681,8 +681,8 @@ def test_the_weight_radius_override_still_governs_the_weight():
     # slant was large must not be allowed to dominate.
     hijack = truth + [(600.0, 500.0, 0.001, 1.0, 400.0)]
     naive = truth + [(600.0, 500.0, 0.001)]
-    with_override = bps.trilaterate(hijack)
-    without = bps.trilaterate(naive)
+    with_override = sextant.trilaterate(hijack)
+    without = sextant.trilaterate(naive)
     assert with_override is not None and without is not None
     # Without the override the fit is dragged onto the collapsed receiver.
     assert math.hypot(without[0] - 600.0, without[1] - 500.0) < \
@@ -717,7 +717,7 @@ def test_multistart_never_worse_than_centroid_only_and_sometimes_better():
         meas[rng.choice(len(recv), size=2, replace=False)] *= rng.uniform(2.5, 6.0)
         known = [(float(p[0]), float(p[1]), float(r)) for p, r in zip(recv, meas)]
 
-        got = bps.trilaterate(known, bounds=bounds, min_weight_radius=0.5 * 100)
+        got = sextant.trilaterate(known, bounds=bounds, min_weight_radius=0.5 * 100)
         assert got is not None
 
         # Rebuild the same residual to score both fits on one objective.
@@ -739,15 +739,15 @@ def test_multistart_never_worse_than_centroid_only_and_sometimes_better():
         # apples to apples, or a solver's own convergence tolerance (scipy's
         # trf polishes ~1e-5 tighter than the numpy LM) masquerades as a
         # multi-start regression.
-        single = bps.least_squares_bounded_soft_l1(
+        single = sextant.least_squares_bounded_soft_l1(
             obj, centroid, jac,
             ([bounds[0], bounds[1]], [bounds[2], bounds[3]]),
-            f_scale=bps.SOLVER_ROBUST_F_SCALE,
+            f_scale=sextant.SOLVER_ROBUST_F_SCALE,
         )
 
         def cost(res):
-            z = (res / bps.SOLVER_ROBUST_F_SCALE) ** 2
-            return 0.5 * float(np.sum(bps.SOLVER_ROBUST_F_SCALE ** 2
+            z = (res / sextant.SOLVER_ROBUST_F_SCALE) ** 2
+            return 0.5 * float(np.sum(sextant.SOLVER_ROBUST_F_SCALE ** 2
                                       * 2.0 * (np.sqrt(1.0 + z) - 1.0)))
 
         c_multi = cost(obj(np.array(got)))
@@ -782,17 +782,17 @@ def test_sensor_state_write_skips_an_entity_without_hass():
     so it has no hass; writing to it raised every self-test cycle."""
     hass = make_hass()
     dead, live = _FakeSensor(False), _FakeSensor(True)
-    hass.data["bps_sensors"] = {"sensor.dead": dead, "sensor.live": live}
+    hass.data["sextant_sensors"] = {"sensor.dead": dead, "sensor.live": live}
 
-    bps.update_bps_sensor_state(hass, "sensor.dead", 1.5, {"a": 1})
-    bps.update_bps_sensor_state(hass, "sensor.live", 2.5)
+    sextant.update_sextant_sensor_state(hass, "sensor.dead", 1.5, {"a": 1})
+    sextant.update_sextant_sensor_state(hass, "sensor.live", 2.5)
 
     assert dead.writes == 0
     assert dead._state == 1.5 and dead._attrs == {"a": 1}  # kept for a later enable
     assert live.writes == 1 and live._state == 2.5
-    assert bps._sensor_is_live(hass, "sensor.dead") is False
-    assert bps._sensor_is_live(hass, "sensor.live") is True
-    assert bps._sensor_is_live(hass, "sensor.missing") is False
+    assert sextant._sensor_is_live(hass, "sensor.dead") is False
+    assert sextant._sensor_is_live(hass, "sensor.live") is True
+    assert sextant._sensor_is_live(hass, "sensor.missing") is False
 
 
 def test_registry_device_iteration_handles_both_registry_shapes():
@@ -800,14 +800,14 @@ def test_registry_device_iteration_handles_both_registry_shapes():
     yielded device ids from a mapping. Both must produce entries."""
     entry_a, entry_b = object(), object()
     new_style = types.SimpleNamespace(devices=[entry_a, entry_b])
-    assert list(bps._iter_registry_devices(new_style)) == [entry_a, entry_b]
+    assert list(sextant._iter_registry_devices(new_style)) == [entry_a, entry_b]
 
     old_style = types.SimpleNamespace(devices={"id-a": entry_a, "id-b": entry_b})
-    assert list(bps._iter_registry_devices(old_style)) == [entry_a, entry_b]
+    assert list(sextant._iter_registry_devices(old_style)) == [entry_a, entry_b]
 
 
 # ---------------------------------------------------------------------------
-# Tuning knobs (bps.set_tuning)
+# Tuning knobs (sextant.set_tuning)
 # ---------------------------------------------------------------------------
 
 
@@ -818,17 +818,17 @@ def test_tuning_reads_validated_values_and_falls_back():
         "stationary_speed": True,         # bool is not a number -> default
         "median_min_samples": "3",        # wrong type -> default
     }}
-    assert bps._tuning(layout, "zone_switch_secs") == 45.0
-    assert isinstance(bps._tuning(layout, "zone_switch_secs"), float)
-    assert bps._tuning(layout, "distance_estimator") == "median"
-    assert bps._tuning(layout, "zone_hysteresis") is False
-    assert bps._tuning(layout, "solver_max_receivers") == 8
-    assert bps._tuning(layout, "stationary_speed") == 0.3
-    assert bps._tuning(layout, "median_min_samples") == 3
-    assert bps._tuning([], "floor_switch_secs") == 60.0
-    assert bps._tuning({"tuning": "junk"}, "floor_switch_secs") == 60.0
-    assert bps._coerce_tuning("distance_estimator", "mean", None) is None
-    assert bps._coerce_tuning("zone_hysteresis", False, None) is False
+    assert sextant._tuning(layout, "zone_switch_secs") == 45.0
+    assert isinstance(sextant._tuning(layout, "zone_switch_secs"), float)
+    assert sextant._tuning(layout, "distance_estimator") == "median"
+    assert sextant._tuning(layout, "zone_hysteresis") is False
+    assert sextant._tuning(layout, "solver_max_receivers") == 8
+    assert sextant._tuning(layout, "stationary_speed") == 0.3
+    assert sextant._tuning(layout, "median_min_samples") == 3
+    assert sextant._tuning([], "floor_switch_secs") == 60.0
+    assert sextant._tuning({"tuning": "junk"}, "floor_switch_secs") == 60.0
+    assert sextant._coerce_tuning("distance_estimator", "mean", None) is None
+    assert sextant._coerce_tuning("zone_hysteresis", False, None) is False
 
 
 # ---------------------------------------------------------------------------
@@ -841,17 +841,17 @@ def _entries(*distances):
 
 
 def test_select_receivers_keeps_near_plus_nearest_k_and_drops_far():
-    kept = bps._select_receivers(_entries(1, 2, 2.5, 4, 5, 6, 7, 9, 14, 20), 4, 12.0, 3.0)
+    kept = sextant._select_receivers(_entries(1, 2, 2.5, 4, 5, 6, 7, 9, 14, 20), 4, 12.0, 3.0)
     assert [p[1] for p in kept] == [1, 2, 2.5, 4]           # near-always + nearest 4
-    kept = bps._select_receivers(_entries(0.5, 2.9, 2.95, 4, 5, 6), 3, 12.0, 3.0)
+    kept = sextant._select_receivers(_entries(0.5, 2.9, 2.95, 4, 5, 6), 3, 12.0, 3.0)
     assert [p[1] for p in kept] == [0.5, 2.9, 2.95]          # K coincides with the near set
-    kept = bps._select_receivers(_entries(9, 14, 20, 30), 8, 12.0, 3.0)
+    kept = sextant._select_receivers(_entries(9, 14, 20, 30), 8, 12.0, 3.0)
     assert [p[1] for p in kept] == [9, 14, 20]               # never starved below three
-    kept = bps._select_receivers(_entries(1, 2, 3, 14, 20), 8, 12.0, 3.0)
+    kept = sextant._select_receivers(_entries(1, 2, 3, 14, 20), 8, 12.0, 3.0)
     assert [p[1] for p in kept] == [1, 2, 3]                 # beyond range dropped once 3 kept
-    kept = bps._select_receivers(_entries(5, 4, 3, 2, 1), 0, 0.0, 0.0)
+    kept = sextant._select_receivers(_entries(5, 4, 3, 2, 1), 0, 0.0, 0.0)
     assert [p[1] for p in kept] == [1, 2, 3, 4, 5]           # 0 = unlimited, sorted nearest-first
-    kept = bps._select_receivers(_entries(1, 2, 3, 4, 5), 1, 0.0, 0.0)
+    kept = sextant._select_receivers(_entries(1, 2, 3, 4, 5), 1, 0.0, 0.0)
     assert [p[1] for p in kept] == [1, 2, 3]                 # K clamps to the solver minimum
 
 
@@ -861,7 +861,7 @@ def test_extract_candidate_floors_applies_the_cap_and_carries_quality():
         floor["receivers"].append({"entity_id": f"r{i}", "cords": {"x": i * 100.0, "y": 0.0, "r": d * SCALE},
                                    "distance": d, "quality": 0.5 if i == 0 else None})
     layout = {"floor": [floor], "tuning": {"solver_max_receivers": 4, "solver_max_range": 12.0}}
-    cands = bps.extract_candidate_floors([{"entity": "e", "data": layout}], "e")
+    cands = sextant.extract_candidate_floors([{"entity": "e", "data": layout}], "e")
     assert len(cands) == 1 and cands[0]["nearest_m"] == 1.0
     pts = cands[0]["cords"]
     assert [p[0] for p in pts] == [0.0, 100.0, 200.0, 300.0]
@@ -880,24 +880,24 @@ def _reading(history, age=1.0, ref_power=-55.0, attenuation=3.0, offset=0):
 
 def test_median_distance_matches_bermudas_path_loss_model():
     hist = [[-65, 100.0], [-67, 99.0], [-63, 98.0], [-90, 97.0], [-65, 96.5]]
-    dist, quality = bps._median_distance(_reading(hist), 15.0, 3)
+    dist, quality = sextant._median_distance(_reading(hist), 15.0, 3)
     # median rssi is -65 -> 10 ** ((-55 + 65) / 30)
     assert abs(dist - 10 ** (10 / 30)) < 1e-9
     assert quality == 1.0                                    # 5 samples saturate
     # The per-scanner rssi offset is added before conversion, like Bermuda.
-    dist_off, _ = bps._median_distance(_reading(hist, offset=2), 15.0, 3)
+    dist_off, _ = sextant._median_distance(_reading(hist, offset=2), 15.0, 3)
     assert abs(dist_off - 10 ** ((-55 + 63) / 30)) < 1e-9
 
 
 def test_median_distance_respects_window_and_minimum():
     # age 1 s; samples at 100, 99 are fresh, 80 is 21 s old.
     hist = [[-60, 100.0], [-62, 99.0], [-99, 80.0]]
-    assert bps._median_distance(_reading(hist), 15.0, 3) is None          # only 2 fresh
-    dist, quality = bps._median_distance(_reading(hist), 15.0, 2)
+    assert sextant._median_distance(_reading(hist), 15.0, 3) is None          # only 2 fresh
+    dist, quality = sextant._median_distance(_reading(hist), 15.0, 2)
     assert abs(dist - 10 ** ((-55 + 61) / 30)) < 1e-9                    # median of -60,-62
     assert quality == 2 / 5
-    assert bps._median_distance(_reading([]), 15.0, 1) is None
-    assert bps._median_distance({"history": hist, "age": 0}, 15.0, 1) is None  # no parameters
+    assert sextant._median_distance(_reading([]), 15.0, 1) is None
+    assert sextant._median_distance({"history": hist, "age": 0}, 15.0, 1) is None  # no parameters
 
 
 # ---------------------------------------------------------------------------
@@ -922,7 +922,7 @@ def _kf(x, y, vx=0.0, vy=0.0, sigma_px=10.0, floor="F"):
 
 def _elect(entity, x, t, vx=0.0, layout=None, sigma=10.0):
     layout = layout if layout is not None else {}
-    zone, locked, _speed = bps._elect_zone(
+    zone, locked, _speed = sextant._elect_zone(
         entity, "F", "Kitchen" if x < 100 else "Dining", Point(x, 50.0),
         _kf(x, 50.0, vx=vx, sigma_px=sigma), _two_rooms(), 100.0, layout, now=t,
     )
@@ -930,7 +930,7 @@ def _elect(entity, x, t, vx=0.0, layout=None, sigma=10.0):
 
 
 def test_zone_election_ignores_a_brief_excursion_and_follows_a_sustained_one():
-    bps._zone_state.clear()
+    sextant._zone_state.clear()
     layout = {"tuning": {"stationary_secs": 600.0}}  # keep the lock out of this test
     assert _elect("e", 50, 0.0, layout=layout) == ("Kitchen", False)
     # One cycle across the line: not published.
@@ -942,14 +942,14 @@ def test_zone_election_ignores_a_brief_excursion_and_follows_a_sustained_one():
 
 
 def test_zone_election_off_publishes_the_instant_zone():
-    bps._zone_state.clear()
+    sextant._zone_state.clear()
     layout = {"tuning": {"zone_hysteresis": False}}
     assert _elect("e", 50, 0.0, layout=layout) == ("Kitchen", False)
     assert _elect("e", 130, 10.0, layout=layout) == ("Dining", False)
 
 
 def test_stationary_lock_holds_the_zone_and_releases_when_clearly_away():
-    bps._zone_state.clear()
+    sextant._zone_state.clear()
     assert _elect("e", 90, 0.0)[0] == "Kitchen"          # resting 10 cm from the boundary
     for t in (10.0, 20.0, 30.0):
         zone, locked = _elect("e", 90, t)
@@ -967,7 +967,7 @@ def test_stationary_lock_holds_the_zone_and_releases_when_clearly_away():
 
 
 def test_stationary_lock_releases_when_the_tracker_keeps_moving():
-    bps._zone_state.clear()
+    sextant._zone_state.clear()
     for t in (0.0, 10.0, 20.0, 30.0):
         zone, locked = _elect("e", 50, t)
     assert locked is True
@@ -978,22 +978,22 @@ def test_stationary_lock_releases_when_the_tracker_keeps_moving():
 
 
 def test_zone_election_resets_on_floor_change_and_prune():
-    bps._zone_state.clear()
+    sextant._zone_state.clear()
     _elect("e", 50, 0.0)
-    assert bps._zone_state["e"]["floor"] == "F"
-    zone, _, _ = bps._elect_zone("e", "G", "Dining", Point(150, 50), _kf(150, 50, floor="G"), _two_rooms(), 100.0, {}, now=10.0)
-    assert zone == "Dining" and bps._zone_state["e"]["floor"] == "G"
+    assert sextant._zone_state["e"]["floor"] == "F"
+    zone, _, _ = sextant._elect_zone("e", "G", "Dining", Point(150, 50), _kf(150, 50, floor="G"), _two_rooms(), 100.0, {}, now=10.0)
+    assert zone == "Dining" and sextant._zone_state["e"]["floor"] == "G"
 
 
 def test_sub_zone_dwell_publishes_only_a_persisted_change():
-    bps._subzone_state.clear()
+    sextant._subzone_state.clear()
     layout = {"tuning": {"subzone_switch_secs": 20.0}}
-    assert bps._subzone_with_dwell("e", ("Sofa", "Living"), layout, now=0.0) == ("Sofa", "Living")
-    assert bps._subzone_with_dwell("e", ("unknown", "Living"), layout, now=5.0) == ("Sofa", "Living")
-    assert bps._subzone_with_dwell("e", ("Sofa", "Living"), layout, now=10.0) == ("Sofa", "Living")
-    assert bps._subzone_with_dwell("e", ("Desk", "Living"), layout, now=20.0) == ("Sofa", "Living")
-    assert bps._subzone_with_dwell("e", ("Desk", "Living"), layout, now=39.0) == ("Sofa", "Living")
-    assert bps._subzone_with_dwell("e", ("Desk", "Living"), layout, now=40.0) == ("Desk", "Living")
+    assert sextant._subzone_with_dwell("e", ("Sofa", "Living"), layout, now=0.0) == ("Sofa", "Living")
+    assert sextant._subzone_with_dwell("e", ("unknown", "Living"), layout, now=5.0) == ("Sofa", "Living")
+    assert sextant._subzone_with_dwell("e", ("Sofa", "Living"), layout, now=10.0) == ("Sofa", "Living")
+    assert sextant._subzone_with_dwell("e", ("Desk", "Living"), layout, now=20.0) == ("Sofa", "Living")
+    assert sextant._subzone_with_dwell("e", ("Desk", "Living"), layout, now=39.0) == ("Sofa", "Living")
+    assert sextant._subzone_with_dwell("e", ("Desk", "Living"), layout, now=40.0) == ("Desk", "Living")
 
 
 # ---------------------------------------------------------------------------
@@ -1046,58 +1046,58 @@ def _cycle(hass, layout, x_m, y_m):
         rx["distance"] = d
         rx["cords"]["r"] = d * 100.0
     ngd = [{"entity": "e", "data": data}]
-    run(bps.update_trilateration_and_zone(hass, ngd, "e"))
-    return next(item for item in bps.apitricords if item["ent"] == "e")
+    run(sextant.update_trilateration_and_zone(hass, ngd, "e"))
+    return next(item for item in sextant.apitricords if item["ent"] == "e")
 
 
 def _reset_tracker_state():
-    for d in (bps._floor_probability, bps._floor_challenge, bps._floor_dark_cycles, bps._floor_since,
-              bps._kf_position_state, bps._zone_state, bps._subzone_state):
+    for d in (sextant._floor_probability, sextant._floor_challenge, sextant._floor_dark_cycles, sextant._floor_since,
+              sextant._kf_position_state, sextant._zone_state, sextant._subzone_state):
         d.clear()
-    bps.apitricords = []
+    sextant.apitricords = []
     for attr in ("last_r_values", "last_floor"):
-        if hasattr(bps.update_trilateration_and_zone, attr):
-            getattr(bps.update_trilateration_and_zone, attr).clear()
+        if hasattr(sextant.update_trilateration_and_zone, attr):
+            getattr(sextant.update_trilateration_and_zone, attr).clear()
 
 
 def test_full_cycle_publishes_a_stable_zone_and_the_raw_one(monkeypatch):
     _reset_tracker_state()
     hass = make_hass()
-    sensors = {f"sensor.e_bps_{k}": _Sensor() for k in ("zone", "nearest_zone", "floor", "sub_zone")}
-    hass.data["bps_sensors"] = sensors
+    sensors = {f"sensor.e_sextant_{k}": _Sensor() for k in ("zone", "nearest_zone", "floor", "sub_zone")}
+    hass.data["sextant_sensors"] = sensors
     layout = _square_layout({"stationary_secs": 600.0})
     # Pin the clock so the dwell is deterministic: each cycle is 10 s.
     clock = {"t": 1000.0}
-    monkeypatch.setattr(bps.time, "time", lambda: clock["t"])
+    monkeypatch.setattr(sextant.time, "time", lambda: clock["t"])
 
     entry = _cycle(hass, layout, 2.0, 5.0)
     assert entry["floor"] == "F" and entry["zone"] == "Kitchen" and entry["zone_raw"] == "Kitchen"
     assert entry["zone_locked"] is False and "speed" in entry
-    assert sensors["sensor.e_bps_zone"]._state == "Kitchen"
-    assert sensors["sensor.e_bps_floor"]._state == "F"
+    assert sensors["sensor.e_sextant_zone"]._state == "Kitchen"
+    assert sensors["sensor.e_sextant_floor"]._state == "F"
 
     # One cycle 1.5 m over the line: raw says Dining, published stays Kitchen.
     clock["t"] += 10
     entry = _cycle(hass, layout, 6.5, 5.0)
     assert entry["zone_raw"] == "Dining" and entry["zone"] == "Kitchen"
-    assert sensors["sensor.e_bps_nearest_zone"]._state == "Dining"   # raw sensor still instant
+    assert sensors["sensor.e_sextant_nearest_zone"]._state == "Dining"   # raw sensor still instant
 
     # Sustained on the Dining side: published follows after the dwell.
     for _ in range(6):
         clock["t"] += 10
         entry = _cycle(hass, layout, 8.0, 5.0)
     assert entry["zone"] == "Dining"
-    assert sensors["sensor.e_bps_zone"]._state == "Dining"
-    assert sensors["sensor.e_bps_sub_zone"]._attrs == {"parent_zone": "Dining"}
+    assert sensors["sensor.e_sextant_zone"]._state == "Dining"
+    assert sensors["sensor.e_sextant_sub_zone"]._attrs == {"parent_zone": "Dining"}
 
 
 def test_full_cycle_with_hysteresis_off_publishes_instantly(monkeypatch):
     _reset_tracker_state()
     hass = make_hass()
-    hass.data["bps_sensors"] = {f"sensor.e_bps_{k}": _Sensor() for k in ("zone", "nearest_zone", "floor", "sub_zone")}
+    hass.data["sextant_sensors"] = {f"sensor.e_sextant_{k}": _Sensor() for k in ("zone", "nearest_zone", "floor", "sub_zone")}
     layout = _square_layout({"zone_hysteresis": False})
     clock = {"t": 1000.0}
-    monkeypatch.setattr(bps.time, "time", lambda: clock["t"])
+    monkeypatch.setattr(sextant.time, "time", lambda: clock["t"])
     assert _cycle(hass, layout, 2.0, 5.0)["zone"] == "Kitchen"
     clock["t"] += 10
     entry = _cycle(hass, layout, 8.0, 5.0)
@@ -1109,16 +1109,16 @@ def test_full_cycle_with_hysteresis_off_publishes_instantly(monkeypatch):
 def test_proximity_weighting_favours_the_floor_with_the_nearest_receiver():
     scores = {"Ground": 0.85, "Second": 0.86}
     nearest = {"Ground": 1.5, "Second": 3.5}
-    out = bps._proximity_weighted_scores(scores, nearest, 0.5)
+    out = sextant._proximity_weighted_scores(scores, nearest, 0.5)
     assert out["Ground"] == 0.85                       # nearest floor: unchanged
     assert abs(out["Second"] - 0.86 * (0.5 + 0.5 * 1.5 / 3.5)) < 1e-12
     assert out["Ground"] > out["Second"]
     # Weight 0, a single floor, or unusable distances pass straight through.
-    assert bps._proximity_weighted_scores(scores, nearest, 0.0) == scores
-    assert bps._proximity_weighted_scores({"Ground": 0.85}, nearest, 0.5) == {"Ground": 0.85}
-    assert bps._proximity_weighted_scores(scores, {"Ground": None, "Second": float("inf")}, 0.5) == scores
+    assert sextant._proximity_weighted_scores(scores, nearest, 0.0) == scores
+    assert sextant._proximity_weighted_scores({"Ground": 0.85}, nearest, 0.5) == {"Ground": 0.85}
+    assert sextant._proximity_weighted_scores(scores, {"Ground": None, "Second": float("inf")}, 0.5) == scores
     # A floor with no usable distance is not penalised, only the others are ranked.
-    out = bps._proximity_weighted_scores(scores, {"Ground": 2.0, "Second": None}, 0.5)
+    out = sextant._proximity_weighted_scores(scores, {"Ground": 2.0, "Second": None}, 0.5)
     assert out == scores
 
 
@@ -1127,7 +1127,7 @@ def test_full_cycle_floor_switches_on_proximity_when_fits_tie(monkeypatch):
     whose receivers are nearest must win the election within the dwell."""
     _reset_tracker_state()
     hass = make_hass()
-    hass.data["bps_sensors"] = {f"sensor.e_bps_{k}": _Sensor() for k in ("zone", "nearest_zone", "floor", "sub_zone")}
+    hass.data["sextant_sensors"] = {f"sensor.e_sextant_{k}": _Sensor() for k in ("zone", "nearest_zone", "floor", "sub_zone")}
     import copy
     layout = _square_layout({"stationary_secs": 600.0, "floor_switch_secs": 60.0})
     # Second floor: same geometry, same zone names suffixed, placed 3 m "above".
@@ -1136,7 +1136,7 @@ def test_full_cycle_floor_switches_on_proximity_when_fits_tie(monkeypatch):
         z["entity_id"] += " Up"; z["zone_id"] += "u"
     layout["floor"].append(up)
     clock = {"t": 1000.0}
-    monkeypatch.setattr(bps.time, "time", lambda: clock["t"])
+    monkeypatch.setattr(sextant.time, "time", lambda: clock["t"])
 
     def cycle(x_m, y_m, near_floor):
         data = copy.deepcopy(layout)
@@ -1147,8 +1147,8 @@ def test_full_cycle_floor_switches_on_proximity_when_fits_tie(monkeypatch):
                     d = math.hypot(d, 3.0)   # through-slab: 3 m of extra slant
                 rx["distance"] = d
                 rx["cords"]["r"] = d * 100.0
-        run(bps.update_trilateration_and_zone(hass, [{"entity": "e", "data": data}], "e"))
-        return next(i for i in bps.apitricords if i["ent"] == "e")
+        run(sextant.update_trilateration_and_zone(hass, [{"entity": "e", "data": data}], "e"))
+        return next(i for i in sextant.apitricords if i["ent"] == "e")
 
     # Start upstairs, settle there.
     for _ in range(3):
@@ -1173,7 +1173,7 @@ def test_solves_run_through_the_executor(monkeypatch):
     the loop (they touch hass state)."""
     _reset_tracker_state()
     hass = make_hass()
-    hass.data["bps_sensors"] = {f"sensor.e_bps_{k}": _Sensor() for k in ("zone", "nearest_zone", "floor", "sub_zone")}
+    hass.data["sextant_sensors"] = {f"sensor.e_sextant_{k}": _Sensor() for k in ("zone", "nearest_zone", "floor", "sub_zone")}
     calls = []
     real = hass.async_add_executor_job
 
@@ -1201,10 +1201,10 @@ class _Conn:
 
 def test_websocket_subscribe_streams_each_cycle_and_unsubscribes():
     hass = make_hass()
-    hass.data[bps.DOMAIN] = {"apitricords": [{"ent": "e", "zone": "Kitchen"}], "rl_offline": ["dead_rx"]}
+    hass.data[sextant.DOMAIN] = {"apitricords": [{"ent": "e", "zone": "Kitchen"}], "rl_offline": ["dead_rx"]}
     conn = _Conn()
 
-    run(bps._ws_subscribe(hass, conn, {"id": 7, "type": "bps/subscribe"}))
+    run(sextant._ws_subscribe(hass, conn, {"id": 7, "type": "sextant/subscribe"}))
 
     # Result first, then an immediate event carrying the current state.
     assert conn.sent[0]["type"] == "result" and conn.sent[0]["id"] == 7
@@ -1215,17 +1215,17 @@ def test_websocket_subscribe_streams_each_cycle_and_unsubscribes():
     assert "stamp" in first["event"]
 
     # A cycle's push reaches the subscriber.
-    bps.async_dispatcher_send(hass, bps.SIGNAL_BPS_UPDATE, {"stamp": 1, "positions": [], "offline_receivers": []})
+    sextant.async_dispatcher_send(hass, sextant.SIGNAL_BPS_UPDATE, {"stamp": 1, "positions": [], "offline_receivers": []})
     assert len(conn.sent) == 3 and conn.sent[2]["event"]["stamp"] == 1
 
     # Unsubscribing (what HA's unsubscribe_events does) stops the stream.
     conn.subscriptions[7]()
-    bps.async_dispatcher_send(hass, bps.SIGNAL_BPS_UPDATE, {"stamp": 2})
+    sextant.async_dispatcher_send(hass, sextant.SIGNAL_BPS_UPDATE, {"stamp": 2})
     assert len(conn.sent) == 3
 
 
 def test_websocket_command_is_registered_once(monkeypatch):
     hass = make_hass()
-    bps._register_websocket(hass)
-    bps._register_websocket(hass)
-    assert hass.data["_ws_commands"] == [bps._ws_subscribe]
+    sextant._register_websocket(hass)
+    sextant._register_websocket(hass)
+    assert hass.data["_ws_commands"] == [sextant._ws_subscribe]

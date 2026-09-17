@@ -1,12 +1,12 @@
 /**
- * Lovelace card: BPS floor map with one or more trackers.
+ * Lovelace card: Sextant floor map with one or more trackers.
  *
  * Resource (Settings -> Dashboards -> ... -> Resources):
- *   URL: /bps/bps-map-card.js
+ *   URL: /sextant/sextant-map-card.js
  *   Type: JavaScript module
  *
  * YAML example:
- *   type: custom:bps-map-card
+ *   type: custom:sextant-map-card
  *   floor: Livingroom
  *   entities:
  *     - sensor.phone_alice
@@ -26,7 +26,7 @@
  *   receiver_status:
  *     nsp_kitchen: binary_sensor.nsp_kitchen_status
  *
- * Receivers placed on this floor in the BPS panel are drawn with the beacon
+ * Receivers placed on this floor in the Sextant panel are drawn with the beacon
  * icon: black when the receiver is working, red when it is offline/unavailable.
  * Status is resolved per receiver, first match wins:
  *   1. The entity mapped in receiver_status, when given. Mapping a receiver
@@ -50,7 +50,7 @@
  *      sensor goes to unknown, so a dead proxy turns red after about half a
  *      minute — and a live proxy with no tracker in range shows red).
  */
-class BpsMapCard extends HTMLElement {
+class SextantMapCard extends HTMLElement {
   constructor() {
     super();
     this._config = null;
@@ -112,17 +112,17 @@ class BpsMapCard extends HTMLElement {
 
   setConfig(config) {
     if (!config || !config.floor) {
-      throw new Error("BPS card: set floor (must match floor name in BPS coordinates).");
+      throw new Error("Sextant card: set floor (must match floor name in Sextant coordinates).");
     }
     if (!config.entities || !Array.isArray(config.entities) || config.entities.length === 0) {
-      throw new Error("BPS card: set at least one entity (for example sensor.phone).");
+      throw new Error("Sextant card: set at least one entity (for example sensor.phone).");
     }
     this._config = {
       floor: config.floor,
       entities: config.entities,
       show_labels: Boolean(config.show_labels),
-      scale_labels: BpsMapCard.normalizePercent(config.scale_labels),
-      scale_icon: BpsMapCard.normalizePercent(config.scale_icon),
+      scale_labels: SextantMapCard.normalizePercent(config.scale_labels),
+      scale_icon: SextantMapCard.normalizePercent(config.scale_icon),
       zone_label: Boolean(config.zone_label),
       poll_interval: Number(config.poll_interval) > 0 ? Number(config.poll_interval) : 3,
       image: config.image || "",
@@ -131,8 +131,8 @@ class BpsMapCard extends HTMLElement {
       show_receiver_labels: Boolean(config.show_receiver_labels),
       show_sub_zones: Boolean(config.show_sub_zones),
       show_zone_labels: Boolean(config.show_zone_labels),
-      scale_receiver_icon: BpsMapCard.inheritPercent(config.scale_receiver_icon, config.scale_icon),
-      scale_receiver_labels: BpsMapCard.inheritPercent(config.scale_receiver_labels, config.scale_labels),
+      scale_receiver_icon: SextantMapCard.inheritPercent(config.scale_receiver_icon, config.scale_icon),
+      scale_receiver_labels: SextantMapCard.inheritPercent(config.scale_receiver_labels, config.scale_labels),
       receiver_timeout:
         Number(config.receiver_timeout) > 0 ? Math.max(10, Number(config.receiver_timeout)) : 30,
       receiver_status:
@@ -170,7 +170,7 @@ class BpsMapCard extends HTMLElement {
   }
 
   static getConfigElement() {
-    return document.createElement("bps-map-card-editor");
+    return document.createElement("sextant-map-card-editor");
   }
 
   static getStubConfig() {
@@ -255,7 +255,7 @@ class BpsMapCard extends HTMLElement {
   }
 
   static inheritPercent(value, fallback) {
-    return BpsMapCard.normalizePercent(value, BpsMapCard.normalizePercent(fallback));
+    return SextantMapCard.normalizePercent(value, SextantMapCard.normalizePercent(fallback));
   }
 
   static normalizePercent(value, fallback = 100) {
@@ -278,7 +278,7 @@ class BpsMapCard extends HTMLElement {
       .map((eid) => {
         const k = this._trackerKeyFromEntity(eid);
         if (!this._entityOnThisFloor(k)) return "";
-        return this._hass.states[`sensor.${k}_bps_zone`]?.state ?? "";
+        return this._hass.states[`sensor.${k}_sextant_zone`]?.state ?? "";
       })
       .join("|");
   }
@@ -288,14 +288,14 @@ class BpsMapCard extends HTMLElement {
     return this._config.entities
       .map((eid) => {
         const k = this._trackerKeyFromEntity(eid);
-        return this._hass.states[`sensor.${k}_bps_floor`]?.state ?? "";
+        return this._hass.states[`sensor.${k}_sextant_floor`]?.state ?? "";
       })
       .join("|");
   }
 
   _entityOnThisFloor(trackerKey) {
     const target = this._normalize(this._config.floor);
-    const st = this._hass?.states?.[`sensor.${trackerKey}_bps_floor`]?.state;
+    const st = this._hass?.states?.[`sensor.${trackerKey}_sextant_floor`]?.state;
     if (st == null || st === "unknown" || st === "unavailable") {
       return false;
     }
@@ -336,7 +336,7 @@ class BpsMapCard extends HTMLElement {
       .replace(/-/g, "_");
   }
 
-  // GET a /api/bps/* endpoint with the logged-in user's token attached (those
+  // GET a /api/sextant/* endpoint with the logged-in user's token attached (those
   // endpoints now require auth). Returns null (fires NO request) when there is
   // no valid token, while rate-backing-off after a recent auth failure, or once
   // a token has failed 5 times (a dead/revoked session must not keep feeding
@@ -421,7 +421,7 @@ class BpsMapCard extends HTMLElement {
       const bySlug = new Map();
       for (const dev of Object.values(devices)) {
         if (!dev || (dev._is_scanner !== true && dev.is_scanner !== true)) continue;
-        const slug = BpsMapCard.haSlugify(dev.name);
+        const slug = SextantMapCard.haSlugify(dev.name);
         if (!slug) continue;
         const age = typeof dev.last_seen === "number" ? newest - dev.last_seen : Infinity;
         bySlug.set(slug, age);
@@ -449,7 +449,7 @@ class BpsMapCard extends HTMLElement {
       this._deviceSlugMap = new Map();
       const ambiguous = new Set();
       for (const dev of Object.values(devices)) {
-        const slug = BpsMapCard.haSlugify(dev?.name_by_user || dev?.name);
+        const slug = SextantMapCard.haSlugify(dev?.name_by_user || dev?.name);
         if (!slug) continue;
         if (this._deviceSlugMap.has(slug)) ambiguous.add(slug);
         else this._deviceSlugMap.set(slug, dev.id);
@@ -478,7 +478,7 @@ class BpsMapCard extends HTMLElement {
     for (const entityId of entityIds) {
       const stateObj = states[entityId];
       if (stateObj?.state != null && stateObj.attributes?.device_class === "connectivity") {
-        return BpsMapCard.stateLooksOnline(stateObj.state);
+        return SextantMapCard.stateLooksOnline(stateObj.state);
       }
     }
     let sawState = false;
@@ -516,7 +516,7 @@ class BpsMapCard extends HTMLElement {
         continue;
       }
       if (statusEntity) {
-        statuses.set(id, BpsMapCard.stateLooksOnline(states[statusEntity]?.state));
+        statuses.set(id, SextantMapCard.stateLooksOnline(states[statusEntity]?.state));
         continue;
       }
       // Bermuda's own scanner liveness: last advertisement heard within
@@ -538,7 +538,7 @@ class BpsMapCard extends HTMLElement {
       // the binary_sensor.<id>_status slug does not hijack the status.
       const autoStatus = states[`binary_sensor.${id}_status`];
       if (autoStatus && autoStatus.attributes?.device_class === "connectivity") {
-        statuses.set(id, BpsMapCard.stateLooksOnline(autoStatus.state));
+        statuses.set(id, SextantMapCard.stateLooksOnline(autoStatus.state));
         continue;
       }
       // The receiver's HA device: online while any of its entities has a
@@ -570,7 +570,7 @@ class BpsMapCard extends HTMLElement {
 
   _markerLabelText(trackerKey, pos) {
     if (this._config.zone_label) {
-      const zoneEnt = `sensor.${trackerKey}_bps_zone`;
+      const zoneEnt = `sensor.${trackerKey}_sextant_zone`;
       const st = this._hass?.states?.[zoneEnt]?.state;
       if (st && st !== "unknown" && st !== "unavailable") {
         return st;
@@ -585,10 +585,10 @@ class BpsMapCard extends HTMLElement {
   }
 
   _trackerIconUrl(trackerKey) {
-    const DEFAULT_TRACKER_ICON = "/bps/person.svg";
+    const DEFAULT_TRACKER_ICON = "/sextant/person.svg";
     const storedIcon = this._trackerIcons?.[trackerKey];
-    if (storedIcon === "person.svg") return "/bps/person.svg";
-    if (storedIcon === "beacon.svg") return "/bps/beacon.svg";
+    if (storedIcon === "person.svg") return "/sextant/person.svg";
+    if (storedIcon === "beacon.svg") return "/sextant/beacon.svg";
     return storedIcon || DEFAULT_TRACKER_ICON;
   }
 
@@ -653,9 +653,9 @@ class BpsMapCard extends HTMLElement {
   }
 
   async _loadFloorResources(expectedGen) {
-    const res = await this._apiFetch("/api/bps/read_text");
-    if (!res) throw new Error("BPS auth not ready (no token / backing off)");
-    if (!res.ok) throw new Error(`Could not read BPS data (${res.status})`);
+    const res = await this._apiFetch("/api/sextant/read_text");
+    if (!res) throw new Error("Sextant auth not ready (no token / backing off)");
+    if (!res.ok) throw new Error(`Could not read Sextant data (${res.status})`);
     if (expectedGen !== this._runGeneration) {
       return;
     }
@@ -700,26 +700,26 @@ class BpsMapCard extends HTMLElement {
     if (this._config.image) return this._config.image;
     const explicitMap = String(this._config.map_file || "").trim();
     if (explicitMap) {
-      return `/local/bps_maps/${explicitMap}`;
+      return `/local/sextant_maps/${explicitMap}`;
     }
 
     const floorName = String(resolvedFloorName || this._config.floor || "").trim();
-    const mapsRes = await this._apiFetch("/api/bps/maps");
-    if (!mapsRes) throw new Error("BPS auth not ready (no token / backing off)");
+    const mapsRes = await this._apiFetch("/api/sextant/maps");
+    if (!mapsRes) throw new Error("Sextant auth not ready (no token / backing off)");
     if (!mapsRes.ok) {
       throw new Error(
-        `Could not list map files (${mapsRes.status}). Set map_file explicitly or check /api/bps/maps.`,
+        `Could not list map files (${mapsRes.status}). Set map_file explicitly or check /api/sextant/maps.`,
       );
     }
     const maps = await mapsRes.json();
     if (!Array.isArray(maps) || maps.length === 0) {
-      throw new Error("No map files found in /local/bps_maps.");
+      throw new Error("No map files found in /local/sextant_maps.");
     }
 
     const normalizedFloor = this._normalize(floorName);
     const exactName = maps.find((m) => this._normalize(m) === normalizedFloor);
     if (exactName) {
-      return `/local/bps_maps/${exactName}`;
+      return `/local/sextant_maps/${exactName}`;
     }
 
     const byBaseName = maps.find((m) => {
@@ -727,11 +727,11 @@ class BpsMapCard extends HTMLElement {
       return this._normalize(base) === normalizedFloor;
     });
     if (byBaseName) {
-      return `/local/bps_maps/${byBaseName}`;
+      return `/local/sextant_maps/${byBaseName}`;
     }
 
     throw new Error(
-      `No map image matched floor "${floorName}". Add map_file, image, or rename a file in /local/bps_maps.`,
+      `No map image matched floor "${floorName}". Add map_file, image, or rename a file in /local/sextant_maps.`,
     );
   }
 
@@ -861,7 +861,7 @@ class BpsMapCard extends HTMLElement {
       if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
       const online = this._receiverStatuses.get(rec.entity_id) === true;
       const color = online ? ONLINE_COLOR : OFFLINE_COLOR;
-      const icon = this._tintedIcon("/bps/beacon.svg", color, iconSize);
+      const icon = this._tintedIcon("/sextant/beacon.svg", color, iconSize);
       if (icon) {
         ctx.drawImage(icon, x - iconSize / 2, y - iconSize / 2, iconSize, iconSize);
       } else {
@@ -1026,7 +1026,7 @@ class BpsMapCard extends HTMLElement {
     try {
       // A 404 here just means no tracker has position data yet; receivers
       // should still render, so this is not an early return.
-      const res = await this._apiFetch("/api/bps/cords");
+      const res = await this._apiFetch("/api/sextant/cords");
       if (res && res.ok) {
         const list = await res.json();
         if (Array.isArray(list)) {
@@ -1059,15 +1059,19 @@ class BpsMapCard extends HTMLElement {
         this._updateFloorStatus();
       }
     } catch (e) {
-      console.warn("BPS poll:", e);
+      console.warn("Sextant poll:", e);
     }
   }
 
 }
 
-customElements.define("bps-map-card", BpsMapCard);
+customElements.define("sextant-map-card", SextantMapCard);
+// Dashboards from before the rename still say `type: custom:bps-map-card`.
+if (!customElements.get("bps-map-card")) {
+  customElements.define("bps-map-card", class extends SextantMapCard {});
+}
 
-class BpsMapCardEditor extends HTMLElement {
+class SextantMapCardEditor extends HTMLElement {
   constructor() {
     super();
     this._config = {};
@@ -1078,8 +1082,8 @@ class BpsMapCardEditor extends HTMLElement {
 
   setConfig(config) {
     this._config = { ...config };
-    this._config.scale_labels = BpsMapCard.normalizePercent(this._config.scale_labels);
-    this._config.scale_icon = BpsMapCard.normalizePercent(this._config.scale_icon);
+    this._config.scale_labels = SextantMapCard.normalizePercent(this._config.scale_labels);
+    this._config.scale_icon = SextantMapCard.normalizePercent(this._config.scale_icon);
     this._render();
   }
 
@@ -1162,7 +1166,7 @@ class BpsMapCardEditor extends HTMLElement {
     root.appendChild(entRow);
     this._inputs.entities = entInp;
 
-    mk("Map file (optional, filename in www/bps_maps)", "map_file", "text", "floor.png");
+    mk("Map file (optional, filename in www/sextant_maps)", "map_file", "text", "floor.png");
     mk("Image URL (optional, overrides map file)", "image", "text", "https://...");
     mk("Poll interval (seconds)", "poll_interval", "number", "3");
     mk("Label scale (percent, e.g. 100 or 200)", "scale_labels", "number", "100");
@@ -1204,8 +1208,8 @@ class BpsMapCardEditor extends HTMLElement {
   }
 
   _fire() {
-    this._config.scale_labels = BpsMapCard.normalizePercent(this._config.scale_labels);
-    this._config.scale_icon = BpsMapCard.normalizePercent(this._config.scale_icon);
+    this._config.scale_labels = SextantMapCard.normalizePercent(this._config.scale_labels);
+    this._config.scale_icon = SextantMapCard.normalizePercent(this._config.scale_icon);
     this.dispatchEvent(
       new CustomEvent("config-changed", {
         detail: { config: this._config },
@@ -1216,13 +1220,13 @@ class BpsMapCardEditor extends HTMLElement {
   }
 }
 
-customElements.define("bps-map-card-editor", BpsMapCardEditor);
+customElements.define("sextant-map-card-editor", SextantMapCardEditor);
 
 window.customCards = window.customCards || [];
 window.customCards.push({
-  type: "bps-map-card",
-  name: "BPS Map",
-  description: "Show one or more BPS trackers on a floor plan.",
+  type: "sextant-map-card",
+  name: "Sextant Map",
+  description: "Show one or more Sextant trackers on a floor plan.",
   preview: true,
-  documentationURL: "https://github.com/maxi1134/BPS-improved",
+  documentationURL: "https://github.com/davidcoulson/sextant",
 });

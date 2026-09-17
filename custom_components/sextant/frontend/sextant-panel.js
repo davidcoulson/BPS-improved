@@ -1,14 +1,14 @@
-// BPS custom panel — a thin courier.
+// Sextant custom panel — a thin courier.
 //
-// The BPS setup app is a standalone page served at /bps/index.html. It used to
+// The Sextant setup app is a standalone page served at /sextant/index.html. It used to
 // be shown as a bare Home Assistant `iframe` panel, which has no access to the
-// logged-in user's token — so the /api/bps/* endpoints had to be left
+// logged-in user's token — so the /api/sextant/* endpoints had to be left
 // unauthenticated. This element is registered as a `panel_custom` instead, so
 // Home Assistant sets `hass` on it; it keeps hosting the app in an inner iframe
 // (no rewrite of the app) and simply forwards the current access token in via
 // postMessage. The app attaches that token as a Bearer header on every API
 // call, and the endpoints now require auth.
-class BpsPanel extends HTMLElement {
+class SextantPanel extends HTMLElement {
   constructor() {
     super();
     this._iframe = null;
@@ -55,8 +55,8 @@ class BpsPanel extends HTMLElement {
     this.style.minHeight = "calc(100vh - var(--header-height, 56px))";
 
     const iframe = document.createElement("iframe");
-    iframe.src = "/bps/index.html";
-    iframe.setAttribute("title", "BPS");
+    iframe.src = "/sextant/index.html";
+    iframe.setAttribute("title", "Sextant");
     iframe.style.border = "0";
     iframe.style.width = "100%";
     iframe.style.height = "100%";
@@ -109,7 +109,7 @@ class BpsPanel extends HTMLElement {
     const cw = this._iframe.contentWindow;
     if (!cw) return;
     // Refresh an expired token before couriering it: HA does not proactively
-    // refresh the access token for the manual /api/bps/* fetches the app makes,
+    // refresh the access token for the manual /api/sextant/* fetches the app makes,
     // so without this the app keeps sending a dead Bearer and every poll 401s —
     // which HA's http.ban counts toward banning the client's IP.
     const auth = this._hass && this._hass.auth;
@@ -133,4 +133,4 @@ class BpsPanel extends HTMLElement {
   }
 }
 
-customElements.define("bps-panel", BpsPanel);
+customElements.define("sextant-panel", SextantPanel);

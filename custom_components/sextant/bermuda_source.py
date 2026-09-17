@@ -1,7 +1,7 @@
 """
 Read Bermuda's per-scanner distances without enabling its entities.
 
-BPS historically sourced its tracker<->receiver distances by enumerating
+Sextant historically sourced its tracker<->receiver distances by enumerating
 ``sensor.<device>_distance_to_<scanner>`` from the state machine. Bermuda
 creates those entities *disabled by default* precisely because there is one per
 (tracked device x scanner) pair: on a 60-proxy install that is thousands of
@@ -9,9 +9,9 @@ entities, each writing to the recorder and fanning ``state_changed`` out to
 every websocket client - to surface data Bermuda already holds in memory.
 
 Bermuda exposes that data directly via ``custom_components.bermuda.api``
-(SNAPSHOT_VERSION 1). This module adapts it to the shape BPS already speaks -
-keyed by device prefix and scanner slug that BPS floorplans are stored
-against - so the rest of BPS is unchanged and existing saved configs keep
+(SNAPSHOT_VERSION 1). This module adapts it to the shape Sextant already speaks -
+keyed by device prefix and scanner slug that Sextant floorplans are stored
+against - so the rest of Sextant is unchanged and existing saved configs keep
 working.
 
 Key detail: the device/scanner slug map is resolved from the live snapshot,
@@ -54,10 +54,10 @@ _SLUG_MAP_TTL = 30.0
 # see sensor.py's bermuda_updated) purely to notice a device being added or
 # removed. A few seconds of staleness there is invisible to the user; the
 # ~1 Hz rebuild it replaced was the single largest recurring cost in the
-# Bermuda/BPS pairing.
+# Bermuda/Sextant pairing.
 _TRACKED_TTL = 5.0
 
-_CACHE_KEY = "bps_bermuda_source_cache"
+_CACHE_KEY = "sextant_bermuda_source_cache"
 _EMPTY_CACHE = {
     "readings_at": 0.0, "readings": None, "readings_history": False,
     "slug_map_at": 0.0, "slug_map": None,
@@ -313,7 +313,7 @@ def _snapshot(hass, include_history=False):
         return None
     if snapshot.get("version") not in _SUPPORTED_SNAPSHOT_VERSIONS:
         _LOGGER.warning(
-            "Bermuda advert snapshot version %s is not supported by this build of BPS "
+            "Bermuda advert snapshot version %s is not supported by this build of Sextant "
             "(understands %s); falling back to reading distance entities",
             snapshot.get("version"),
             sorted(_SUPPORTED_SNAPSHOT_VERSIONS),
@@ -425,7 +425,7 @@ def async_get_readings(hass, include_history=False) -> dict[tuple[str, str], dic
     newest first. Those let a caller run its own estimator on Bermuda's scale.
 
     ``distance`` is metres always - unlike the entities, which render feet or
-    metres per the user's unit settings and which BPS therefore had to convert.
+    metres per the user's unit settings and which Sextant therefore had to convert.
     ``age`` is seconds since that scanner last actually *heard* the device,
     which is a stronger stale-reading signal than an entity's ``last_updated``
     (that only moves when the value changes, so a frozen reading looked fresh).

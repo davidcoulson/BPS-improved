@@ -5,7 +5,7 @@ Answers the only question that matters before dropping scipy: does the
 replacement put trackers in the same place?
 
 Receiver coordinates and per-floor scales come from an actual install
-(`real_layout.json`, exported from `.storage/bps`), so the geometry —
+(`real_layout.json`, exported from `.storage/sextant`), so the geometry —
 receiver spacing, collinearity, map extent — is the real thing rather than a
 synthetic grid. For each trial a true position is drawn inside the map,
 distances to every receiver are computed, and realistic corruption is applied:
@@ -36,21 +36,21 @@ import time
 import numpy as np
 from scipy.optimize import least_squares
 
-# Load solver_numpy by PATH rather than as `bps.solver_numpy`: importing the
-# package would execute bps/__init__.py, which pulls in aiofiles and the whole
+# Load solver_numpy by PATH rather than as `sextant.solver_numpy`: importing the
+# package would execute sextant/__init__.py, which pulls in aiofiles and the whole
 # Home Assistant runtime. The solver module itself only needs numpy.
 import importlib.util  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location(
-    "bps_solver_numpy",
-    os.path.join(os.path.dirname(__file__), "..", "custom_components", "bps", "solver_numpy.py"),
+    "sextant_solver_numpy",
+    os.path.join(os.path.dirname(__file__), "..", "custom_components", "sextant", "solver_numpy.py"),
 )
 _mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_mod)
 least_squares_bounded_soft_l1 = _mod.least_squares_bounded_soft_l1
 _soft_l1_cost = _mod._soft_l1_cost
 
-# Mirrors the constants in bps/__init__.py.
+# Mirrors the constants in sextant/__init__.py.
 SOLVER_ROBUST_F_SCALE = 0.3
 MIN_WEIGHT_RADIUS_M = 0.5
 _JAC_MIN_DIST = 1e-9

@@ -1,10 +1,10 @@
-"""Test bootstrap: stub the Home Assistant runtime so the real `bps` package
+"""Test bootstrap: stub the Home Assistant runtime so the real `sextant` package
 imports without a full HA install.
 
-The BPS backend pulls in a handful of `homeassistant.*` modules (plus aiofiles,
+The Sextant backend pulls in a handful of `homeassistant.*` modules (plus aiofiles,
 aiohttp, voluptuous, watchdog) purely for type/registration plumbing that the
 unit tests never exercise. We install lightweight fakes for those in
-`sys.modules` BEFORE anything imports `bps`, then let the genuinely numeric
+`sys.modules` BEFORE anything imports `sextant`, then let the genuinely numeric
 dependencies (numpy, scipy, shapely) load for real — the positioning and
 geometry maths under test run against the actual libraries.
 """
@@ -206,7 +206,7 @@ def _install_homeassistant_stubs():
 
 
 _install_homeassistant_stubs()
-# custom_components/ on the path so `import bps` resolves to the integration.
+# custom_components/ on the path so `import sextant` resolves to the integration.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "custom_components"))
 
 

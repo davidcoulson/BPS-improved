@@ -38,7 +38,7 @@ except ImportError:  # very old shapely
 from asyncio import Lock, Queue, wait_for, TimeoutError
 
 from .calibration import (
-    BPSCalibrationAPI,
+    SextantCalibrationAPI,
     apply_corrections,
     async_cancel_calibration,
     async_restore_calibration_state,
@@ -52,13 +52,14 @@ from .calibration import (
     start_calibration,
 )
 from .storage import (
-    BPS_FILE_LOCK,
-    get_bps_data,
-    get_bps_data_for_edit,
-    get_bps_data_version,
-    load_bps_data,
+    LAYOUT_LOCK,
+    get_layout,
+    get_layout_for_edit,
+    get_layout_version,
+    load_layout,
+    migrate_from_bps,
     migrate_legacy,
-    save_bps_data,
+    save_layout,
 )
 from .const import ACCURACY_ENTITY_ID
 from . import history as history_mod
@@ -67,7 +68,7 @@ from .zone_adjust import adjust_zones, adjust_subzones
 
 _LOGGER = logging.getLogger(__name__)
 
-DOMAIN = "bps"
+DOMAIN = "sextant"
 OPTION_SHOW_SIDEBAR_PANEL = "show_sidebar_panel"
 OPTION_UPDATE_INTERVAL = "update_interval"
 # Trilateration (scipy least_squares, multi-start) is real CPU work. 1s was
@@ -77,9 +78,9 @@ OPTION_UPDATE_INTERVAL = "update_interval"
 # fast enough for presence automations while cutting recompute volume ~15x.
 DEFAULT_UPDATE_INTERVAL = 15
 FRONTEND_PATH = Path(__file__).parent / "frontend"
-LEGACY_BPS_ENTITY_PATTERN = re.compile(r"^sensor\.(.+)_\1_bps_(zone|floor)$")
+LEGACY_BPS_ENTITY_PATTERN = re.compile(r"^sensor\.(.+)_\1_sextant_(zone|floor)$")
 
-# Global data (the layout now lives in the Store; see storage.get_bps_data)
+# Global data (the layout now lives in the Store; see storage.get_layout)
 state_change_lock = Lock()
 state_change_counter = {}
 update_queue = Queue()
@@ -138,7 +139,7 @@ READING_MAX_AGE_SECS = 45
 #
 # The noise parameters are defined in METRES (and metres/second) and converted
 # into each floor's pixel space via the floor scale, so the filter behaves the
-# same on maps of any resolution. They are deliberately "trusting": BPS already
+# same on maps of any resolution. They are deliberately "trusting": Sextant already
 # reads Bermuda's smoothed rssi_distance (20-sample average + velocity gate), so
 # the trilateration fixes fed in here are not raw-RSSI noisy. Tune KF_MEAS_NOISE_M
 # up for more smoothing, or KF_ACCEL_NOISE_MS2 up for a snappier response.
@@ -177,9 +178,9 @@ _ALLOWED_MAP_EXTS = {
     ".png", ".jpg", ".jpeg", ".jfif", ".jpe", ".gif", ".webp", ".bmp", ".svg", ".avif",
 }
 MAX_MAP_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB
-# Non-map files that live in www/bps_maps and must never be deletable via the
+# Non-map files that live in www/sextant_maps and must never be deletable via the
 # save_text "remove" field (that field is only meant to drop an old map image).
-_PROTECTED_MAPS_FILES = {"bpsdata.txt", "bps_calibration_state.json"}
+_PROTECTED_MAPS_FILES = {"bpsdata.txt", "sextant_calibration_state.json"}
 # Longest to wait on Bermuda's dump_devices before treating it as unavailable,
 # so a hung/slow service can't stall the liveness or calibration loops.
 DUMP_DEVICES_TIMEOUT_S = 10.0
@@ -225,7 +226,7 @@ TRACKER_HEIGHT_M = 1.0
 # Bermuda turns RSSI into distance with an exponential path-loss model,
 # d = 10 ** ((ref_power - rssi) / (10 * attenuation)). Cheap beacons vary in
 # transmit power, so one Bermuda ref_power can read consistently long or short
-# for a given tag. BPS can't change Bermuda's config, but an offset of `delta`
+# for a given tag. Sextant can't change Bermuda's config, but an offset of `delta`
 # dB on ref_power is exactly a MULTIPLICATIVE scale on every distance from that
 # tracker: 10 ** (delta / (10 * attenuation)). So a per-tracker offset (stored
 # in metres-free dB under the top-level "tracker_ref_offsets" map) is applied
@@ -300,11 +301,11 @@ _kf_position_state = {}
 _zone_state = {}
 _subzone_state = {}
 
-# --- Runtime tuning (bps.set_tuning) ------------------------------------------
+# --- Runtime tuning (sextant.set_tuning) ------------------------------------------
 # Knobs for the accuracy work that are safe to flip on a live install without
 # a code change. They live under a top-level "tuning" map in the layout store
-# and are set through the bps.set_tuning service (never by editing
-# .storage/bps under a running HA, which is silently lost on the next save).
+# and are set through the sextant.set_tuning service (never by editing
+# .storage/sextant under a running HA, which is silently lost on the next save).
 # Each entry is (default, type, min, max) for numbers, (default, bool) for
 # switches, or (default, str, allowed) for choices.
 TUNING_SPEC = {
@@ -345,12 +346,12 @@ TUNING_SPEC = {
     # is, relative to the nearest receiver on any competing floor (see
     # _proximity_weighted_scores). 0 = pure fit-quality election.
     "floor_proximity_weight": (0.5, float, 0.0, 1.0),
-    # Where receiver calibration writes its corrections. "bps": a per-receiver
+    # Where receiver calibration writes its corrections. "sextant": a per-receiver
     # distance multiplier in this layout (the original behaviour). "bermuda":
     # the equivalent per-scanner rssi offset written into Bermuda itself
     # (needs a Bermuda build with the rssi_offsets API), so Bermuda's own
-    # area/distance sensors are corrected too and BPS applies nothing twice.
-    "calibration_target": ("bps", str, ("bps", "bermuda")),
+    # area/distance sensors are corrected too and Sextant applies nothing twice.
+    "calibration_target": ("sextant", str, ("sextant", "bermuda")),
 }
 
 
@@ -493,7 +494,7 @@ def get_position_history(hass):
     hist = bucket.get("_history")
     if hist is None:
         hist = bucket["_history"] = history_mod.PositionHistory(
-            history_mod.history_config(get_bps_data(hass)))
+            history_mod.history_config(get_layout(hass)))
     return hist
 
 
@@ -526,7 +527,7 @@ def _history_prunable_max_age(hass, hist):
     store that failed to load this boot) history_config falls back to the 6 h
     default, which would take a configured 7-day record down to six hours.
     """
-    layout = get_bps_data(hass)
+    layout = get_layout(hass)
     if not isinstance(layout, dict):
         return None
     return hist.cfg["max_age"]
@@ -540,7 +541,7 @@ async def flush_position_history(hass, prune=False):
     propagate into the tracking loop.
     """
     hist = get_position_history(hass)
-    hist.configure(history_mod.history_config(get_bps_data(hass)))
+    hist.configure(history_mod.history_config(get_layout(hass)))
     # Age every track, not just the ones that recorded this cycle: a tracker
     # that went silent (or a history since switched off) would otherwise keep
     # serving points past the configured window.
@@ -613,12 +614,12 @@ async def restore_position_history(hass):
         async with _history_lock(hass):
             loaded = await hass.async_add_executor_job(_work)
     except Exception as e:
-        _LOGGER.warning("BPS position history could not be restored: %s", e)
+        _LOGGER.warning("Sextant position history could not be restored: %s", e)
         return
     hist.adopt(loaded)
     hist.mark_all_gaps()
     ents = hist.entities()
-    _LOGGER.info("BPS position history restored: %d points across %d trackers",
+    _LOGGER.info("Sextant position history restored: %d points across %d trackers",
                  sum((hist.retained(e) or {}).get("points", 0) for e in ents), len(ents))
 
 
@@ -775,8 +776,8 @@ def _kalman_position_update(entity, floor_name, meas, scale, bounds):
     return _clip(float(x[0]), float(x[1]))
 
 
-def cleanup_legacy_bps_registry_and_states(hass: HomeAssistant):
-    """Remove legacy duplicated BPS ids from entity registry and state machine."""
+def cleanup_legacy_sextant_registry_and_states(hass: HomeAssistant):
+    """Remove legacy duplicated Sextant ids from entity registry and state machine."""
     entity_registry = er.async_get(hass)
     legacy_registry_ids = [
         entry.entity_id
@@ -784,7 +785,7 @@ def cleanup_legacy_bps_registry_and_states(hass: HomeAssistant):
         if LEGACY_BPS_ENTITY_PATTERN.match(entry.entity_id)
     ]
     for entity_id in legacy_registry_ids:
-        _LOGGER.info("Removing legacy BPS registry entity: %s", entity_id)
+        _LOGGER.info("Removing legacy Sextant registry entity: %s", entity_id)
         entity_registry.async_remove(entity_id)
 
     legacy_state_ids = [
@@ -793,7 +794,7 @@ def cleanup_legacy_bps_registry_and_states(hass: HomeAssistant):
         if LEGACY_BPS_ENTITY_PATTERN.match(state.entity_id)
     ]
     for entity_id in legacy_state_ids:
-        _LOGGER.info("Removing legacy BPS state: %s", entity_id)
+        _LOGGER.info("Removing legacy Sextant state: %s", entity_id)
         hass.states.async_remove(entity_id)
 
 async def update_tracked_entities(hass):
@@ -818,7 +819,7 @@ async def update_tracked_entities(hass):
         # Skipped entirely while the accuracy sensor is not live in HA (the
         # user disabled it, or it has not been added yet): a leave-one-out
         # solve over every placed receiver is real work, and its only consumer
-        # here is that sensor. The /api/bps/selftest endpoint computes on
+        # here is that sensor. The /api/sextant/selftest endpoint computes on
         # demand and is unaffected.
         if (
             now_ts - getattr(update_tracked_entities, "last_selftest", 0.0) >= SELFTEST_SENSOR_INTERVAL
@@ -829,9 +830,9 @@ async def update_tracked_entities(hass):
                 samples = {k: list(v) for k, v in get_calibration_state(hass).get("samples", {}).items()}
                 result = await hass.async_add_executor_job(run_selftest, hass, samples)
                 state, attrs = _selftest_summary(result)
-                update_bps_sensor_state(hass, ACCURACY_ENTITY_ID, state, attrs)
+                update_sextant_sensor_state(hass, ACCURACY_ENTITY_ID, state, attrs)
             except Exception as e:  # never let the diagnostic sensor stall tracking
-                _LOGGER.warning("BPS self-test sensor update failed: %s", e)
+                _LOGGER.warning("Sextant self-test sensor update failed: %s", e)
 
         # Persist the position history at a slow cadence (and prune expired day
         # segments hourly), so a restart does not lose the scrubback window.
@@ -843,7 +844,7 @@ async def update_tracked_entities(hass):
             try:
                 await flush_position_history(hass, prune=prune_due)
             except Exception as e:  # disk trouble must not stop tracking
-                _LOGGER.warning("BPS position history flush failed: %s", e)
+                _LOGGER.warning("Sextant position history flush failed: %s", e)
 
         try:
             # This used to render a Jinja template that selected every
@@ -893,7 +894,7 @@ async def update_tracked_entities(hass):
                 await asyncio.sleep(10)
                 continue  # Skip and start over
             # Use a separate copy per entity to avoid cross-entity mutation side effects.
-            layout = get_bps_data(hass)
+            layout = get_layout(hass)
             new_global_data = [{"entity": ent, "data": copy.deepcopy(layout)} for ent in unique_values]
 
             await process_entities(hass, new_global_data)
@@ -925,7 +926,7 @@ def _bermuda_distance_sensor_ids(hass):
 
     Other integrations expose look-alike distance sensors — e.g. an ESPHome
     mmWave presence sensor's ``..._distance_to_detection_object`` — which are not
-    tracker-to-scanner distances and must never feed BPS. Every place that
+    tracker-to-scanner distances and must never feed Sextant. Every place that
     enumerates distance sensors (device tracking, the receiver/beacon debug
     views, the receiver picker) goes through this, mirroring the same
     ``platform == "bermuda"`` guard ``sensor.get_filtered_entities`` already
@@ -1130,21 +1131,21 @@ async def async_resolve_receiver_addresses(hass) -> bool:
     directory = bermuda_source.async_get_scanner_directory(hass)
     if not directory:
         return False
-    layout = get_bps_data(hass)
+    layout = get_layout(hass)
     if not isinstance(layout, dict):
         return False
     probe = copy.deepcopy(layout)
     changed, _unresolved = _resolve_receiver_addresses(probe, directory)
     if not changed:
         return False
-    async with BPS_FILE_LOCK:
-        data = get_bps_data_for_edit(hass)
+    async with LAYOUT_LOCK:
+        data = get_layout_for_edit(hass)
         if not isinstance(data, dict):
             return False
         changed, unresolved = _resolve_receiver_addresses(data, directory)
         if not changed:
             return False
-        await save_bps_data(hass, data)
+        await save_layout(hass, data)
     _LOGGER.info(
         "Receiver identities refreshed from Bermuda (%s unresolved: %s)",
         len(unresolved), ", ".join(unresolved) if unresolved else "none",
@@ -1459,7 +1460,7 @@ async def update_receiver_liveness(hass):
     dom = hass.data.setdefault(DOMAIN, {})
     # Receivers are identified by scanner address; keep the placements'
     # addresses and labels in step with Bermuda (a rename, or a scanner
-    # Bermuda only learned about after BPS started).
+    # Bermuda only learned about after Sextant started).
     try:
         await async_resolve_receiver_addresses(hass)
     except Exception as e:  # identity upkeep must never stop liveness
@@ -1505,7 +1506,7 @@ async def update_receiver_liveness(hass):
     # the liveness lookup goes through the address when there is one.
     directory = bermuda_source.async_get_scanner_directory(hass) or {}
     placed_address = {}
-    layout = get_bps_data(hass)
+    layout = get_layout(hass)
     if isinstance(layout, dict):
         for fl in layout.get("floor") or []:
             for rec in (fl.get("receivers") or []) if isinstance(fl, dict) else []:
@@ -1724,7 +1725,7 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
         # No receiver reports any distance for this device: it is out of
         # range. The zone/floor sensors keep their last value (historical
         # behavior), but nearest-zone explicitly reports unknown.
-        update_bps_sensor_state(hass, f"sensor.{entity}_bps_nearest_zone", "unknown")
+        update_sextant_sensor_state(hass, f"sensor.{entity}_sextant_nearest_zone", "unknown")
         return
 
     # Get previous r-values for this entity
@@ -1992,7 +1993,7 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
                 # Smoothed floor-election probabilities, for debugging "why
                 # did it pick this floor" (issue #94).
                 "floors": {f: round(p, 3) for f, p in probs.items()},
-                # Positioning telemetry for the eval harness (tools/bps_eval.py)
+                # Positioning telemetry for the eval harness (tools/sextant_eval.py)
                 # and the debug tab: the pre-Kalman, pre-snap trilaterated fix
                 # next to the published (filtered + snapped) `cords`, so solver
                 # bias can be told apart from filter lag; plus this fix's
@@ -2016,10 +2017,10 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
                     lowest_floor_name, scale, zone)
             except Exception as e:  # history must never break tracking
                 _LOGGER.debug("Position history record failed for %s: %s", entity, e)
-        update_bps_sensor_state(hass, f"sensor.{entity}_bps_zone", zone)
-        update_bps_sensor_state(hass, f"sensor.{entity}_bps_nearest_zone", nearest_zone)
-        update_bps_sensor_state(hass, f"sensor.{entity}_bps_floor", lowest_floor_name)
-        update_bps_sensor_state(hass, f"sensor.{entity}_bps_sub_zone", sub_zone, {"parent_zone": parent_zone})
+        update_sextant_sensor_state(hass, f"sensor.{entity}_sextant_zone", zone)
+        update_sextant_sensor_state(hass, f"sensor.{entity}_sextant_nearest_zone", nearest_zone)
+        update_sextant_sensor_state(hass, f"sensor.{entity}_sextant_floor", lowest_floor_name)
+        update_sextant_sensor_state(hass, f"sensor.{entity}_sextant_sub_zone", sub_zone, {"parent_zone": parent_zone})
 
 def _solve_floor_jobs(jobs):
     """Run one tracker's candidate-floor solves. Pure CPU; executor-safe.
@@ -2073,7 +2074,7 @@ async def prune_stale_positions(hass):
     """
     global apitricords
     timeout = STALE_POSITION_SECS
-    layout = get_bps_data(hass)
+    layout = get_layout(hass)
     if isinstance(layout, dict):
         configured = layout.get("position_timeout")
         if isinstance(configured, (int, float)) and configured > 0:
@@ -2113,10 +2114,10 @@ async def prune_stale_positions(hass):
         getattr(update_trilateration_and_zone, "last_floor", {}).pop(ent, None)
         getattr(update_trilateration_and_zone, "last_r_values", {}).pop(ent, None)
         _LOGGER.info("Tracker %s not seen for %ss; clearing its position", ent, timeout)
-        update_bps_sensor_state(hass, f"sensor.{ent}_bps_zone", "unknown")
-        update_bps_sensor_state(hass, f"sensor.{ent}_bps_floor", "unknown")
-        update_bps_sensor_state(hass, f"sensor.{ent}_bps_nearest_zone", "unknown")
-        update_bps_sensor_state(hass, f"sensor.{ent}_bps_sub_zone", "unknown", {"parent_zone": "unknown"})
+        update_sextant_sensor_state(hass, f"sensor.{ent}_sextant_zone", "unknown")
+        update_sextant_sensor_state(hass, f"sensor.{ent}_sextant_floor", "unknown")
+        update_sextant_sensor_state(hass, f"sensor.{ent}_sextant_nearest_zone", "unknown")
+        update_sextant_sensor_state(hass, f"sensor.{ent}_sextant_sub_zone", "unknown", {"parent_zone": "unknown"})
 
 async def update_apitricords(hass, new_data):
     """Update apitricords in hass.data"""
@@ -2125,7 +2126,7 @@ async def update_apitricords(hass, new_data):
 
 
 def _sensor_is_live(hass, entity_id):
-    """Whether a cached BPS sensor object is actually attached to HA.
+    """Whether a cached Sextant sensor object is actually attached to HA.
 
     sensor.py creates the entity objects and caches them before
     async_add_entities runs. An entity the user has DISABLED in the registry
@@ -2133,16 +2134,16 @@ def _sensor_is_live(hass, entity_id):
     writing state to it raises ("Attribute hass is None"), which the
     accuracy sensor did every self-test cycle.
     """
-    sensors_cache = hass.data.get("bps_sensors")
+    sensors_cache = hass.data.get("sextant_sensors")
     if not sensors_cache:
         return False
     sensor = sensors_cache.get(entity_id)
     return sensor is not None and getattr(sensor, "hass", None) is not None
 
 
-def update_bps_sensor_state(hass, entity_id, state, attributes=None):
-    """Update state (and optional extra attributes) on a registered BPS SensorEntity."""
-    sensors_cache = hass.data.get("bps_sensors")
+def update_sextant_sensor_state(hass, entity_id, state, attributes=None):
+    """Update state (and optional extra attributes) on a registered Sextant SensorEntity."""
+    sensors_cache = hass.data.get("sextant_sensors")
     if not sensors_cache:
         return
     sensor = sensors_cache.get(entity_id)
@@ -2414,7 +2415,7 @@ def _elect_zone(entity, floor_name, instant_zone, point, kf_state, zone_polys, s
 
     Floors already had hysteresis; zones were assigned point-wise every
     cycle, so a tracker resting near a boundary toggled with every fit.
-    Three mechanisms, all tunable (TUNING_SPEC, bps.set_tuning):
+    Three mechanisms, all tunable (TUNING_SPEC, sextant.set_tuning):
 
     1. Membership probability. The published point's zone is not a yes/no:
        samples on the Kalman filter's 1-sigma error ellipse are attributed
@@ -2552,14 +2553,14 @@ def _subzone_with_dwell(entity, candidate, layout, now=None):
 
 # Compiled zone/sub-zone polygons for a floor, keyed by (cache kind, floor_name)
 # -> (layout_version, [result tuples]). A zone's geometry only changes when the
-# user edits and saves the floorplan (get_bps_data_version bumps then), yet
+# user edits and saves the floorplan (get_layout_version bumps then), yet
 # every position update for every tracked device used to rebuild every zone's
 # shapely Polygon from scratch — repeatedly, since the solve step,
 # find_zone_for_point, find_nearest_zone and find_sub_zone_for_point each
 # called this independently in the same cycle. Caching against the layout
 # version means a floor's polygons are compiled once per edit, not once per
 # (device x lookup) per cycle.
-_ZONE_POLY_CACHE_KEY = "bps_zone_polygon_cache"
+_ZONE_POLY_CACHE_KEY = "sextant_zone_polygon_cache"
 
 
 def _zone_poly_cache(hass) -> dict:
@@ -2576,7 +2577,7 @@ def _floor_zone_polygons(hass, data, entity, floor_name):
     """
     cache = _zone_poly_cache(hass)
     cache_key = ("zones", floor_name)
-    version = get_bps_data_version(hass)
+    version = get_layout_version(hass)
     cached = cache.get(cache_key)
     if cached is not None and cached[0] == version:
         return cached[1]
@@ -2750,7 +2751,7 @@ def _floor_sub_zone_polygons(hass, data, entity, floor_name):
     """
     cache = _zone_poly_cache(hass)
     cache_key = ("subzones", floor_name)
-    version = get_bps_data_version(hass)
+    version = get_layout_version(hass)
     cached = cache.get(cache_key)
     if cached is not None and cached[0] == version:
         return cached[1]
@@ -2803,10 +2804,10 @@ def find_sub_zone_for_point(hass, data, entity, floor_name, point):
 
 # --- Live push (websocket) ------------------------------------------------------
 # Fired on the event loop at the end of every positioning cycle with the same
-# payload the /api/bps/cords poll would return, plus receiver health. The
+# payload the /api/sextant/cords poll would return, plus receiver health. The
 # panel and the Lovelace card can subscribe once instead of polling, and a
 # subscriber sees every cycle rather than whichever ones its timer lands on.
-SIGNAL_BPS_UPDATE = "bps_positions_updated"
+SIGNAL_BPS_UPDATE = "sextant_positions_updated"
 
 
 def _push_payload(hass):
@@ -2819,10 +2820,10 @@ def _push_payload(hass):
     }
 
 
-@websocket_api.websocket_command({vol.Required("type"): "bps/subscribe"})
+@websocket_api.websocket_command({vol.Required("type"): "sextant/subscribe"})
 @websocket_api.async_response
 async def _ws_subscribe(hass, connection, msg):
-    """``bps/subscribe``: stream positions and receiver health, one event per cycle.
+    """``sextant/subscribe``: stream positions and receiver health, one event per cycle.
 
     The first event is sent immediately with the current state, so a client
     has something to draw before the next cycle. Unsubscribing is the
@@ -2839,16 +2840,16 @@ async def _ws_subscribe(hass, connection, msg):
 
 
 def _register_websocket(hass) -> None:
-    if hass.data.get("bps_ws_registered"):
+    if hass.data.get("sextant_ws_registered"):
         return
     websocket_api.async_register_command(hass, _ws_subscribe)
-    hass.data["bps_ws_registered"] = True
+    hass.data["sextant_ws_registered"] = True
 
 
 def _register_calibration_services(hass) -> None:
     """Expose the calibration actions as HA services.
 
-    These mirror BPSCalibrationAPI exactly and call the same functions, so the
+    These mirror SextantCalibrationAPI exactly and call the same functions, so the
     panel and an automation cannot diverge. The point of having both is that
     the REST view needs a bearer token and a JSON body, which makes it awkward
     from an automation or a script - and unusable from the Developer Tools
@@ -2897,8 +2898,8 @@ def _register_calibration_services(hass) -> None:
 
         Deliberately a service rather than a file edit: the layout lives in
         HA's Store, which keeps an in-memory cache and writes it back. Editing
-        config/.storage/bps underneath a running HA is silently lost the next
-        time anything saves. Going through save_bps_data persists atomically
+        config/.storage/sextant underneath a running HA is silently lost the next
+        time anything saves. Going through save_layout persists atomically
         and refreshes the cache, so calibration sees the change immediately -
         _read_coords rebuilds the receiver map from it on every run.
         """
@@ -2908,10 +2909,10 @@ def _register_calibration_services(hass) -> None:
             if not 0 <= value <= 10:
                 raise HomeAssistantError(f"height for {name!r} must be between 0 and 10 m, got {value}")
 
-        async with BPS_FILE_LOCK:
-            data = get_bps_data_for_edit(hass)
+        async with LAYOUT_LOCK:
+            data = get_layout_for_edit(hass)
             if not isinstance(data, dict) or not data.get("floor"):
-                raise HomeAssistantError("No BPS layout saved yet; place receivers first.")
+                raise HomeAssistantError("No Sextant layout saved yet; place receivers first.")
 
             seen: set[str] = set()
             changed = 0
@@ -2927,18 +2928,18 @@ def _register_calibration_services(hass) -> None:
                     elif default is not None:
                         receiver["height"] = float(default)
                         changed += 1
-            await save_bps_data(hass, data)
+            await save_layout(hass, data)
 
         unmatched = sorted(set(heights) - seen)
         if unmatched:
             # Not fatal: a typo should not silently do nothing, but it should
             # also not discard the heights that did match.
             _LOGGER.warning(
-                "bps.set_receiver_heights: %d receiver(s) updated; no receiver matched %s",
+                "sextant.set_receiver_heights: %d receiver(s) updated; no receiver matched %s",
                 changed, ", ".join(unmatched),
             )
         else:
-            _LOGGER.info("bps.set_receiver_heights: %d receiver(s) updated", changed)
+            _LOGGER.info("sextant.set_receiver_heights: %d receiver(s) updated", changed)
 
     hass.services.async_register(
         DOMAIN, "start_calibration", _start,
@@ -2969,17 +2970,17 @@ def _register_calibration_services(hass) -> None:
         """
         heights = {str(k): float(v) for k, v in call.data["heights"].items()}
 
-        async with BPS_FILE_LOCK:
-            data = get_bps_data_for_edit(hass)
+        async with LAYOUT_LOCK:
+            data = get_layout_for_edit(hass)
             if not isinstance(data, dict):
-                raise HomeAssistantError("No BPS layout saved yet.")
+                raise HomeAssistantError("No Sextant layout saved yet.")
             current = data.get("tracker_heights")
             if not isinstance(current, dict):
                 current = {}
             current.update(heights)
             data["tracker_heights"] = current
-            await save_bps_data(hass, data)
-        _LOGGER.info("bps.set_tracker_heights: %d tracker(s) set", len(heights))
+            await save_layout(hass, data)
+        _LOGGER.info("sextant.set_tracker_heights: %d tracker(s) set", len(heights))
 
     hass.services.async_register(
         DOMAIN, "set_auto_calibration", _auto,
@@ -3025,18 +3026,18 @@ def _register_calibration_services(hass) -> None:
                 raise HomeAssistantError(f"{key} must be {allowed}, got {value!r}")
             updates[key] = coerced
 
-        async with BPS_FILE_LOCK:
-            data = get_bps_data_for_edit(hass)
+        async with LAYOUT_LOCK:
+            data = get_layout_for_edit(hass)
             if not isinstance(data, dict):
-                raise HomeAssistantError("No BPS layout saved yet; place receivers first.")
+                raise HomeAssistantError("No Sextant layout saved yet; place receivers first.")
             tuning = {} if call.data.get("reset") else dict(data.get("tuning") or {})
             tuning.update(updates)
             if tuning:
                 data["tuning"] = tuning
             else:
                 data.pop("tuning", None)
-            await save_bps_data(hass, data)
-        _LOGGER.info("bps.set_tuning: %s", tuning or "defaults restored")
+            await save_layout(hass, data)
+        _LOGGER.info("sextant.set_tuning: %s", tuning or "defaults restored")
 
     hass.services.async_register(
         DOMAIN, "set_tuning", _set_tuning,
@@ -3048,44 +3049,44 @@ def _register_calibration_services(hass) -> None:
 
 
 async def async_setup(hass, config):
-    """Set up the BPS integration."""
-    _LOGGER.info("BPS integration initierad.")
+    """Set up the Sextant integration."""
+    _LOGGER.info("Sextant integration initierad.")
 
-    if hass.data.get("bps_initialized", False):
-        _LOGGER.debug("BPS already initialized in current runtime; skipping duplicate init.")
+    if hass.data.get("sextant_initialized", False):
+        _LOGGER.debug("Sextant already initialized in current runtime; skipping duplicate init.")
         return True  # Abort if already running
 
-    hass.data["bps_initialized"] = True  # Set flag
+    hass.data["sextant_initialized"] = True  # Set flag
 
-    async def initialize_bps():
-        """Initialize the BPS component"""
-        _LOGGER.info("Initializing BPS...")
+    async def initialize_sextant():
+        """Initialize the Sextant component"""
+        _LOGGER.info("Initializing Sextant...")
 
-        if "bps_views_registered" not in hass.data:
-            hass.http.register_view(BPSFrontendView())
-            hass.http.register_view(BPSSaveAPIText())
-            hass.http.register_view(BPSMapsListAPI())
-            hass.http.register_view(BPSTrackerIconsListAPI())
-            hass.http.register_view(BPSUploadTrackerIconAPI())
-            hass.http.register_view(BPSReadAPIText())
-            hass.http.register_view(BPSAdjustZonesAPI())
-            hass.http.register_view(BPSReceiverStatusAPI())
-            hass.http.register_view(BPSScannerLinkingAPI())
-            hass.http.register_view(BPSCordsAPI(hass))
-            hass.http.register_view(BPSCalibrationAPI())
-            hass.http.register_view(BPSSelfTestAPI(hass))
-            hass.http.register_view(BPSTrackerTuneAPI())
-            hass.http.register_view(BPSHistoryAPI(hass))
-            hass.data["bps_views_registered"] = True
+        if "sextant_views_registered" not in hass.data:
+            hass.http.register_view(SextantFrontendView())
+            hass.http.register_view(SextantSaveAPIText())
+            hass.http.register_view(SextantMapsListAPI())
+            hass.http.register_view(SextantTrackerIconsListAPI())
+            hass.http.register_view(SextantUploadTrackerIconAPI())
+            hass.http.register_view(SextantReadAPIText())
+            hass.http.register_view(SextantAdjustZonesAPI())
+            hass.http.register_view(SextantReceiverStatusAPI())
+            hass.http.register_view(SextantScannerLinkingAPI())
+            hass.http.register_view(SextantCordsAPI(hass))
+            hass.http.register_view(SextantCalibrationAPI())
+            hass.http.register_view(SextantSelfTestAPI(hass))
+            hass.http.register_view(SextantTrackerTuneAPI())
+            hass.http.register_view(SextantHistoryAPI(hass))
+            hass.data["sextant_views_registered"] = True
 
-        if "bps_services_registered" not in hass.data:
+        if "sextant_services_registered" not in hass.data:
             _register_calibration_services(hass)
-            hass.data["bps_services_registered"] = True
+            hass.data["sextant_services_registered"] = True
         _register_websocket(hass)
 
         config_path = hass.config.path()
-        target_dir = os.path.join(config_path, "www", "bps_maps")
-        tracker_icons_dir = os.path.join(config_path, "www", "bps_icons")
+        target_dir = os.path.join(config_path, "www", "sextant_maps")
+        tracker_icons_dir = os.path.join(config_path, "www", "sextant_icons")
 
         try:
             await aiofiles.os.makedirs(target_dir, exist_ok=True)
@@ -3114,23 +3115,23 @@ async def async_setup(hass, config):
         global secToUpdate
         secToUpdate = update_interval
         panels = hass.data.get("frontend_panels", {})
-        if "bps" in panels:
-            async_remove_panel(hass, "bps")
+        if "sextant" in panels:
+            async_remove_panel(hass, "sextant")
 
         if show_sidebar_panel:
             try:
-                _LOGGER.debug("Registering the custom panel for BPS...")
+                _LOGGER.debug("Registering the custom panel for Sextant...")
                 # A custom panel (not a bare iframe) so the panel element
                 # receives `hass` and can hand the app an HA access token to
-                # authenticate its /api/bps/* calls (those views now require
-                # auth). The element (bps-panel.js) still hosts the existing
+                # authenticate its /api/sextant/* calls (those views now require
+                # auth). The element (sextant-panel.js) still hosts the existing
                 # app in an inner iframe and only couriers the token in.
                 await panel_custom.async_register_panel(
                     hass,
-                    frontend_url_path="bps",
-                    webcomponent_name="bps-panel",
-                    module_url="/bps/bps-panel.js",
-                    sidebar_title="BPS-Optimized",
+                    frontend_url_path="sextant",
+                    webcomponent_name="sextant-panel",
+                    module_url="/sextant/sextant-panel.js",
+                    sidebar_title="Sextant",
                     sidebar_icon="mdi:map",
                     require_admin=False,
                     embed_iframe=False,
@@ -3139,13 +3140,14 @@ async def async_setup(hass, config):
             except Exception as e:
                 _LOGGER.error(f"Failed to register panel: {e}")
         else:
-            _LOGGER.info("BPS sidebar panel is disabled by integration options.")
+            _LOGGER.info("Sextant sidebar panel is disabled by integration options.")
 
-        # Move any legacy www/bps_maps flat files into the Store (once), then
+        # Move any legacy www/sextant_maps flat files into the Store (once), then
         # load the layout into the in-memory cache. Store writes are atomic, so
         # a crash can no longer leave a 0-byte layout (issue #104).
+        await migrate_from_bps(hass)
         await migrate_legacy(hass)
-        await load_bps_data(hass)
+        await load_layout(hass)
         # One-time (and thereafter incremental) migration: identify placed
         # receivers by scanner address rather than by slug alone.
         try:
@@ -3156,21 +3158,21 @@ async def async_setup(hass, config):
         # retained window back before the tracking loop starts appending.
         await restore_position_history(hass)
 
-        old_task = hass.data.get("bps_update_task")
+        old_task = hass.data.get("sextant_update_task")
         if old_task:
             old_task.cancel()
-        hass.data["bps_update_task"] = hass.async_create_task(update_tracked_entities(hass))
+        hass.data["sextant_update_task"] = hass.async_create_task(update_tracked_entities(hass))
 
         async def handle_homeassistant_stop(event):
             """Stop background work promptly so shutdown cannot drag or leave
             the unload half-done (which strands stale registry entries)."""
-            update_task = hass.data.pop("bps_update_task", None)
+            update_task = hass.data.pop("sextant_update_task", None)
             if update_task:
                 update_task.cancel()
             try:
                 await flush_position_history(hass)
             except Exception as e:
-                _LOGGER.debug("BPS position history final flush failed: %s", e)
+                _LOGGER.debug("Sextant position history final flush failed: %s", e)
             await async_shutdown_calibration(hass)
 
         hass.bus.async_listen_once("homeassistant_stop", handle_homeassistant_stop)
@@ -3178,14 +3180,14 @@ async def async_setup(hass, config):
         await async_restore_calibration_state(hass)
         await async_start_auto_if_enabled(hass)
 
-        _LOGGER.info("The BPS integration is fully initialized")
+        _LOGGER.info("The Sextant integration is fully initialized")
 
     async def handle_homeassistant_started(event):
         """Handles the 'homeassistant_started' event"""
-        await initialize_bps()
+        await initialize_sextant()
 
     if hass.is_running:
-        await initialize_bps()
+        await initialize_sextant()
     else:
         hass.bus.async_listen_once("homeassistant_started", handle_homeassistant_started)
 
@@ -3195,7 +3197,7 @@ async def async_unload_entry(hass: HomeAssistant, entry):
     """Remove a configuration entry"""
     _LOGGER.info("Attempting to offload platforms for entry: %s", entry.entry_id)
 
-    state_listener_unsub = hass.data.pop("bps_state_listener_unsub", None)
+    state_listener_unsub = hass.data.pop("sextant_state_listener_unsub", None)
     if state_listener_unsub:
         state_listener_unsub()
 
@@ -3206,16 +3208,16 @@ async def async_unload_entry(hass: HomeAssistant, entry):
     try:
         await flush_position_history(hass)
     except Exception as e:
-        _LOGGER.debug("BPS position history flush on unload failed: %s", e)
+        _LOGGER.debug("Sextant position history flush on unload failed: %s", e)
 
-    cleanup_legacy_bps_registry_and_states(hass)
+    cleanup_legacy_sextant_registry_and_states(hass)
 
     entity_registry = er.async_get(hass)
 
-    # Find and remove all entities that belong to "bps"
+    # Find and remove all entities that belong to "sextant"
     entities_to_remove = [
         entity.entity_id for entity in entity_registry.entities.values()
-        if entity.platform == "bps"
+        if entity.platform == "sextant"
     ]
 
     for entity_id in entities_to_remove:
@@ -3233,31 +3235,31 @@ async def async_unload_entry(hass: HomeAssistant, entry):
         return False
 
     try: #Remove the frontend panel
-        async_remove_panel(hass, frontend_url_path="bps")
+        async_remove_panel(hass, frontend_url_path="sextant")
         _LOGGER.info("Frontend-panel removed for entry: %s", entry.entry_id)
     except Exception as e:
         _LOGGER.error(f"Error when removing frontend-panel for entry {entry.entry_id}: {e}")
         return False
 
-    update_task = hass.data.pop("bps_update_task", None)
+    update_task = hass.data.pop("sextant_update_task", None)
     if update_task:
         update_task.cancel()
 
     await async_shutdown_calibration(hass)
 
-    # Remove BPS states from the state machine when integration is unloaded.
-    bps_state_ids = [
+    # Remove Sextant states from the state machine when integration is unloaded.
+    sextant_state_ids = [
         state.entity_id
         for state in hass.states.async_all()
         if state.entity_id.startswith("sensor.")
-        and state.entity_id.endswith(("_bps_zone", "_bps_floor", "_bps_nearest_zone", "_bps_sub_zone"))
+        and state.entity_id.endswith(("_sextant_zone", "_sextant_floor", "_sextant_nearest_zone", "_sextant_sub_zone"))
     ]
-    for entity_id in bps_state_ids:
+    for entity_id in sextant_state_ids:
         hass.states.async_remove(entity_id)
 
     # Allow clean setup after integration reload/removal.
-    hass.data.pop("bps_initialized", None)
-    hass.data.pop("bps_sensors", None)
+    hass.data.pop("sextant_initialized", None)
+    hass.data.pop("sextant_sensors", None)
 
     return True
 
@@ -3265,11 +3267,11 @@ async def async_unload_entry(hass: HomeAssistant, entry):
 async def async_setup_entry(hass, entry):
     """Set the integration from a configuration entry"""
     _LOGGER.info("async_setup_entry called")
-    cleanup_legacy_bps_registry_and_states(hass)
+    cleanup_legacy_sextant_registry_and_states(hass)
     await hass.config_entries.async_forward_entry_setups(entry, ["sensor"])
     entry.async_on_unload(entry.add_update_listener(async_update_options))
 
-    """Set up BPS from a config entry."""
+    """Set up Sextant from a config entry."""
     return await async_setup(hass, entry)
 
 
@@ -3277,15 +3279,23 @@ async def async_update_options(hass, entry):
     """Reload integration when options are updated."""
     await hass.config_entries.async_reload(entry.entry_id)
 
-class BPSFrontendView(HomeAssistantView):
+class SextantFrontendView(HomeAssistantView):
     """Serve the frontend files."""
 
-    url = "/bps/{file_name}"
-    name = "bps:frontend"
+    url = "/sextant/{file_name}"
+    name = "sextant:frontend"
     requires_auth = False
+    # Dashboards from before the rename still load the card from /bps/.
+    extra_urls = ["/bps/{file_name}"]
+    _RENAMED_FILES = {
+        "bps-map-card.js": "sextant-map-card.js",
+        "bps-panel.js": "sextant-panel.js",
+        "bpsstyle.css": "sextant.css",
+    }
 
     async def get(self, request, file_name):
         """Serve static files from the frontend folder."""
+        file_name = self._RENAMED_FILES.get(file_name, file_name)
         frontend_path = FRONTEND_PATH / file_name
 
         _LOGGER.info(f"Serving file: {frontend_path}")
@@ -3301,7 +3311,7 @@ class BPSFrontendView(HomeAssistantView):
         # copy but forces revalidation (a cheap 304 when unchanged, the new file
         # when it changed), so updates show up on a normal reload.
         response.headers["Cache-Control"] = "no-cache"
-        # bps-panel.js is loaded as an ES module (panel_custom), and browsers
+        # sextant-panel.js is loaded as an ES module (panel_custom), and browsers
         # refuse a module served with a non-JS MIME type. Force it rather than
         # trust the host's mimetypes registry (a Windows HA host can map .js to
         # text/plain, which would silently blank the panel).
@@ -3309,11 +3319,11 @@ class BPSFrontendView(HomeAssistantView):
             response.headers["Content-Type"] = "text/javascript"
         return response
 
-class BPSSaveAPIText(HomeAssistantView):
-    """Handle saving of BPS coordinates to a text file."""
+class SextantSaveAPIText(HomeAssistantView):
+    """Handle saving of Sextant coordinates to a text file."""
 
-    url = "/api/bps/save_text"
-    name = "api:bps:save_text"
+    url = "/api/sextant/save_text"
+    name = "api:sextant:save_text"
     requires_auth = True
 
     async def post(self, request):
@@ -3331,12 +3341,12 @@ class BPSSaveAPIText(HomeAssistantView):
         except (ValueError, TypeError):
             return web.Response(status=400, text="Coordinates must be valid JSON")
 
-        maps_path = hass.config.path("www/bps_maps")
+        maps_path = hass.config.path("www/sextant_maps")
 
         try: # Persist the layout to the store + handle map upload/removal
             # Serialized with the calibration writers so read-modify-write
             # cycles on the layout cannot interleave.
-            async with BPS_FILE_LOCK:
+            async with LAYOUT_LOCK:
                 error = await self._write_save(hass, maps_path, data, coords_obj)
             if error is not None:
                 return error
@@ -3398,7 +3408,7 @@ class BPSSaveAPIText(HomeAssistantView):
                 _LOGGER.error(f"Failed to save maps: {e}")
                 return web.Response(status=500, text="Failed to save maps")
 
-        await save_bps_data(hass, coords_obj)
+        await save_layout(hass, coords_obj)
 
         # Never delete the map we just wrote (a replace with the same filename).
         if remove_target is not None and remove_target != map_target and remove_target.exists():
@@ -3411,7 +3421,7 @@ class BPSSaveAPIText(HomeAssistantView):
         return None
 
 
-class BPSAdjustZonesAPI(HomeAssistantView):
+class SextantAdjustZonesAPI(HomeAssistantView):
     """Propose a cleaned-up set of zones (square boxy rooms, snap shared
     boundaries incl. T-junctions, remove overlaps, re-clamp sub-zones).
 
@@ -3420,8 +3430,8 @@ class BPSAdjustZonesAPI(HomeAssistantView):
     user accept/reject, then persists via the existing save_text endpoint.
     """
 
-    url = "/api/bps/adjust_zones"
-    name = "api:bps:adjust_zones"
+    url = "/api/sextant/adjust_zones"
+    name = "api:sextant:adjust_zones"
     requires_auth = True
 
     async def post(self, request):
@@ -3457,11 +3467,11 @@ class BPSAdjustZonesAPI(HomeAssistantView):
         return web.json_response(result)
 
 
-class BPSReadAPIText(HomeAssistantView):
-    """Return the stored BPS layout plus the tracked-device / receiver lists."""
+class SextantReadAPIText(HomeAssistantView):
+    """Return the stored Sextant layout plus the tracked-device / receiver lists."""
 
-    url = "/api/bps/read_text"
-    name = "api:bps:read_text"
+    url = "/api/sextant/read_text"
+    name = "api:sextant:read_text"
     requires_auth = True
 
     async def get(self, request):
@@ -3488,7 +3498,7 @@ class BPSReadAPIText(HomeAssistantView):
             # The layout now lives in the Store; a fresh install has none, and
             # the frontend's `if (data.coordinates)` guard expects "" (not "[]")
             # in that case so it never JSON.parses an empty layout.
-            layout = get_bps_data(hass)
+            layout = get_layout(hass)
             content = json.dumps(layout) if layout else ""
             return web.json_response({
                 "coordinates": content,
@@ -3505,10 +3515,10 @@ class BPSReadAPIText(HomeAssistantView):
             _LOGGER.error(f"Failed to read coordinates: {e}")
             return web.Response(status=500, text="Failed to read coordinates")
 
-class BPSReceiverStatusAPI(HomeAssistantView):
+class SextantReceiverStatusAPI(HomeAssistantView):
     """Current offline receivers (Bermuda liveness), polled live by the panel."""
-    url = "/api/bps/receiver_status"
-    name = "api:bps:receiver_status"
+    url = "/api/sextant/receiver_status"
+    name = "api:sextant:receiver_status"
     requires_auth = True
 
     async def get(self, request):
@@ -3517,19 +3527,19 @@ class BPSReceiverStatusAPI(HomeAssistantView):
         return web.json_response({"offline": list(offline)})
 
 
-class BPSScannerLinkingAPI(HomeAssistantView):
+class SextantScannerLinkingAPI(HomeAssistantView):
     """On-demand debug view (issue #64): how each placed receiver links to its
     Bermuda distance sensors and whether each is reporting right now. Fetched
     live only when the panel's 'Scanner linking' section is expanded, so it
     never adds cost to a normal panel load or the tracking loop."""
-    url = "/api/bps/scanner_linking"
-    name = "api:bps:scanner_linking"
+    url = "/api/sextant/scanner_linking"
+    name = "api:sextant:scanner_linking"
     requires_auth = True
 
     async def get(self, request):
         hass = request.app["hass"]
         # No placements to compare against is fine; still report the sensors.
-        layout = get_bps_data(hass)
+        layout = get_layout(hass)
         content = json.dumps(layout) if layout else ""
         try:
             data = _scanner_linking(hass, content)
@@ -3544,10 +3554,10 @@ class BPSScannerLinkingAPI(HomeAssistantView):
         return web.json_response(data)
 
 
-class BPSMapsListAPI(HomeAssistantView):
-    """API to list map files in /www/bps_maps."""
-    url = "/api/bps/maps"
-    name = "api:bps:maps"
+class SextantMapsListAPI(HomeAssistantView):
+    """API to list map files in /www/sextant_maps."""
+    url = "/api/sextant/maps"
+    name = "api:sextant:maps"
     requires_auth = True
 
     @staticmethod
@@ -3563,7 +3573,7 @@ class BPSMapsListAPI(HomeAssistantView):
     async def get(self, request):
         """Return a list of map files as JSON."""
         hass = request.app["hass"]
-        maps_path = hass.config.path("www/bps_maps")
+        maps_path = hass.config.path("www/sextant_maps")
 
         try:
             file_names = await hass.async_add_executor_job(self._list_map_files, maps_path)
@@ -3573,11 +3583,11 @@ class BPSMapsListAPI(HomeAssistantView):
             return web.Response(status=500, text="Error listing map files")
 
 
-class BPSTrackerIconsListAPI(HomeAssistantView):
+class SextantTrackerIconsListAPI(HomeAssistantView):
     """API to list tracker icon files."""
 
-    url = "/api/bps/tracker_icons"
-    name = "api:bps:tracker_icons"
+    url = "/api/sextant/tracker_icons"
+    name = "api:sextant:tracker_icons"
     requires_auth = True
 
     @staticmethod
@@ -3586,19 +3596,19 @@ class BPSTrackerIconsListAPI(HomeAssistantView):
             return []
         with os.scandir(icons_path) as entries:
             return [
-                {"value": f"/local/bps_icons/{entry.name}", "label": entry.name}
+                {"value": f"/local/sextant_icons/{entry.name}", "label": entry.name}
                 for entry in entries
                 if entry.is_file() and entry.name.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".svg"))
             ]
 
     async def get(self, request):
         hass = request.app["hass"]
-        icons_path = hass.config.path("www/bps_icons")
+        icons_path = hass.config.path("www/sextant_icons")
         try:
             custom_icons = await hass.async_add_executor_job(self._list_tracker_icons, icons_path)
             defaults = [
-                {"value": "/bps/person.svg", "label": "Person (default)"},
-                {"value": "/bps/beacon.svg", "label": "Beacon"},
+                {"value": "/sextant/person.svg", "label": "Person (default)"},
+                {"value": "/sextant/beacon.svg", "label": "Beacon"},
             ]
             return web.json_response(defaults + custom_icons)
         except Exception as e:
@@ -3606,11 +3616,11 @@ class BPSTrackerIconsListAPI(HomeAssistantView):
             return web.Response(status=500, text="Error listing tracker icons")
 
 
-class BPSUploadTrackerIconAPI(HomeAssistantView):
+class SextantUploadTrackerIconAPI(HomeAssistantView):
     """API to upload custom tracker icons."""
 
-    url = "/api/bps/upload_tracker_icon"
-    name = "api:bps:upload_tracker_icon"
+    url = "/api/sextant/upload_tracker_icon"
+    name = "api:sextant:upload_tracker_icon"
     requires_auth = True
 
     async def post(self, request):
@@ -3624,7 +3634,7 @@ class BPSUploadTrackerIconAPI(HomeAssistantView):
         if not safe_name:
             return web.Response(status=400, text="Invalid filename")
 
-        icons_path = hass.config.path("www/bps_icons")
+        icons_path = hass.config.path("www/sextant_icons")
         try:
             await aiofiles.os.makedirs(icons_path, exist_ok=True)
             target_path = Path(icons_path) / safe_name
@@ -3635,16 +3645,16 @@ class BPSUploadTrackerIconAPI(HomeAssistantView):
             return web.Response(status=500, text="Failed to upload icon")
 
         return web.json_response({
-            "icon_url": f"/local/bps_icons/{safe_name}",
+            "icon_url": f"/local/sextant_icons/{safe_name}",
             "icon_name": safe_name,
         })
 
 
-class BPSCordsAPI(HomeAssistantView):
+class SextantCordsAPI(HomeAssistantView):
     """API endpoint that returns apitricords."""
 
-    url = "/api/bps/cords"
-    name = "api:bps:cords"
+    url = "/api/sextant/cords"
+    name = "api:sextant:cords"
     requires_auth = True
 
     def __init__(self, hass):
@@ -3826,7 +3836,7 @@ def trilaterate(known_points, bounds=None, min_weight_radius=1e-3, stable_hint=N
 # no motion to smooth or stale readings to reject), and it is an OPTIMISTIC
 # bound on real tracker accuracy: calibration is fit on these very inter-receiver
 # links, and receiver-to-receiver paths (ceiling height, clean line of sight)
-# are easier than a body-worn beacon's. Consumed by tools/bps_eval.py `selftest`.
+# are easier than a body-worn beacon's. Consumed by tools/sextant_eval.py `selftest`.
 SELFTEST_MIN_SAMPLES = 3  # need a median over at least this many raw distances
 SELFTEST_SENSOR_INTERVAL = 1800  # refresh the accuracy sensor every 30 min
 
@@ -3890,7 +3900,7 @@ def _selftest_floor_bounds(coords, receivers):
 def run_selftest(hass, samples=None):
     """Leave-one-out receiver self-localization accuracy against known positions.
 
-    Solves on the RAW inter-receiver distances BPS collects for calibration
+    Solves on the RAW inter-receiver distances Sextant collects for calibration
     (median per link), not the Bermuda-filtered distance sensor the live tracker
     reads — so the numbers also exclude Bermuda's own smoothing.
 
@@ -3900,7 +3910,7 @@ def run_selftest(hass, samples=None):
     thread would race ("deque mutated during iteration"). Defaults to the live
     samples for direct/synchronous callers.
     """
-    coords = get_bps_data(hass)
+    coords = get_layout(hass)
     receivers = _selftest_receivers(coords)
     floor_bounds = _selftest_floor_bounds(coords, receivers)
     if samples is None:
@@ -3966,7 +3976,7 @@ def _selftest_summary(result):
 
     State is CEP95 in metres (lower is better), or None (-> "unknown") when no
     receiver was solvable. Attributes stay compact (no per-receiver list) so
-    they don't bloat recorder history; the full detail is on /api/bps/selftest.
+    they don't bloat recorder history; the full detail is on /api/sextant/selftest.
     """
     recv = [r for r in result.get("receivers", []) if isinstance(r.get("error_m"), (int, float))]
     counts = result.get("counts", {})
@@ -3993,7 +4003,7 @@ def _selftest_summary(result):
     return attrs["cep95_m"], attrs
 
 
-class BPSTrackerTuneAPI(HomeAssistantView):
+class SextantTrackerTuneAPI(HomeAssistantView):
     """Set one tracker's ref-power trim and apply it immediately (issue #92).
 
     The panel's "Save Floor Plan" writes the WHOLE layout, so it can't be used
@@ -4004,8 +4014,8 @@ class BPSTrackerTuneAPI(HomeAssistantView):
     for — while the panel keeps its own copy in sync so a later full save agrees.
     """
 
-    url = "/api/bps/tracker_tune"
-    name = "api:bps:tracker_tune"
+    url = "/api/sextant/tracker_tune"
+    name = "api:sextant:tracker_tune"
     requires_auth = True
 
     async def post(self, request):
@@ -4046,8 +4056,8 @@ class BPSTrackerTuneAPI(HomeAssistantView):
                 )
             offset = value
 
-        async with BPS_FILE_LOCK:
-            coords = get_bps_data_for_edit(hass)
+        async with LAYOUT_LOCK:
+            coords = get_layout_for_edit(hass)
             if not isinstance(coords, dict):
                 return web.json_response({"error": "No layout saved yet"}, status=400)
             offsets = coords.get("tracker_ref_offsets")
@@ -4058,7 +4068,7 @@ class BPSTrackerTuneAPI(HomeAssistantView):
             else:
                 offsets[entity] = offset
             coords["tracker_ref_offsets"] = offsets
-            await save_bps_data(hass, coords)
+            await save_layout(hass, coords)
 
         applied = 0.0 if offset is None else offset
         return web.json_response({
@@ -4074,7 +4084,7 @@ HISTORY_DEFAULT_POINTS = 3000
 HISTORY_MAX_QUERY_POINTS = 20000
 
 
-class BPSHistoryAPI(HomeAssistantView):
+class SextantHistoryAPI(HomeAssistantView):
     """Past positions of a tracked device, for the map's time scrubber.
 
     GET with no ``entity`` returns the index (what is retained, for whom, plus
@@ -4087,8 +4097,8 @@ class BPSHistoryAPI(HomeAssistantView):
     and a re-exported floor plan does not misplace the past.
     """
 
-    url = "/api/bps/history"
-    name = "api:bps:history"
+    url = "/api/sextant/history"
+    name = "api:sextant:history"
     requires_auth = True
 
     def __init__(self, hass):
@@ -4108,7 +4118,7 @@ class BPSHistoryAPI(HomeAssistantView):
     async def get(self, request):
         hass = self.hass
         hist = get_position_history(hass)
-        hist.configure(history_mod.history_config(get_bps_data(hass)))
+        hist.configure(history_mod.history_config(get_layout(hass)))
         # Drop anything now outside the window before answering: record() only
         # ages the tracker it touched, so a device that stopped reporting would
         # otherwise still be served long past the configured retention.
@@ -4188,11 +4198,11 @@ class BPSHistoryAPI(HomeAssistantView):
         return web.json_response({"cleared": entity or "*", "removed": removed})
 
 
-class BPSSelfTestAPI(HomeAssistantView):
+class SextantSelfTestAPI(HomeAssistantView):
     """Read-only receiver leave-one-out self-localization accuracy (see run_selftest)."""
 
-    url = "/api/bps/selftest"
-    name = "api:bps:selftest"
+    url = "/api/sextant/selftest"
+    name = "api:sextant:selftest"
     requires_auth = True
 
     def __init__(self, hass):

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""BPS positioning evaluation harness.
+"""Sextant positioning evaluation harness.
 
-Record what BPS actually publishes, then score it, so a change to the
+Record what Sextant actually publishes, then score it, so a change to the
 positioning pipeline can be judged on numbers instead of vibes. The v1.4.0
 Kalman filter and the v1.7.0 slant correction both shipped unmeasured; this
 tool is the guardrail for the precision/jumpiness work that follows.
@@ -11,10 +11,10 @@ that can reach it) and run with `python3` — no pip install.
 
 Three subcommands
 -----------------
-  record   Poll /api/bps/cords at ~1 Hz into a JSONL file, de-duplicating on
+  record   Poll /api/sextant/cords at ~1 Hz into a JSONL file, de-duplicating on
            each entry's `updated` stamp (a 1 Hz poll of a 1 Hz publisher
            otherwise aliases the same fix many times). Snapshots each floor's
-           pixel-per-metre scale from /api/bps/read_text once, so scoring can
+           pixel-per-metre scale from /api/sextant/read_text once, so scoring can
            report metres.
 
   score    Read a recording and print metrics per tracker: stationary scatter
@@ -26,7 +26,7 @@ Three subcommands
            solver vs. the filter. --baseline scores a second file alongside and
            prints the delta for A/B before/after runs.
 
-  selftest Ground-truthed accuracy with NO parked beacon: hits /api/bps/selftest,
+  selftest Ground-truthed accuracy with NO parked beacon: hits /api/sextant/selftest,
            which solves each receiver's position from the OTHERS' measured
            distances (leave-one-out, through the real solver + calibration) and
            compares to its known placed position. Reports CEP50/CEP95 error in
@@ -37,15 +37,15 @@ Three subcommands
 Typical use
 -----------
   # Park a beacon somewhere for 10+ minutes, then:
-  python3 bps_eval.py record --url http://homeassistant.local:8123 \
+  python3 sextant_eval.py record --url http://homeassistant.local:8123 \
       --token "$BPS_TOKEN" --out before.jsonl --duration 600
 
   # ...make ONE pipeline change, re-record after.jsonl the same way, then:
-  python3 bps_eval.py score after.jsonl --baseline before.jsonl
+  python3 sextant_eval.py score after.jsonl --baseline before.jsonl
 
 A long-lived access token (Profile -> Security -> Long-lived access tokens)
 is read from --token or the BPS_TOKEN environment variable. The tool only
-reads (/api/bps/cords, /api/bps/read_text); it never writes to HA.
+reads (/api/sextant/cords, /api/sextant/read_text); it never writes to HA.
 """
 import argparse
 import json
@@ -61,7 +61,7 @@ import urllib.request
 # HTTP (record)
 # --------------------------------------------------------------------------- #
 def _get(url, token, timeout=10):
-    """GET a BPS endpoint, returning parsed JSON or None on 404/no-data."""
+    """GET a Sextant endpoint, returning parsed JSON or None on 404/no-data."""
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -85,7 +85,7 @@ def _fetch_scales(base, token):
     """
     scales = {}
     try:
-        raw = _get(base + "/api/bps/read_text", token)
+        raw = _get(base + "/api/sextant/read_text", token)
     except Exception as e:  # noqa: BLE001 - scale is best-effort context
         print(f"warning: could not read layout for scales: {e}", file=sys.stderr)
         return scales
@@ -125,7 +125,7 @@ def cmd_record(args):
             while deadline is None or time.time() < deadline:
                 t = time.time()
                 try:
-                    rows = _get(base + "/api/bps/cords", token)
+                    rows = _get(base + "/api/sextant/cords", token)
                 except Exception as e:  # noqa: BLE001 - keep recording through blips
                     print(f"  poll error: {e}", file=sys.stderr)
                     rows = None
@@ -319,7 +319,7 @@ def score_recording(path, truth=None, waypoints=None):
 
 
 def selftest_stats(data):
-    """Aggregate a /api/bps/selftest response into headline accuracy numbers.
+    """Aggregate a /api/sextant/selftest response into headline accuracy numbers.
 
     Errors are already in metres (the backend divides by each floor's scale).
     """
@@ -459,7 +459,7 @@ def cmd_selftest(args):
     if not token:
         print("error: pass --token or set BPS_TOKEN", file=sys.stderr)
         return 2
-    data = _get(args.url.rstrip("/") + "/api/bps/selftest", token)
+    data = _get(args.url.rstrip("/") + "/api/sextant/selftest", token)
     if data is None:
         print("no self-test data (empty layout, or the endpoint returned nothing).", file=sys.stderr)
         return 1
@@ -482,10 +482,10 @@ def cmd_selftest(args):
 # --------------------------------------------------------------------------- #
 def build_parser():
     p = argparse.ArgumentParser(
-        description="BPS positioning evaluation harness (record + score).")
+        description="Sextant positioning evaluation harness (record + score).")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    r = sub.add_parser("record", help="poll /api/bps/cords into a JSONL file")
+    r = sub.add_parser("record", help="poll /api/sextant/cords into a JSONL file")
     r.add_argument("--url", required=True, help="HA base URL, e.g. http://homeassistant.local:8123")
     r.add_argument("--token", help="long-lived access token (or set BPS_TOKEN)")
     r.add_argument("--out", required=True, help="output JSONL path")

@@ -1,10 +1,10 @@
-"""Tests for the direct Bermuda data path (bps.bermuda_source).
+"""Tests for the direct Bermuda data path (sextant.bermuda_source).
 
-BPS used to source tracker<->receiver distances by scraping
+Sextant used to source tracker<->receiver distances by scraping
 ``sensor.<device>_distance_to_<scanner>`` out of the state machine, which
 forces every one of those entities to be enabled. These cover the replacement
 path that reads Bermuda's in-memory snapshot instead, and — importantly — that
-BPS still falls back to entity scraping when Bermuda's API is not available.
+Sextant still falls back to entity scraping when Bermuda's API is not available.
 
 Everything here is built from the live snapshot alone. An earlier version of
 this module (and these tests) mocked the entity registry too, on the theory
@@ -19,8 +19,8 @@ import json
 import sys
 import types
 
-import bps
-from bps import bermuda_source
+import sextant
+from sextant import bermuda_source
 
 from test_positioning import SCALE, run
 
@@ -258,7 +258,7 @@ def _run_radii_direct(monkeypatch, distance, age=1.0, max_age=None):
     data = {"floor": [{"name": "F", "scale": SCALE, "receivers": [rec]}]}
     if max_age is not None:
         data["reading_max_age"] = max_age
-    run(bps.update_receiver_radii(_NoStates(), {"entity": "phone", "data": data}))
+    run(sextant.update_receiver_radii(_NoStates(), {"entity": "phone", "data": data}))
     return rec
 
 
@@ -285,7 +285,7 @@ def test_direct_path_drops_receiver_when_bermuda_reports_no_distance(monkeypatch
 
     rec = {"entity_id": "probe", "cords": {"x": 0, "y": 0}, "distance": 9.9}
     data = {"floor": [{"name": "F", "scale": SCALE, "receivers": [rec]}]}
-    run(bps.update_receiver_radii(_NoStates(), {"entity": "phone", "data": data}))
+    run(sextant.update_receiver_radii(_NoStates(), {"entity": "phone", "data": data}))
 
     assert "distance" not in rec
 
@@ -304,7 +304,7 @@ def test_falls_back_to_entities_when_api_unavailable(monkeypatch):
 
     rec = {"entity_id": "probe", "cords": {"x": 0, "y": 0}}
     data = {"floor": [{"name": "F", "scale": SCALE, "receivers": [rec]}]}
-    run(bps.update_receiver_radii(Hass(), {"entity": "phone", "data": data}))
+    run(sextant.update_receiver_radii(Hass(), {"entity": "phone", "data": data}))
 
     assert abs(rec["distance"] - 2.3) < 1e-9
 
@@ -313,7 +313,7 @@ def test_falls_back_to_entities_when_api_unavailable(monkeypatch):
 
 
 def test_tracked_prefixes_come_from_bermuda_not_from_entities(monkeypatch):
-    """The regression that mattered: BPS decided what it could track by
+    """The regression that mattered: Sextant decided what it could track by
     enumerating distance ENTITIES, so with them disabled it found nothing and
     logged "no devices present to track". Discovery must follow Bermuda's own
     tracked flag instead."""
@@ -325,7 +325,7 @@ def test_tracked_prefixes_come_from_bermuda_not_from_entities(monkeypatch):
 def test_untracked_devices_are_not_offered(monkeypatch):
     """Bermuda knows about hundreds of transient MACs; only the ones the user
     configured it to track (create_sensor) get distance entities, and only
-    those should reach BPS."""
+    those should reach Sextant."""
     _install_bermuda_api(monkeypatch, _snapshot(tracked=False))
 
     assert bermuda_source.async_get_tracked_device_prefixes(object()) == set()
@@ -337,7 +337,7 @@ def test_renamed_device_is_never_offered_under_more_than_one_prefix(monkeypatch)
     name) used to have TWO device_prefixes in the entity registry pointing at
     the same physical device, since Bermuda's entity_ids are frozen at
     creation and never follow a later rename - which spawned a second,
-    duplicate BPS tracker for what is physically one device.
+    duplicate Sextant tracker for what is physically one device.
 
     Reading the prefix directly from the snapshot's CURRENT slug makes this
     structurally impossible rather than merely deduplicated after the fact:
@@ -379,14 +379,14 @@ def test_snapshot_distance_pairs_none_without_api(monkeypatch):
 
 
 def test_discovery_survives_with_an_empty_state_machine(monkeypatch):
-    """End-to-end through BPS's own helper: zero entities in hass.states, yet
+    """End-to-end through Sextant's own helper: zero entities in hass.states, yet
     the tracked device and its receiver slug are still discovered."""
     _install_bermuda_api(monkeypatch, _snapshot())
 
-    ids = bps._bermuda_distance_sensor_ids(_NoStates())
+    ids = sextant._bermuda_distance_sensor_ids(_NoStates())
     assert ids == ["sensor.phone_distance_to_probe"]
 
-    slugs, with_reading = bps._scanner_slugs_and_readings(_NoStates())
+    slugs, with_reading = sextant._scanner_slugs_and_readings(_NoStates())
     assert slugs == {"probe"}
     # "has a live reading" now means Bermuda reports a distance, not that an
     # entity state is non-unknown.
@@ -396,7 +396,7 @@ def test_discovery_survives_with_an_empty_state_machine(monkeypatch):
 def test_receiver_with_no_distance_is_not_counted_as_live(monkeypatch):
     _install_bermuda_api(monkeypatch, _snapshot(distance=None))
 
-    slugs, with_reading = bps._scanner_slugs_and_readings(_NoStates())
+    slugs, with_reading = sextant._scanner_slugs_and_readings(_NoStates())
     assert slugs == {"probe"}
     assert with_reading == set()
 
@@ -412,7 +412,7 @@ def test_scanner_linking_uses_live_readings_not_entity_state(monkeypatch):
     _install_bermuda_api(monkeypatch, _snapshot(distance=2.3))
     coordinates_json = _floor_json("probe")
 
-    result = bps._scanner_linking(_NoStates(), coordinates_json)
+    result = sextant._scanner_linking(_NoStates(), coordinates_json)
 
     assert len(result["placed"]) == 1
     row = result["placed"][0]
@@ -426,7 +426,7 @@ def test_scanner_linking_reports_silent_when_reading_times_out(monkeypatch):
     _install_bermuda_api(monkeypatch, _snapshot(distance=None))
     coordinates_json = _floor_json("probe")
 
-    result = bps._scanner_linking(_NoStates(), coordinates_json)
+    result = sextant._scanner_linking(_NoStates(), coordinates_json)
 
     assert result["placed"][0]["status"] == "silent"
 
@@ -435,7 +435,7 @@ def test_beacon_links_uses_live_readings_not_entity_state(monkeypatch):
     """Same data-source switch as the receivers view, for the beacons view."""
     _install_bermuda_api(monkeypatch, _snapshot(distance=2.3))
 
-    result = bps._beacon_links(_NoStates())
+    result = sextant._beacon_links(_NoStates())
 
     assert result == [{"device": "phone", "receivers": [{"scanner": "probe", "distance": 2.3, "unit": "m"}]}]
 

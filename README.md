@@ -1,24 +1,43 @@
-![BPS Logo](img/icon.png)
+![Sextant Logo](img/icon.png)
 
-# BLE Positioning System (BPS) — enhanced fork
+# Sextant — BLE indoor positioning for Home Assistant
 
-This is a fork of [**Hogster/BPS**](https://github.com/Hogster/BPS) that adds a
-large set of features and fixes on top of the original.
+Sextant takes the per-receiver distances that
+[Bermuda](https://github.com/agittins/bermuda) measures and turns them into a
+position on your floor plan: a room, a floor, a sub-zone, and a dot on a map.
+It began life as a fork of [Hogster/BPS](https://github.com/Hogster/BPS) via
+[maxi1134/BPS-improved](https://github.com/maxi1134/BPS-improved) and has since
+been rebuilt around Bermuda's snapshot API, a wall-clock stability model and a
+numpy solver. The name changed with version 3.0.0; see
+[Upgrading from BPS](#upgrading-from-bps) if you ran the old integration.
 
-**New here?** Read the upstream project first — this fork does not repeat it:
+**New here?** The upstream project's docs still describe the model well:
 
-- [**Upstream README**](https://github.com/Hogster/BPS/blob/main/README.md) — what
-  BPS is, how it trilaterates BLE distances into a position, and the Bermuda
-  dependency.
-- [**Upstream Wiki**](https://github.com/Hogster/BPS/wiki/) — the full setup
+- [**Upstream README**](https://github.com/Hogster/BPS/blob/main/README.md) — how
+  BLE distances become a position, and the Bermuda dependency.
+- [**Upstream Wiki**](https://github.com/Hogster/BPS/wiki/) — the setup
   walkthrough (placing receivers, defining zones, the Lovelace map card).
 
-Everything in the upstream docs still applies. This README documents **only what
-this fork changes or adds**.
+Full credit for the original integration goes to [@Hogster](https://github.com/Hogster)
+and [@maxi1134](https://github.com/maxi1134), and to
+[@agittins](https://github.com/agittins) for [Bermuda](https://github.com/agittins/bermuda),
+which Sextant builds on.
 
-Full credit for the original integration goes to [@Hogster](https://github.com/Hogster),
-and to [@agittins](https://github.com/agittins) for [Bermuda](https://github.com/agittins/bermuda),
-which BPS builds on.
+## Upgrading from BPS
+
+Sextant is a new integration domain (`sextant`), so the upgrade is a
+re-install rather than an update:
+
+1. Install Sextant from HACS (`davidcoulson/sextant`) and restart.
+2. Add the integration under **Settings → Devices & Services → Add Integration → Sextant**.
+   On first start it copies the old layout, calibration state, position history
+   and map images from where BPS kept them; nothing is deleted.
+3. Remove the old **BPS-Optimized** integration entry. Its sensors were named
+   `sensor.<device>_bps_zone`; Sextant publishes `sensor.<device>_sextant_zone`
+   (and `_floor`, `_nearest_zone`, `_sub_zone`), so update any automations.
+4. Services are now `sextant.*`, the panel is at `/sextant`, and the card type is
+   `custom:sextant-map-card`. Dashboards that still say `custom:bps-map-card`
+   and load the resource from `/bps/bps-map-card.js` keep working.
 
 ---
 
@@ -26,7 +45,7 @@ which BPS builds on.
 
 Positioning & sensors
 - [Nearest-zone sensor](#nearest-zone-sensor) — a room even when the fix is between zones.
-- [Per-device grouping](#per-device-grouping) — each device's BPS sensors live under their own HA device, nested beneath its Bermuda tracker.
+- [Per-device grouping](#per-device-grouping) — each device's Sextant sensors live under their own HA device, nested beneath its Bermuda tracker.
 - [Positions stay on the map](#positions-stay-on-the-map) — no more fixes flung into walls or off the plan.
 - [Away detection](#away-detection) — trackers disappear when nobody's home, instead of lingering forever.
 - [Reliable across reboots](#reliable-across-reboots) — sensors come back on their own after a restart.
@@ -64,9 +83,9 @@ The Lovelace card
 Install this fork through HACS as a custom repository:
 
 1. HACS → **Integrations** → ⋮ → **Custom repositories**.
-2. Repository: `maxi1134/BPS-improved`, Category: `Integration`. Click **Add**.
-3. Install **BLE Positioning System**, restart Home Assistant, then add the
-   integration under **Settings → Devices & Services → Add Integration → BPS**.
+2. Repository: `davidcoulson/sextant`, Category: `Integration`. Click **Add**.
+3. Install **Sextant**, restart Home Assistant, then add the
+   integration under **Settings → Devices & Services → Add Integration → Sextant**.
 
 Configure which Bluetooth devices to track through Bermuda, exactly as in the
 upstream docs.
@@ -91,38 +110,38 @@ Python environment.
 
 ## Nearest-zone sensor
 
-Each tracked device already exposes `sensor.<device>_bps_floor` and
-`sensor.<device>_bps_zone`. This fork adds a third:
+Each tracked device already exposes `sensor.<device>_sextant_floor` and
+`sensor.<device>_sextant_zone`. This fork adds a third:
 
-- **`sensor.<device>_bps_nearest_zone`** — always the *closest* zone on the
-  device's floor. Inside a zone it matches `_bps_zone`; it reads `unknown` when
+- **`sensor.<device>_sextant_nearest_zone`** — always the *closest* zone on the
+  device's floor. Inside a zone it matches `_sextant_zone`; it reads `unknown` when
   the device is out of range (no receiver currently measures a distance to it),
   or when the elected floor has no zones.
 
 The two zone sensors differ in how they handle a device that leaves:
-`_bps_nearest_zone` drops to `unknown` as soon as the device goes out of range
+`_sextant_nearest_zone` drops to `unknown` as soon as the device goes out of range
 (within ~30 s — Bermuda's distance timeout), a clean "which room is this person
-in, or is nobody home" signal to automate on. `_bps_zone` (and `_bps_floor`)
+in, or is nobody home" signal to automate on. `_sextant_zone` (and `_sextant_floor`)
 instead **keep their last value** through a grace period, so a brief detection
 gap doesn't blink someone out of their room — see [Away detection](#away-detection).
 
 (While the device is in range, a fix that lands between rooms is snapped back
 into the nearest zone before it's published — see [Positions stay on the
-map](#positions-stay-on-the-map) — so `_bps_zone` no longer flickers to
+map](#positions-stay-on-the-map) — so `_sextant_zone` no longer flickers to
 `unknown` from trilateration jitter.)
 
 ## Per-device grouping
 
-Every tracked device's BPS sensors — `_bps_zone`, `_bps_floor`,
-`_bps_nearest_zone`, and `_bps_sub_zone` — are grouped under **their own Home
-Assistant device**, named `<device> (BPS)`, instead of piling into one shared
-list. That BPS device is **nested under the matching Bermuda tracker device**
+Every tracked device's Sextant sensors — `_sextant_zone`, `_sextant_floor`,
+`_sextant_nearest_zone`, and `_sextant_sub_zone` — are grouped under **their own Home
+Assistant device**, named `<device> (Sextant)`, instead of piling into one shared
+list. That Sextant device is **nested under the matching Bermuda tracker device**
 (via `via_device`), so a device's positioning sensors sit alongside the rest of
 its entities.
 
-![The BPS integration page: one "(BPS)" device per tracked device, each holding that device's four positioning sensors](img/screenshots/per-device-grouping.png)
+![The Sextant integration page: one "(Sextant)" device per tracked device, each holding that device's four positioning sensors](img/screenshots/per-device-grouping.png)
 
-Only genuine Bermuda trackers get BPS sensors: entities from other integrations
+Only genuine Bermuda trackers get Sextant sensors: entities from other integrations
 that merely expose a `_distance_to_*` sensor (for example an mmWave presence
 sensor's `_distance_to_detection_object`) are no longer mistaken for trackers.
 
@@ -138,7 +157,7 @@ two ways:
 - A fix that still sits outside every zone is **snapped to the nearest point of
   the nearest zone** before it's published.
 
-The map card, `/api/bps/cords`, and the zone sensors all see the same corrected
+The map card, `/api/sextant/cords`, and the zone sensors all see the same corrected
 position.
 
 ## Away detection
@@ -148,19 +167,19 @@ position indefinitely, with the zone and floor sensors stuck at their last
 values.
 
 Now a tracker that **no receiver has detected for 5 minutes** disappears from
-the map, and its `_bps_zone`, `_bps_floor` and `_bps_nearest_zone` sensors go
+the map, and its `_sextant_zone`, `_sextant_floor` and `_sextant_nearest_zone` sensors go
 to `unknown`. It reappears on the first fix once it's back in range. Tune the
 grace period with a top-level `"position_timeout"` (seconds) in `bpsdata.txt`.
 
-(For a faster "out of range" signal, `_bps_nearest_zone` already reacts within
+(For a faster "out of range" signal, `_sextant_nearest_zone` already reacts within
 ~30 s — Bermuda's own distance timeout — while the map position keeps the
 5-minute grace so brief detection gaps don't blink people off the map.)
 
 ## Reliable across reboots
 
-BPS used to stop producing data after a full restart until you manually
+Sextant used to stop producing data after a full restart until you manually
 reloaded the integration. The sensors are now recreated correctly on boot even
-when their registry entries survived an unclean shutdown, and BPS cancels its
+when their registry entries survived an unclean shutdown, and Sextant cancels its
 background tasks promptly at shutdown so restarts stay clean.
 
 ---
@@ -169,7 +188,7 @@ background tasks promptly at shutdown so restarts stay clean.
 
 ![The Map & Setup tab: dark theme, grouped toolbar, tracking bar, zoomable map, and the zone-grouped sidebar](img/screenshots/panel-map-tab.png)
 
-The BPS side panel was reworked into a modern, dark-themed layout split across
+The Sextant side panel was reworked into a modern, dark-themed layout split across
 three tabs — **Map & Setup** (the floor plan, tools, and tracking), **Receiver
 Calibration** (the matrix, on its own tab so it no longer crowds the setup
 page), and **[Debugging](#debugging-tab)** (the full receiver-to-Bermuda linking
@@ -276,7 +295,7 @@ a reading nook — for when "which room" isn't precise enough.
   zones are (✎ pencil in the sidebar).
 - Sub-zones are listed under their parent in the sidebar, each with edit and delete
   buttons; deleting a zone removes its sub-zones with it.
-- Each tracked device gets a **`sensor.<device>_bps_sub_zone`** entity whose state
+- Each tracked device gets a **`sensor.<device>_sextant_sub_zone`** entity whose state
   is the sub-zone it is currently in (`unknown` when in none), with a
   **`parent_zone`** attribute naming the enclosing zone.
 - The Lovelace map card can draw sub-zones too — enable **Show sub-zones**
@@ -354,7 +373,7 @@ make those floors compete for the tracker.
 
 ## Debugging tab
 
-A third panel tab, **Debugging**, shows the full picture of how BPS is wired to
+A third panel tab, **Debugging**, shows the full picture of how Sextant is wired to
 Bermuda right now — the tool to reach for when a device won't place or a receiver
 seems ignored. It's a live snapshot; press **Refresh** to re-check. It has two
 sub-tabs, both laid out as tables.
@@ -415,7 +434,7 @@ esp32_ble_beacon:
   max_interval: 1000ms
 ```
 
-Nothing needs to be set up in Bermuda — BPS reads the probe-to-probe
+Nothing needs to be set up in Bermuda — Sextant reads the probe-to-probe
 measurements through the `bermuda.dump_devices` service.
 
 ### Running it
@@ -448,23 +467,23 @@ re-applying corrections whenever they shift by more than 1%. It keeps adapting
 as the environment changes (furniture moves, a probe is swapped, a door stays
 open). The toggle is stored in `bpsdata.txt` (alongside the corrections), while the
 latest solve and the rolling sample window are persisted separately in
-`bps_calibration_state.json`. So after a restart the toggle sticks, the matrix
+`sextant_calibration_state.json`. So after a restart the toggle sticks, the matrix
 reappears immediately, and the window resumes warm instead of rebuilding from
 zero.
 
 ### Writing corrections into Bermuda
 
 By default a solved correction is stored in this layout as a per-receiver
-distance multiplier, so it only helps BPS. A multiplier `c` is exactly an
+distance multiplier, so it only helps Sextant. A multiplier `c` is exactly an
 rssi offset of `-10 × attenuation × log10(c)` dB on the receiving scanner in
 Bermuda's path-loss model, and Bermuda already keeps a per-scanner offset
 map. With the tuning key `calibration_target` set to `bermuda`
-(`bps.set_tuning`), Apply and auto-calibration write the offsets into
+(`sextant.set_tuning`), Apply and auto-calibration write the offsets into
 Bermuda instead — live, and persisted without reloading Bermuda — so
-Bermuda's own area and distance sensors are corrected too, and BPS applies
+Bermuda's own area and distance sensors are corrected too, and Sextant applies
 nothing twice. Later solves see samples that already carry the offsets and
 fit the residual, which is added on; changes under 0.5 dB are ignored.
-Reset corrections restores whatever Bermuda had before BPS first touched
+Reset corrections restores whatever Bermuda had before Sextant first touched
 each scanner. Needs this fork's Bermuda `0.8.7-fork-testing.11` or later
 (the `rssi_offsets` API); without it, Apply refuses with a message rather
 than silently doing nothing.
@@ -476,7 +495,7 @@ every fix weighted equally, so the map always trailed a walking person by the
 same lag, still or moving. That average is replaced by a **constant-velocity
 Kalman filter** (the same family of filtering ESPresense and other BLE
 positioning projects apply to their signals, applied here at the position
-level, since Bermuda already smooths the distances BPS reads):
+level, since Bermuda already smooths the distances Sextant reads):
 
 - The filter carries a velocity estimate, so while you walk it **predicts along
   your motion** instead of dragging behind the average of old fixes — and while
@@ -542,7 +561,7 @@ receivers well calibrated (see [Receiver distances](#receiver-distances)).
 ## Position history
 
 Trace path only knows the tab you have open. **Position history** is the
-recorded version: BPS keeps every fix it publishes, so you can come back hours
+recorded version: Sextant keeps every fix it publishes, so you can come back hours
 or days later and ask *where was this device at 3 pm?*
 
 The scrubber sits **under the map**, shown by default — the **History** toggle
@@ -574,7 +593,7 @@ immediately.
 
 Some deliberate choices worth knowing:
 
-- The record is **BPS's own**, under `config/.storage/bps_history/`, not the
+- The record is **Sextant's own**, under `config/.storage/sextant_history/`, not the
   Home Assistant recorder. The recorder purges in whole days for the whole
   database, which cannot express "keep six hours of this"; and at roughly one
   fix per second per device it would add tens of megabytes a day to your
@@ -683,7 +702,7 @@ Which floor a tracker is on used to be decided by **one number**: the floor
 of the single receiver reporting the smallest distance. BLE passes straight
 through ceilings, so one noisy reading from the floor above could steal the
 tracker for a cycle — the kitchen ↔ bedroom flapping of
-[#94](https://github.com/maxi1134/BPS-improved/issues/94).
+[#94](https://github.com/davidcoulson/sextant/issues/94).
 
 The election is now a **competition between floors**, each judged on how
 well it explains *all* of its receivers (the way ESPresense scores its
@@ -713,7 +732,7 @@ per-floor scenarios) instead of on a single loudest reading:
   nearest — weighted by `floor_proximity_weight` (0.5 by default, 0 for a
   pure fit-quality election).
 - The probabilities are published per tracker (`floors` in
-  `/api/bps/cords`), so "why did it pick this floor" is now inspectable.
+  `/api/sextant/cords`), so "why did it pick this floor" is now inspectable.
 - Bonus: a tracker heard by too few receivers on the nearest floor but by
   three or more on another now gets a position instead of none.
 
@@ -724,7 +743,7 @@ of a **double-height foyer or great room open to the floor below**. Nothing
 can stand there — but the downstairs receivers hear a beacon in that shared
 air just fine, so the upper floor sometimes "wins" it and the tracker hovers
 in mid-air over the void
-([#60](https://github.com/maxi1134/BPS-improved/issues/60)).
+([#60](https://github.com/davidcoulson/sextant/issues/60)).
 
 Mark such a zone **no-go** with the no-entry button on its row in the Zones &
 Receivers sidebar. It draws as **grey hatched dead space** on the map, and in
@@ -750,7 +769,7 @@ The Lovelace map card can now draw your receivers (bluetooth proxies), colored
 by whether they're working:
 
 ```yaml
-type: custom:bps-map-card
+type: custom:sextant-map-card
 floor: first
 entities:
   - sensor.eriks_iphone_16
@@ -805,7 +824,7 @@ a slugified *device name*: rename the device, or let Bermuda append a MAC to
 disambiguate it, and the placement silently unlinked while the linking and
 calibration views guessed the match back. Each placement now also carries
 the scanner's Bluetooth **address** as its identity; the slug is just the
-label. On startup and every liveness tick BPS resolves any placement without
+label. On startup and every liveness tick Sextant resolves any placement without
 an address (by exact slug, then by the hardware token in the slug against
 the scanner's BLE address, wifi MAC and unique id) and refreshes the label
 of any placement whose scanner was renamed, so the panel, the map card,
@@ -823,7 +842,7 @@ install that was **30 zone changes per tracker-hour, 56 % of them A → B → A
 flips, at a median dwell of 21 s** — for trackers that were mostly not
 moving.
 
-The `*_bps_zone` sensor is now elected the way the floor is:
+The `*_sextant_zone` sensor is now elected the way the floor is:
 
 - **Membership, not a point test.** Samples on the position filter's error
   ellipse are attributed to zones, giving each zone a share; the shares are
@@ -839,8 +858,8 @@ The `*_bps_zone` sensor is now elected the way the floor is:
   toward the dwell, so the switch follows at once — or when the tracker is
   clearly moving again.
 
-`*_bps_nearest_zone` stays instantaneous for automations that want the raw
-answer, and `/api/bps/cords` carries `zone_raw` (the point's own zone),
+`*_sextant_nearest_zone` stays instantaneous for automations that want the raw
+answer, and `/api/sextant/cords` carries `zone_raw` (the point's own zone),
 `zone_locked` and `speed` per tracker. Sub-zones get the same dwell
 (`subzone_switch_secs`) and can only be published against their own parent
 zone. Set `zone_hysteresis` to false to publish the raw zone as before.
@@ -874,11 +893,11 @@ Bermuda's own distance. It is off by default so it can be A/B'd against the
 ## Tuning live
 
 Every knob above lives in a `tuning` map stored with the floor plan and is
-set through the `bps.set_tuning` action — never by editing `.storage/bps`
+set through the `sextant.set_tuning` action — never by editing `.storage/sextant`
 under a running Home Assistant, which is silently lost on the next save:
 
 ```yaml
-action: bps.set_tuning
+action: sextant.set_tuning
 data:
   settings:
     distance_estimator: median
@@ -891,7 +910,7 @@ Keys: `distance_estimator`, `median_window_secs`, `median_min_samples`,
 `zone_switch_secs`, `stationary_speed`, `stationary_secs`,
 `zone_unlock_margin`, `zone_unlock_secs`, `subzone_switch_secs`,
 `floor_switch_secs`, `floor_tenure_bonus`, `floor_tenure_full_secs`,
-`floor_proximity_weight`, `calibration_target` (`bps` or `bermuda`). An
+`floor_proximity_weight`, `calibration_target` (`sextant` or `bermuda`). An
 unknown key or an out-of-range value is refused with the allowed range;
 `reset: true` restores the defaults. Changes apply on the next cycle.
 
@@ -899,17 +918,17 @@ unknown key or an out-of-range value is refused with the allowed range;
 
 Positions and receiver health are pushed once per positioning cycle over
 Home Assistant's websocket, so a client can subscribe once instead of
-polling `/api/bps/cords`:
+polling `/api/sextant/cords`:
 
 ```js
 hass.connection.subscribeMessage(
   (event) => console.log(event.positions, event.offline_receivers),
-  { type: "bps/subscribe" },
+  { type: "sextant/subscribe" },
 );
 ```
 
 The first event arrives immediately with the current state; every later one
-follows a cycle. `positions` is exactly what `/api/bps/cords` returns. The
+follows a cycle. `positions` is exactly what `/api/sextant/cords` returns. The
 panel and the map card still poll today; the rebuilt UI subscribes.
 
 ## Measuring room stability
@@ -917,7 +936,7 @@ panel and the map card still poll today; the rebuilt UI subscribes.
 Positional error is hard to measure on a live install, but the thing
 automations actually suffer from is easy to measure: a tracker that is not
 moving must not change room. `tools/flap_kpi.py` reads the recorder history
-for every `*_bps_zone` and `*_bps_floor` sensor and reports, per sensor, the
+for every `*_sextant_zone` and `*_sextant_floor` sensor and reports, per sensor, the
 change rate per tracker-hour, the share of changes that are an A → B → A
 round trip (boundary flapping), the median dwell time, and how often the
 sensor went `unknown`.
@@ -930,18 +949,18 @@ python tools/flap_kpi.py --hours 12 --baseline before.json
 ```
 
 Run it before and after any positioning change on the same window length.
-That number is what every accuracy change should move; `tools/bps_eval.py`
+That number is what every accuracy change should move; `tools/sextant_eval.py`
 and the self-test sensor are the second opinion. `tools/kpi/` keeps saved
 runs from the reference install for comparison.
 
 ## Feedback & contributions
 
 Issues and pull requests for these additions are welcome on
-[maxi1134/BPS-improved](https://github.com/maxi1134/BPS-improved). For the core integration and
-general BPS discussion, see [Hogster/BPS](https://github.com/Hogster/BPS) and
+[davidcoulson/sextant](https://github.com/davidcoulson/sextant). For the core integration and
+general Sextant discussion, see [Hogster/BPS](https://github.com/Hogster/BPS) and
 the [Home Assistant Community thread](https://community.home-assistant.io/t/bps-the-indoor-precise-tracking-system/843429).
 
 This is teamwork on top of two great projects — [Bermuda](https://github.com/agittins/bermuda)
-by [@agittins](https://github.com/agittins) and [BPS](https://github.com/Hogster/BPS)
+by [@agittins](https://github.com/agittins) and [Sextant](https://github.com/Hogster/BPS)
 by [@Hogster](https://github.com/Hogster). Improving Bermuda's precision and
-stability benefits BPS directly.
+stability benefits Sextant directly.

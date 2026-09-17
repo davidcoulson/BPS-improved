@@ -1,7 +1,7 @@
-"""Persistent storage for BPS layout + calibration state.
+"""Persistent storage for Sextant layout + calibration state.
 
 The floor/zone/receiver layout and the calibration state used to live as flat
-files in ``www/bps_maps`` (``bpsdata.txt`` / ``bps_calibration_state.json``),
+files in ``www/sextant_maps`` (``bpsdata.txt`` / ``sextant_calibration_state.json``),
 written with ``open(path, "w")`` — which truncates to zero *before* writing, so
 an interrupted write left a 0-byte file and wiped the config (issue #104).
 Being under ``www/`` also made them readable unauthenticated via ``/local/``.
@@ -18,29 +18,36 @@ import json
 import logging
 from pathlib import Path
 
+import os
+import shutil
+
 import aiofiles
 import aiofiles.os
 from homeassistant.helpers.storage import Store
 
 _LOGGER = logging.getLogger(__name__)
 
-DOMAIN = "bps"
+DOMAIN = "sextant"
 STORAGE_VERSION = 1
-STORAGE_KEY_LAYOUT = "bps"                       # -> config/.storage/bps
-STORAGE_KEY_CALIB = "bps_calibration_state"      # -> config/.storage/bps_calibration_state
+STORAGE_KEY_LAYOUT = "sextant"                       # -> config/.storage/sextant
+STORAGE_KEY_CALIB = "sextant_calibration_state"      # -> config/.storage/sextant_calibration_state
 
 # Serializes read-modify-write sequences on the layout across every writer
 # (panel save + calibration). Lives here so both importers share one lock
 # without an import cycle (was previously defined in calibration.py).
-BPS_FILE_LOCK = asyncio.Lock()
+LAYOUT_LOCK = asyncio.Lock()
+
+# The integration was called "bps" before it became Sextant. Its Store keys,
+# history directory and maps directory all carried that name.
+LEGACY_DOMAIN = "bps"
 
 
 def _legacy_layout_path(hass) -> Path:
-    return Path(hass.config.path("www/bps_maps")) / "bpsdata.txt"
+    return Path(hass.config.path("www/sextant_maps")) / "bpsdata.txt"
 
 
 def _legacy_calib_path(hass) -> Path:
-    return Path(hass.config.path("www/bps_maps")) / "bps_calibration_state.json"
+    return Path(hass.config.path("www/sextant_maps")) / "sextant_calibration_state.json"
 
 
 def _bucket(hass) -> dict:
@@ -65,7 +72,7 @@ def _calib_store(hass) -> Store:
 
 # --- Layout (bpsdata) --------------------------------------------------------
 
-def get_bps_data(hass):
+def get_layout(hass):
     """The cached layout for READ-ONLY consumers.
 
     Defaults to ``[]`` on a fresh install, matching the old empty-file
@@ -74,7 +81,7 @@ def get_bps_data(hass):
     return _bucket(hass).get("layout", [])
 
 
-def get_bps_data_version(hass) -> int:
+def get_layout_version(hass) -> int:
     """Monotonic counter bumped every time the layout is (re)loaded or saved.
 
     Derived per-floor data compiled from the layout (e.g. shapely zone/sub-zone
@@ -86,22 +93,22 @@ def get_bps_data_version(hass) -> int:
     return _bucket(hass).get("layout_version", 0)
 
 
-def _bump_bps_data_version(hass) -> None:
+def _bump_layout_version(hass) -> None:
     _bucket(hass)["layout_version"] = _bucket(hass).get("layout_version", 0) + 1
 
 
-def get_bps_data_for_edit(hass):
+def get_layout_for_edit(hass):
     """A deep copy of the layout for read-modify-write callers (calibration).
 
     Returns ``None`` when there is no layout yet — matching the old
     ``_read_coords`` contract — so callers must never mutate the live cache
     the tracking loop reads.
     """
-    data = get_bps_data(hass)
+    data = get_layout(hass)
     return copy.deepcopy(data) if isinstance(data, dict) else None
 
 
-async def load_bps_data(hass):
+async def load_layout(hass):
     """Load the layout from the store into the in-memory cache (at setup).
 
     A corrupt/unreadable store must not abort setup — the old flat-file reader
@@ -113,11 +120,11 @@ async def load_bps_data(hass):
         _LOGGER.error("Could not load layout from storage; starting empty: %s", e)
         data = None
     _bucket(hass)["layout"] = data if data is not None else []
-    _bump_bps_data_version(hass)
+    _bump_layout_version(hass)
     return _bucket(hass)["layout"]
 
 
-async def save_bps_data(hass, data) -> None:
+async def save_layout(hass, data) -> None:
     """Persist the layout dict atomically, THEN refresh the cache.
 
     Uses ``async_save`` (immediate atomic write), never ``async_delay_save`` —
@@ -127,7 +134,7 @@ async def save_bps_data(hass, data) -> None:
     """
     await _layout_store(hass).async_save(data)
     _bucket(hass)["layout"] = data
-    _bump_bps_data_version(hass)
+    _bump_layout_version(hass)
 
 
 # --- Calibration state -------------------------------------------------------
@@ -171,15 +178,57 @@ async def _remove_legacy(path: Path) -> None:
             "removed by hand: %s", path.name, e)
 
 
+async def migrate_from_bps(hass) -> None:
+    """Copy everything the pre-rename "bps" integration kept, once.
+
+    Runs before ``migrate_legacy`` and only fills what is still empty, so a
+    fresh install and an already-migrated one are both no-ops. Everything is
+    copied rather than moved: rolling back to the old integration must still
+    find its data where it left it.
+    """
+    for store, old_key, label in (
+        (_layout_store(hass), LEGACY_DOMAIN, "layout"),
+        (_calib_store(hass), f"{LEGACY_DOMAIN}_calibration_state", "calibration state"),
+    ):
+        try:
+            if await store.async_load() is not None:
+                continue
+            old = await Store(hass, STORAGE_VERSION, old_key).async_load()
+        except Exception as e:
+            _LOGGER.warning("Could not read the %s while migrating from bps: %s", label, e)
+            continue
+        if old is None:
+            continue
+        await store.async_save(old)
+        _LOGGER.info("Copied the %s from .storage/%s (bps) into .storage/%s", label, old_key, store.key)
+
+    def _copy_dirs() -> list[str]:
+        copied = []
+        for old, new in (
+            (hass.config.path(f"www/{LEGACY_DOMAIN}_maps"), hass.config.path(f"www/{DOMAIN}_maps")),
+            (hass.config.path(".storage", f"{LEGACY_DOMAIN}_history"), hass.config.path(".storage", f"{DOMAIN}_history")),
+        ):
+            if os.path.isdir(old) and not os.path.exists(new):
+                shutil.copytree(old, new)
+                copied.append(new)
+        return copied
+
+    try:
+        for path in await hass.async_add_executor_job(_copy_dirs):
+            _LOGGER.info("Copied bps data directory to %s", path)
+    except Exception as e:
+        _LOGGER.warning("Could not copy bps data directories: %s", e)
+
+
 async def migrate_legacy(hass) -> None:
-    """Move the old ``www/bps_maps`` files into the store, once.
+    """Move the old ``www/sextant_maps`` files into the store, once.
 
     Idempotent: only runs while the store is still empty. For each file:
     a blank/whitespace file (the issue-#104 artifact — no recoverable data) is
     deleted; a corrupt-but-non-empty file is LEFT in place (may be
     hand-recoverable); a valid file is saved to the store, verified, and only
     then deleted — closing the ``/local/`` exposure. Map images stay in
-    ``www/bps_maps`` (served via ``/local/``) and are untouched.
+    ``www/sextant_maps`` (served via ``/local/``) and are untouched.
     """
     await _migrate_one(
         _layout_store(hass), _legacy_layout_path(hass), "layout",

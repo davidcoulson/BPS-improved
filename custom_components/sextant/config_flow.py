@@ -21,8 +21,8 @@ CONFIG_SCHEMA = vol.Schema(
     }
 )
 
-class BPSConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    """Handle a config flow for BPS."""
+class SextantConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+    """Handle a config flow for Sextant."""
 
     VERSION = 1
 
@@ -30,23 +30,23 @@ class BPSConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Handle the initial step."""
         await self.async_set_unique_id(DOMAIN)
         self._abort_if_unique_id_configured()
-        return self.async_create_entry(title="BPS-Optimized", data={})
+        return self.async_create_entry(title="Sextant", data={})
 
     @staticmethod
     @callback
     def async_get_options_flow(config_entry):
         """Create the options flow."""
-        return BPSOptionsFlow(config_entry)
+        return SextantOptionsFlow(config_entry)
 
 
-class BPSOptionsFlow(config_entries.OptionsFlow):
-    """Handle BPS options."""
+class SextantOptionsFlow(config_entries.OptionsFlow):
+    """Handle Sextant options."""
 
     def __init__(self, config_entry):
         self._config_entry = config_entry
 
     async def async_step_init(self, user_input=None):
-        """Manage the BPS options."""
+        """Manage the Sextant options."""
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 

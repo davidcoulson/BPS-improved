@@ -1,11 +1,11 @@
 """Bounded position history for tracked devices (the panel time scrubber).
 
-Why BPS keeps this itself rather than leaning on Home Assistant's recorder:
+Why Sextant keeps this itself rather than leaning on Home Assistant's recorder:
 the headline requirement is a CONFIGURABLE maximum span, and `purge_keep_days`
 is global, day-granularity and at least one day - you cannot keep six hours of
-BPS and ten days of everything else. Writing a 1 Hz position stream into the
+Sextant and ten days of everything else. Writing a 1 Hz position stream into the
 recorder would also add tens of megabytes a day to every install on upgrade,
-and BPS publishes no position entity today, so nothing is recorded anyway.
+and Sextant publishes no position entity today, so nothing is recorded anyway.
 
 Shape of the data: points are stored in METRES within their floor's frame plus
 the floor NAME, never in map pixels. Re-exporting a map image at a different
@@ -32,11 +32,11 @@ import math
 import os
 import time
 
-DOMAIN = "bps"
+DOMAIN = "sextant"
 
 # Sub-directory under config/.storage. NOT under www/: history must never be
 # web-served, the same reasoning that moved the layout out of www in #104.
-HISTORY_DIRNAME = "bps_history"
+HISTORY_DIRNAME = "sextant_history"
 
 # Defaults, all overridable per install from top-level layout keys.
 DEFAULT_MAX_AGE = 6 * 3600           # keep 6 h unless asked for more
