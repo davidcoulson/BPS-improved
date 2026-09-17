@@ -208,8 +208,10 @@ async def migrate_from_bps(hass) -> None:
             (hass.config.path(f"www/{LEGACY_DOMAIN}_maps"), hass.config.path(f"www/{DOMAIN}_maps")),
             (hass.config.path(".storage", f"{LEGACY_DOMAIN}_history"), hass.config.path(".storage", f"{DOMAIN}_history")),
         ):
-            if os.path.isdir(old) and not os.path.exists(new):
-                shutil.copytree(old, new)
+            # Setup creates the (empty) target directories before this runs,
+            # so "already there" means "has files", not "exists".
+            if os.path.isdir(old) and not (os.path.isdir(new) and os.listdir(new)):
+                shutil.copytree(old, new, dirs_exist_ok=True)
                 copied.append(new)
         return copied
 

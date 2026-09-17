@@ -215,3 +215,13 @@ def test_migrate_from_bps_survives_a_corrupt_old_store(tmp_path):
     run(st.migrate_from_bps(hass))          # must not raise
     assert "sextant" not in hass._store_backing
     assert hass._store_backing["sextant_calibration_state"] == {"auto_enabled": False}
+
+
+def test_migrate_from_bps_fills_a_target_dir_setup_already_created(tmp_path):
+    hass = make_hass(tmp_path)
+    _bps_dirs(hass)
+    Path(hass.config.path("www", "sextant_maps")).mkdir(parents=True)     # empty, as setup leaves it
+    Path(hass.config.path(".storage", "sextant_history")).mkdir(parents=True)
+    run(st.migrate_from_bps(hass))
+    assert (Path(hass.config.path("www", "sextant_maps")) / "ground.png").exists()
+    assert (Path(hass.config.path(".storage", "sextant_history")) / "primrose.jsonl").exists()
