@@ -150,7 +150,10 @@ set_tuning:
     zone_switch_margin, zone_switch_secs, stationary_speed, stationary_secs,
     zone_unlock_margin, zone_unlock_secs, subzone_switch_secs,
     floor_switch_secs, floor_tenure_bonus, floor_tenure_full_secs,
-    floor_proximity_weight, calibration_target ("sextant" or "bermuda"). An
+    floor_proximity_weight, calibration_target ("sextant" or "bermuda"),
+    position_estimator ("geometric", "fingerprint" or "fused"),
+    fingerprint_weight, fingerprint_floor_weight, fingerprint_k,
+    fingerprint_missing_m, fingerprint_ref_gain. An
     unknown key or an out-of-range value is refused with the allowed range.
   fields:
     settings:

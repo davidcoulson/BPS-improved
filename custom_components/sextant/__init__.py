@@ -64,6 +64,7 @@ from .storage import (
 from .const import ACCURACY_ENTITY_ID
 from . import history as history_mod
 from . import bermuda_source
+from . import fingerprint
 from .zone_adjust import adjust_zones, adjust_subzones
 
 _LOGGER = logging.getLogger(__name__)
@@ -352,7 +353,46 @@ TUNING_SPEC = {
     # (needs a Bermuda build with the rssi_offsets API), so Bermuda's own
     # area/distance sensors are corrected too and Sextant applies nothing twice.
     "calibration_target": ("sextant", str, ("sextant", "bermuda")),
+    # Fingerprint fusion (fingerprint.py). "geometric" is the trilateration
+    # alone. "fingerprint" places the tracker at the best-matching reference
+    # receivers and only falls back to the fit where no reference exists.
+    # "fused" blends both: the fix is (1 - fingerprint_weight) x geometric +
+    # fingerprint_weight x fingerprint, and each floor's election confidence
+    # is blended the same way with fingerprint_floor_weight. Either non-
+    # geometric mode also lets a floor with fewer than three receivers
+    # compete, on its fingerprint alone.
+    "position_estimator": ("geometric", str, ("geometric", "fingerprint", "fused")),
+    "fingerprint_weight": (0.5, float, 0.0, 1.0),
+    "fingerprint_floor_weight": (0.5, float, 0.0, 1.0),
+    "fingerprint_k": (3, int, 1, 8),                    # references averaged per fix
+    "fingerprint_missing_m": (12.0, float, 2.0, 50.0),  # "not heard" counts as this far
+    "fingerprint_ref_gain": (1.0, float, 0.25, 4.0),    # probe beacons hotter (<1) / cooler (>1) than trackers
 }
+
+# Reference fingerprints: receiver-to-receiver ranges, refreshed on a slow
+# cadence at the top of the loop (the receivers do not move).
+FINGERPRINT_REFRESH_SECS = 20.0
+_fingerprint_db = fingerprint.ReferenceDB()
+
+
+def _refresh_fingerprint_references(hass, layout, now_ts):
+    """Sample Bermuda's scanner ranging into the reference DB when due."""
+    if _tuning(layout, "position_estimator") == "geometric":
+        return
+    if now_ts - getattr(_refresh_fingerprint_references, "last", 0.0) < FINGERPRINT_REFRESH_SECS:
+        return
+    _refresh_fingerprint_references.last = now_ts
+    ranging = bermuda_source.async_get_scanner_ranging(hass, max_age=fingerprint.REF_MAX_AGE_SECS)
+    if ranging is None:
+        if not getattr(_refresh_fingerprint_references, "warned", False):
+            _refresh_fingerprint_references.warned = True
+            _LOGGER.warning(
+                "position_estimator is %s but this Bermuda build has no scanner_ranging API; "
+                "fingerprinting stays off until Bermuda is updated",
+                _tuning(layout, "position_estimator"),
+            )
+        return
+    _fingerprint_db.ingest(ranging)
 
 
 def _coerce_tuning(key, value, fallback=None):
@@ -895,6 +935,7 @@ async def update_tracked_entities(hass):
                 continue  # Skip and start over
             # Use a separate copy per entity to avoid cross-entity mutation side effects.
             layout = get_layout(hass)
+            _refresh_fingerprint_references(hass, layout, now_ts)
             new_global_data = [{"entity": ent, "data": copy.deepcopy(layout)} for ent in unique_values]
 
             await process_entities(hass, new_global_data)
@@ -1746,7 +1787,20 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
     # short must not consume a slot and push the only solvable floor out.
     # The incumbent, when solvable, ALWAYS defends its title — even ranked
     # below the cut — so nearest-slant noise alone can never evict it.
-    solvable = [c for c in candidates if len(c["cords"]) >= 3]
+    layout = _layout_for(new_global_data, entity)
+    estimator = _tuning(layout, "position_estimator")
+    refs_by_floor = {}
+    tracker_vec = {}
+    if estimator != "geometric":
+        refs_by_floor = fingerprint.build_references(
+            layout, _fingerprint_db.vectors(), _tuning(layout, "fingerprint_ref_gain"))
+        tracker_vec = fingerprint.tracker_vector(layout)
+    # A floor with references can compete on its fingerprint with a single
+    # receiver hearing the tracker; trilateration alone needs three.
+    solvable = [
+        c for c in candidates
+        if len(c["cords"]) >= 3 or (tracker_vec and c["name"] in refs_by_floor)
+    ]
     to_solve = solvable[:FLOOR_CANDIDATES]
     if incumbent is not None and not any(c["name"] == incumbent for c in to_solve):
         inc_cand = next((c for c in solvable if c["name"] == incumbent), None)
@@ -1818,6 +1872,15 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
             "floor": floor_name, "weighted": weighted, "bounds": floor_bounds,
             "min_wr": min_wr, "stable_hint": stable_hint, "scale": scale,
             "zone_polys": zone_polys,
+            "fingerprint": None if not tracker_vec or floor_name not in refs_by_floor else {
+                "mode": estimator,
+                "tracker": tracker_vec,
+                "refs": refs_by_floor[floor_name],
+                "k": _tuning(layout, "fingerprint_k"),
+                "missing_m": _tuning(layout, "fingerprint_missing_m"),
+                "weight": _tuning(layout, "fingerprint_weight"),
+                "floor_weight": _tuning(layout, "fingerprint_floor_weight"),
+            },
         })
 
     solved = {}  # floor name -> everything the publish pipeline needs
@@ -1832,7 +1895,7 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
     for job, outcome in zip(jobs, results, strict=False):
         if outcome is None:
             continue  # this floor's readings don't converge; not a contender
-        fix, conf, rms_m = outcome
+        fix, conf, rms_m, fp = outcome
         floor_name, weighted, floor_bounds = job["floor"], job["weighted"], job["bounds"]
         zone_polys, scale = job["zone_polys"], job["scale"]
         solved[floor_name] = {
@@ -1843,6 +1906,7 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
             "scale": scale,
             "conf": conf,
             "rms_m": rms_m,     # kept for the elected floor's telemetry payload
+            "fp": fp,           # fingerprint match telemetry (None when unused)
         }
 
     # Store current r-values for next time
@@ -1853,7 +1917,6 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
         # behavior: sensors keep their last value until pruned).
         return
 
-    layout = _layout_for(new_global_data, entity)
     valid_floors = {f["name"] for f in (layout or {}).get("floor", [])}
 
     # The elected floor was renamed or deleted in the data file: that is a
@@ -2000,8 +2063,13 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
                 # weighted RMS residual (m) and the elected floor's confidence.
                 # Both frontends read named fields, so these keys are inert.
                 "raw": [round(float(tricords[0]), 2), round(float(tricords[1]), 2)],
-                "rms_m": round(elected["rms_m"], 3),
+                "rms_m": None if elected["rms_m"] is None else round(elected["rms_m"], 3),
                 "conf": round(elected["conf"], 3),
+                # Fingerprint fusion telemetry: which estimator ran, the
+                # fingerprint's own fix and confidence, and the reference
+                # receivers it was averaged from (see fingerprint.py).
+                "estimator": estimator,
+                "fp": elected.get("fp"),
                 "updated": time.time(),
             },
         )
@@ -2032,22 +2100,55 @@ def _solve_floor_jobs(jobs):
     """
     out = []
     for job in jobs:
-        fix = trilaterate(
-            job["weighted"], bounds=job["bounds"],
-            min_weight_radius=job["min_wr"], stable_hint=job["stable_hint"],
-        )
+        fix = conf = rms_m = None
+        if len(job["weighted"]) >= 3:
+            fix = trilaterate(
+                job["weighted"], bounds=job["bounds"],
+                min_weight_radius=job["min_wr"], stable_hint=job["stable_hint"],
+            )
+        if fix is not None:
+            conf, rms_m, _coverage = _score_floor_fit(fix, job["weighted"], job["scale"])
+            # A fit landing in this floor's no-go zone is physically impossible
+            # here (issue #60): down-weight it so the competition prefers the
+            # floor where that spot is a real room. Down-weight, not eliminate -
+            # a sole candidate still wins and is snapped out by the caller.
+            if _point_in_no_go(fix, job["zone_polys"]):
+                conf *= NO_GO_CONF_PENALTY
+        fix, conf, fp = _fuse_fingerprint(job.get("fingerprint"), fix, conf)
         if fix is None:
             out.append(None)
             continue
-        conf, rms_m, _coverage = _score_floor_fit(fix, job["weighted"], job["scale"])
-        # A fit landing in this floor's no-go zone is physically impossible
-        # here (issue #60): down-weight it so the competition prefers the
-        # floor where that spot is a real room. Down-weight, not eliminate -
-        # a sole candidate still wins and is snapped out by the caller.
-        if _point_in_no_go(fix, job["zone_polys"]):
-            conf *= NO_GO_CONF_PENALTY
-        out.append((fix, conf, rms_m))
+        out.append((fix, conf, rms_m, fp))
     return out
+
+
+def _fuse_fingerprint(spec, geo_fix, geo_conf):
+    """Blend the geometric fit with the fingerprint match for one floor.
+
+    Returns (fix, conf, telemetry). With no fingerprint inputs the geometric
+    answer passes through. In "fingerprint" mode the match replaces the
+    fit (the fit is the fallback where no reference matched); in "fused"
+    mode the fix is the weighted blend of the two and the confidence
+    likewise, so a floor that only one estimator can place still competes
+    on that estimator alone.
+    """
+    if spec is None:
+        return geo_fix, geo_conf, None
+    m = fingerprint.match(spec["tracker"], spec["refs"], k=spec["k"], missing_m=spec["missing_m"])
+    telemetry = None if m is None else {
+        "fix": [round(m["x"], 1), round(m["y"], 1)],
+        "conf": round(m["conf"], 3),
+        "score": round(m["score"], 3),
+        "refs": m["refs"],
+    }
+    if m is None:
+        return geo_fix, geo_conf, None
+    if spec["mode"] == "fingerprint" or geo_fix is None:
+        return (m["x"], m["y"]), m["conf"], telemetry
+    w, wf = spec["weight"], spec["floor_weight"]
+    fix = ((1.0 - w) * geo_fix[0] + w * m["x"], (1.0 - w) * geo_fix[1] + w * m["y"])
+    conf = (1.0 - wf) * geo_conf + wf * m["conf"]
+    return fix, conf, telemetry
 
 
 def update_or_add_entry(data, new_entry):

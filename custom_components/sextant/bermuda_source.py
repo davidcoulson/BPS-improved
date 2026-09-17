@@ -473,6 +473,24 @@ def async_get_readings(hass, include_history=False) -> dict[tuple[str, str], dic
     return readings
 
 
+# --- scanner-to-scanner ranging (fingerprint references) ----------------------
+
+
+def async_get_scanner_ranging(hass, max_age=None) -> dict | None:
+    """
+    How every scanner hears every other scanner's own advert (see fingerprint.py).
+
+    Needs a Bermuda build with the ``scanner_ranging`` feature; None otherwise
+    (and when Bermuda is absent), so the caller can leave fingerprinting off.
+    Not cached: it is fetched on its own slow cadence, not per cycle.
+    """
+    api = _bermuda_api()
+    if api is None or "scanner_ranging" not in _features(api):
+        return None
+    kwargs = {} if max_age is None else {"max_age": max_age}
+    return api.async_get_scanner_ranging(hass, **kwargs)
+
+
 # --- rssi offsets (calibration_target = "bermuda") ---------------------------
 
 

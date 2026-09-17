@@ -890,6 +890,45 @@ exposes RSSI history (the `rssi_history` feature; this fork's
 Bermuda's own distance. It is off by default so it can be A/B'd against the
 [stability KPI](#measuring-room-stability) on a live install.
 
+## Fingerprint fusion (opt-in)
+
+Every receiver that advertises (the ESPHome probes' iBeacon, a Shelly) is
+heard by every other receiver, so Bermuda continuously measures a labelled
+vector of ranges at a known position: one reference fingerprint per placed
+receiver, refreshed for free. With `position_estimator` set to `fused` or
+`fingerprint`, Sextant matches each tracker's vector of ranges against those
+references (weighted RMS of the log-ratio per receiver, "not heard" counted
+as `fingerprint_missing_m`) and places it at the inverse-score-weighted mean
+of the `fingerprint_k` best-matching receivers. No path-loss model turns a
+range into geometry here: a wall that makes a receiver read the tracker long
+makes it read the references behind that wall long too, and the comparison
+cancels it.
+
+- `fused` (recommended to try): the published fix is
+  `(1 - fingerprint_weight) x trilateration + fingerprint_weight x fingerprint`,
+  and each floor's election confidence is blended the same way with
+  `fingerprint_floor_weight`.
+- `fingerprint`: the match replaces the fit; trilateration is only the fallback
+  where no reference matched.
+- Either mode lets a floor that only one or two receivers hear compete on its
+  fingerprint, where trilateration alone needs three.
+- `fingerprint_ref_gain` scales the reference ranges for probe beacons that
+  transmit hotter (`< 1`) or cooler (`> 1`) than the trackers do.
+
+Needs a Bermuda build with the `scanner_ranging` API (this fork,
+v0.8.7-fork-testing.14 or later); otherwise a warning is logged once and the
+geometric estimator runs. The reference database is sampled every 20 s and
+medianed over 12 samples, so it is useful about a minute after a restart. The
+`/api/sextant/cords` payload carries `estimator` and, per tracker, `fp` with
+the fingerprint's own fix, confidence, score and the reference receivers it
+averaged, so the two estimators can be compared before trusting the blend:
+
+```yaml
+action: sextant.set_tuning
+data:
+  settings: {position_estimator: fused}
+```
+
 ## Tuning live
 
 Every knob above lives in a `tuning` map stored with the floor plan and is
