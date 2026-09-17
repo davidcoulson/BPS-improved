@@ -256,7 +256,7 @@ class SextantDevices extends LitElement {
             ${icon ? html`<ha-icon icon=${icon}></ha-icon>` : html`<span class="initials">Ab</span>`}<span>${label}</span></button>`)}
         </div>
         <div class="row">
-          ${uiField({ label: `Height (${unit})`, type: "number", step: 0.05, min: 0, max: unit === "ft" ? 16 : 5, value: w.height, placeholder: String(toDisplayLen(1.0, this.hass)), onChange: (v) => { w.height = v; this.requestUpdate(); }, style: "width: 150px" })}
+          ${uiField({ label: `Height (${unit})`, type: "number", step: 0.05, min: 0, max: unit === "ft" ? 16 : 5, value: w.height, placeholder: String(toDisplayLen(this._defaultHeight(), this.hass)), onChange: (v) => { w.height = v; this.requestUpdate(); }, style: "width: 150px" })}
           ${uiField({ label: "Ref trim (dB)", type: "number", step: 0.5, min: -20, max: 20, value: w.ref, placeholder: "0", onChange: (v) => { w.ref = v; this.requestUpdate(); }, style: "width: 150px" })}
         </div>
         <p class="small muted">Height: how high it is usually carried or placed (a phone in a pocket about 1 m, a dog's collar 0.3 m). Ref trim: a few dB either way if this tracker always reads too near or too far.</p>
@@ -359,6 +359,12 @@ class SextantDevices extends LitElement {
     return html`<div class="page">${this.section === "bermuda" ? this._renderBermuda() : this._renderTrackers()}</div>${this._renderWizard()}${this._renderFindMyWizard()}`;
   }
 
+  /** The carry height used for a tracker without one of its own: the layout's tracker_height, else 1 m. */
+  _defaultHeight() {
+    const h = this.data?.layout?.tracker_height;
+    return typeof h === "number" && h >= 0 && h <= 5 ? h : 1.0;
+  }
+
   /** The proxies' own iBeacon (every ESPHome probe advertises the same one) is not a device to track.
    *  Its name is the ESPHome device name, which ends in the WiFi MAC's last six hex digits; the
    *  scanner's slug carries the same six (great_room_eth_d83d6c for ble-esp32-eth-d83d6c). */
@@ -429,7 +435,7 @@ class SextantDevices extends LitElement {
               <td>${p ? html`${p.zone}${p.sub_zone && p.sub_zone !== "unknown" ? ` · ${p.sub_zone}` : ""}<br><span class="muted small">${p.floor}</span>`
                 : d.last_seen_age != null ? html`<span class="muted">no position</span><br><span class="muted small">seen ${fmtAge(d.last_seen_age)} ago</span>`
                 : html`<span class="muted">not heard yet</span>`}</td>
-              <td class="num">${heights[slug] != null ? fmtLen(heights[slug], this.hass) : html`<span class="muted">default</span>`}</td>
+              <td class="num">${heights[slug] != null ? fmtLen(heights[slug], this.hass) : html`<span class="muted" title="the default carry height; click the name to give this tracker its own">${fmtLen(this._defaultHeight(), this.hass)}</span>`}</td>
               <td class="num">${offsets[slug] != null && offsets[slug] !== 0 ? `${offsets[slug] > 0 ? "+" : ""}${fmtNum(offsets[slug], 1)} dB` : html`<span class="muted">0</span>`}</td>
               <td class="actions">
                 <button class="iconbtn" title="Edit ${name}" @click=${() => this._openWizard(slug, address)}><ha-icon icon="mdi:pencil-outline"></ha-icon></button>
