@@ -361,7 +361,7 @@ class SextantDevices extends LitElement {
         </div>
         <p class="small muted">Height: how high it is usually carried or placed (a phone in a pocket about 1 m, a dog's collar 0.3 m). Ref trim: a few dB either way if this tracker always reads too near or too far.</p>
         <div class="row">
-          ${uiSelect({ label: "Positioning", value: w.estimator || "", options: [{ value: "", label: `Default (${this.data?.layout?.tuning?.position_estimator || "geometric"})` }, { value: "geometric", label: "Geometric only, no fingerprint" }, { value: "fused", label: "Fused" }, { value: "fingerprint", label: "Fingerprint only" }], onChange: (v) => { w.estimator = v; this.requestUpdate(); }, style: "min-width: 280px" })}
+          ${uiSelect({ label: "Positioning", value: w.estimator || "default", options: [{ value: "default", label: `Default (${this.data?.layout?.tuning?.position_estimator || "geometric"})` }, { value: "geometric", label: "Geometric only, no fingerprint" }, { value: "fused", label: "Fused" }, { value: "fingerprint", label: "Fingerprint only" }], onChange: (v) => { w.estimator = v === "default" ? "" : v; this.requestUpdate(); }, style: "min-width: 280px" })}
         </div>
         <p class="small muted">Positioning: the estimator for this tracker alone. If the fingerprint makes it worse (a Tile or a tag whose radio reads unlike the phones), pick geometric only.</p>
         <h4>Photo or custom icon <span class="muted small">optional, drawn instead of the class icon</span></h4>
@@ -378,7 +378,7 @@ class SextantDevices extends LitElement {
         </div>` : html`<div class="row">
           ${w.preview ? html`<img class="icon round" src=${w.preview} alt=""><span class="small muted">cropped photo, uploaded on ${w.new ? "Track" : "Save"}</span>` : w.icon ? html`<img class="icon round" src=${w.icon} alt="">` : nothing}
           <label class="btn small" title="Pick a photo, then frame it in the circle">Photo…<input type="file" accept="image/*" hidden @change=${(e) => { this._startCrop(e.target.files[0] || null); e.target.value = ""; }}></label>
-          ${uiSelect({ value: w.preview ? "" : (w.icon || ""), options: [{ value: "", label: w.preview ? "the cropped photo" : "class icon" }, ...(this.data?.icons || []).map((i) => ({ value: i.value, label: i.label }))], onChange: (v) => { w.icon = v; if (v) { w.file = null; if (w.preview) URL.revokeObjectURL(w.preview); w.preview = null; } this.requestUpdate(); }, style: "min-width: 180px" })}
+          ${uiSelect({ label: "Icon", value: w.preview ? "none" : (w.icon || "none"), options: [{ value: "none", label: w.preview ? "the cropped photo" : "class icon" }, ...(this.data?.icons || []).map((i) => ({ value: i.value, label: i.label }))], onChange: (v) => { w.icon = v === "none" ? "" : v; if (w.icon) { w.file = null; if (w.preview) URL.revokeObjectURL(w.preview); w.preview = null; } this.requestUpdate(); }, style: "min-width: 180px" })}
           ${(w.preview || w.icon) ? uiButton({ label: "Remove", kind: "text", onClick: () => { w.icon = ""; w.file = null; if (w.preview) URL.revokeObjectURL(w.preview); w.preview = null; this.requestUpdate(); } }) : nothing}
         </div>`}
         <div class="row end">
