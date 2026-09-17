@@ -290,7 +290,7 @@ class SextantDevices extends LitElement {
         <h3>Add FindMy accessories</h3>
         <ol class="steps">
           <li><b>Export the keys.</b> An AirTag or FindMy tag changes its address every 15 minutes on a schedule seeded when it was paired, so Bermuda needs the pairing keys, and only the Mac (or iPhone backup) they were paired from has them. Follow the key-extraction guide of <a href=${FINDMY_GUIDE} target="_blank" rel="noopener">FindMy.py</a>: it decrypts the Owned Beacons records from your Mac's keychain and prints one JSON per accessory (<code>FindMyAccessory.to_json()</code>).</li>
-          <li><b>Paste them here</b>, one or several, in any order. Each needs <code>${FINDMY_KEYS.join("</code>, <code>")}</code>; a name and model come along when the export had them.</li>
+          <li><b>Paste them here</b>, one or several, in any order. Each needs ${FINDMY_KEYS.map((k, i) => html`${i ? ", " : ""}<code>${k}</code>`)}; a name and model come along when the export had them.</li>
           <li><b>Name and add.</b> Each accessory becomes a <code>findmy_…</code> device in Bermuda; track it from the Trackers page once it has been seen.</li>
         </ol>
         <textarea placeholder='{"master_key": "...", "skn": "...", "sks": "...", "paired_at": "...", "name": "Keys"}' .value=${w.text} @input=${(e) => this._parseFindMy(e.target.value)}></textarea>
@@ -320,11 +320,16 @@ class SextantDevices extends LitElement {
     return html`<div class="page">${this.section === "bermuda" ? this._renderBermuda() : this._renderTrackers()}</div>${this._renderWizard()}${this._renderFindMyWizard()}`;
   }
 
-  /** The proxies' own iBeacon (every ESPHome probe advertises the same one) is not a device to track. */
+  /** The proxies' own iBeacon (every ESPHome probe advertises the same one) is not a device to track.
+   *  Its name is the ESPHome device name, which ends in the WiFi MAC's last six hex digits; the
+   *  scanner's slug carries the same six (great_room_eth_d83d6c for ble-esp32-eth-d83d6c). */
   _isProxyBeacon(c) {
     if (c.kind !== "ibeacon") return false;
-    const names = new Set(Object.values(this.data?.scanners || {}).flatMap((s) => [s.name, s.slug]).filter(Boolean).map((n) => n.toLowerCase()));
-    return names.has(String(c.name || "").toLowerCase());
+    const name = String(c.name || "").toLowerCase();
+    const scanners = Object.values(this.data?.scanners || {});
+    if (scanners.some((s) => [s.name, s.slug].filter(Boolean).some((n) => n.toLowerCase() === name))) return true;
+    const hex = /([0-9a-f]{6})$/.exec(name.replace(/[^0-9a-z]/g, ""))?.[1];
+    return !!hex && scanners.some((s) => `${s.slug || ""} ${s.name || ""}`.toLowerCase().includes(hex));
   }
 
   _renderTrackers() {

@@ -2074,15 +2074,19 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
         # wall-clock dwell before a change, and a lock while the tracker is
         # demonstrably still. Half of all zone changes in a 24 h sample were
         # A->B->A flips at a median dwell of 21 s; this is where they went.
+        # An anchored tracker's position is certain (it is on that proxy):
+        # elect its room and spot from the point, not the filter's old
+        # uncertainty ellipse, which would keep a small spot from ever winning.
+        kf_for_election = None if anchor is not None else _kf_position_state.get(entity)
         zone, zone_locked, zone_speed = _elect_zone(
             entity, lowest_floor_name, instant_zone, test_point,
-            _kf_position_state.get(entity), zone_polys, scale, layout, now=now,
+            kf_for_election, zone_polys, scale, layout, now=now,
         )
         # Sub-zone: only the elected zone's own sub-zones are eligible, with
         # membership smoothing, exit hysteresis, dwell and the zone lock (see
         # _elect_subzone). parent_zone always names the enclosing main zone.
         sub_zone, parent_zone = _elect_subzone(
-            entity, lowest_floor_name, zone, zone_locked, test_point, _kf_position_state.get(entity),
+            entity, lowest_floor_name, zone, zone_locked, test_point, kf_for_election,
             _floor_sub_zone_polygons(hass, new_global_data, entity, lowest_floor_name), scale, layout, now=now,
         )
         apitricords = update_or_add_entry(
