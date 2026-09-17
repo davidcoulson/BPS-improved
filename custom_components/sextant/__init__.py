@@ -3043,7 +3043,48 @@ def _register_websocket(hass) -> None:
     if hass.data.get("sextant_ws_registered"):
         return
     websocket_api.async_register_command(hass, _ws_subscribe)
+    from . import ws as ws_module  # noqa: PLC0415 - ws imports this package lazily
+
+    ws_module.async_register(hass)
     hass.data["sextant_ws_registered"] = True
+
+
+async def async_apply_tuning(hass, settings, reset=False):
+    """Validate and store tuning overrides (TUNING_SPEC); returns the stored map.
+
+    Validation is strict here where a human is typing, and lenient in
+    _tuning where the store is read: an unknown key or an out-of-range
+    value is refused with the allowed range, rather than silently ignored
+    later. ``reset`` drops every override first. Shared by the
+    sextant.set_tuning service and the panel's websocket command.
+    """
+    updates = {}
+    for key, value in (settings or {}).items():
+        if key not in TUNING_SPEC:
+            raise HomeAssistantError(f"unknown tuning key {key!r}; known: {', '.join(sorted(TUNING_SPEC))}")
+        coerced = _coerce_tuning(key, value, None)
+        if coerced is None:
+            spec = TUNING_SPEC[key]
+            allowed = (
+                f"one of {', '.join(spec[2])}" if spec[1] is str
+                else "true or false" if spec[1] is bool
+                else f"a number between {spec[2]} and {spec[3]}"
+            )
+            raise HomeAssistantError(f"{key} must be {allowed}, got {value!r}")
+        updates[key] = coerced
+    async with LAYOUT_LOCK:
+        data = get_layout_for_edit(hass)
+        if not isinstance(data, dict):
+            raise HomeAssistantError("No Sextant layout saved yet; place receivers first.")
+        tuning = {} if reset else dict(data.get("tuning") or {})
+        tuning.update(updates)
+        if tuning:
+            data["tuning"] = tuning
+        else:
+            data.pop("tuning", None)
+        await save_layout(hass, data)
+    _LOGGER.info("sextant.set_tuning: %s", tuning or "defaults restored")
+    return tuning
 
 
 def _register_calibration_services(hass) -> None:
@@ -3201,43 +3242,8 @@ def _register_calibration_services(hass) -> None:
     )
 
     async def _set_tuning(call: ServiceCall) -> None:
-        """Change positioning tuning live (TUNING_SPEC), through the store.
-
-        Validation is strict here where a human is typing, and lenient in
-        _tuning where the store is read: an unknown key or an out-of-range
-        value is refused with the allowed range, rather than silently
-        ignored later. ``reset`` drops every override first.
-        """
-        settings = call.data.get("settings") or {}
-        updates = {}
-        for key, value in settings.items():
-            if key not in TUNING_SPEC:
-                raise HomeAssistantError(
-                    f"unknown tuning key {key!r}; known: {', '.join(sorted(TUNING_SPEC))}"
-                )
-            coerced = _coerce_tuning(key, value, None)
-            if coerced is None:
-                spec = TUNING_SPEC[key]
-                allowed = (
-                    f"one of {', '.join(spec[2])}" if spec[1] is str
-                    else "true or false" if spec[1] is bool
-                    else f"a number between {spec[2]} and {spec[3]}"
-                )
-                raise HomeAssistantError(f"{key} must be {allowed}, got {value!r}")
-            updates[key] = coerced
-
-        async with LAYOUT_LOCK:
-            data = get_layout_for_edit(hass)
-            if not isinstance(data, dict):
-                raise HomeAssistantError("No Sextant layout saved yet; place receivers first.")
-            tuning = {} if call.data.get("reset") else dict(data.get("tuning") or {})
-            tuning.update(updates)
-            if tuning:
-                data["tuning"] = tuning
-            else:
-                data.pop("tuning", None)
-            await save_layout(hass, data)
-        _LOGGER.info("sextant.set_tuning: %s", tuning or "defaults restored")
+        """Change positioning tuning live (TUNING_SPEC), through the store."""
+        await async_apply_tuning(hass, call.data.get("settings") or {}, bool(call.data.get("reset")))
 
     hass.services.async_register(
         DOMAIN, "set_tuning", _set_tuning,

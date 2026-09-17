@@ -491,6 +491,83 @@ def async_get_scanner_ranging(hass, max_age=None) -> dict | None:
     return api.async_get_scanner_ranging(hass, **kwargs)
 
 
+# --- device management (feature "device_management") ----------------------------
+
+
+def async_features(hass) -> frozenset:
+    """The feature names this Bermuda build advertises (empty when absent)."""
+    api = _bermuda_api()
+    return _features(api) if api is not None else frozenset()
+
+
+def _mgmt_api():
+    api = _bermuda_api()
+    if api is None or "device_management" not in _features(api):
+        return None
+    return api
+
+
+def async_get_device_candidates(hass, max_age=None) -> list | None:
+    api = _mgmt_api()
+    if api is None:
+        return None
+    kwargs = {} if max_age is None else {"max_age": max_age}
+    return api.async_get_device_candidates(hass, **kwargs)
+
+
+def async_get_tracked_devices(hass) -> dict | None:
+    api = _bermuda_api()
+    if api is None or "tracked_devices" not in _features(api):
+        return None
+    return api.async_get_tracked_devices(hass)
+
+
+async def async_set_tracked_devices(hass, add=(), remove=()) -> list | None:
+    api = _mgmt_api()
+    if api is None:
+        return None
+    result = await api.async_set_tracked_devices(hass, add=add, remove=remove)
+    async_invalidate_cache(hass)
+    return result
+
+
+def async_get_findmy_accessories(hass) -> list | None:
+    api = _mgmt_api()
+    return None if api is None else api.async_get_findmy_accessories(hass)
+
+
+async def async_add_findmy_accessory(hass, accessory_json, name=None) -> dict | None:
+    api = _mgmt_api()
+    return None if api is None else await api.async_add_findmy_accessory(hass, accessory_json, name)
+
+
+async def async_remove_findmy_accessory(hass, address) -> bool | None:
+    api = _mgmt_api()
+    return None if api is None else await api.async_remove_findmy_accessory(hass, address)
+
+
+def async_get_options(hass) -> dict | None:
+    api = _mgmt_api()
+    return None if api is None else api.async_get_options(hass)
+
+
+async def async_set_options(hass, changes) -> dict | None:
+    api = _mgmt_api()
+    return None if api is None else await api.async_set_options(hass, changes)
+
+
+def async_get_tile_diagnostics(hass) -> dict | None:
+    """The Tile manager's diagnostics (bindings, learned ids, probes), or None."""
+    api = _bermuda_api()
+    if api is None:
+        return None
+    coordinator = api.async_get_coordinator(hass)
+    manager = getattr(coordinator, "tile_manager", None)
+    if manager is None:
+        return None
+    return manager.diagnostics()
+
+
 # --- rssi offsets (calibration_target = "bermuda") ---------------------------
 
 

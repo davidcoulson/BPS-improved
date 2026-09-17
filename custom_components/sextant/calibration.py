@@ -1137,6 +1137,43 @@ def _status_payload(cal: dict) -> dict:
     return payload
 
 
+async def async_calibration_action(hass, data: dict) -> dict:
+    """Run one calibration action ("start", "auto", "cancel", "solve", "apply",
+    "reset") and return the status payload. Raises ValueError with a message
+    for the user on a bad request or a failed solve."""
+    cal = get_calibration_state(hass)
+    action = data.get("action")
+    if action == "start":
+        await start_calibration(hass, data.get("floor"), data.get("duration"))
+    elif action == "auto":
+        await set_auto_calibration(hass, bool(data.get("enabled")))
+    elif action == "cancel":
+        if cal["mode"] == "auto":
+            await set_auto_calibration(hass, False)
+        else:
+            await _stop_task(cal)
+            cal["state"] = "idle"
+            cal["mode"] = "off"
+            cal["error"] = None
+    elif action == "solve":
+        floor_name = data.get("floor") or cal.get("floor")
+        result = await async_solve(hass, cal, floor_name)
+        cal["results"][result["floor"]] = result
+        cal["last_solved_at"] = result["solved_at"]
+        cal["error"] = None
+    elif action == "apply":
+        updated = await apply_corrections(hass, cal, data.get("floor") or cal.get("floor"))
+        await save_calibration_state(hass)
+        return {"applied": updated, **_status_payload(cal)}
+    elif action == "reset":
+        removed = await reset_corrections(hass, cal, data.get("floor") or cal.get("floor"))
+        await save_calibration_state(hass)
+        return {"reset": removed, **_status_payload(cal)}
+    else:
+        raise ValueError(f"Unknown action {action!r}")
+    return _status_payload(cal)
+
+
 class SextantCalibrationAPI(HomeAssistantView):
     """Start, watch, apply, and reset receiver calibration."""
 

@@ -204,7 +204,7 @@ def _install_homeassistant_stubs():
         "voluptuous",
         Schema=lambda *a, **k: None, Required=lambda *a, **k: None,
         Optional=lambda *a, **k: None, Coerce=lambda *a, **k: None,
-        All=lambda *a, **k: None, Length=lambda *a, **k: None, Range=lambda *a, **k: None,
+        All=lambda *a, **k: None, Any=lambda *a, **k: None, Length=lambda *a, **k: None, Range=lambda *a, **k: None,
     )
     # NOTE: no watchdog stub — the integration no longer imports it (the file
     # watcher was removed when the layout moved to the Store). If a stray import

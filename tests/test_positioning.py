@@ -1229,7 +1229,11 @@ def test_websocket_command_is_registered_once(monkeypatch):
     hass = make_hass()
     sextant._register_websocket(hass)
     sextant._register_websocket(hass)
-    assert hass.data["_ws_commands"] == [sextant._ws_subscribe]
+    from sextant import ws as ws_module
+    commands = hass.data["_ws_commands"]
+    assert commands[0] is sextant._ws_subscribe
+    assert len(commands) == 1 + len(ws_module.COMMANDS)          # every panel command, once
+    assert all(hasattr(c, "_ws_schema") for c in commands)          # each carries its schema
 
 
 def test_sensors_are_created_for_a_tracker_added_after_setup(monkeypatch):
