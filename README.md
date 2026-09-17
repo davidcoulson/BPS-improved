@@ -42,6 +42,10 @@ The setup panel
 - [Debugging tab](#debugging-tab) — a live view of how every receiver and beacon links to Bermuda, to untangle naming mismatches and quiet nodes.
 
 Accuracy
+- [Zone stability](#zone-stability) — the published room is elected with membership, dwell and a stationary lock instead of re-tested every cycle.
+- [Nearest-receiver cap](#nearest-receiver-cap) — far receivers no longer pull the fit.
+- [Median RSSI estimator](#median-rssi-estimator-opt-in) — an opt-in, symmetric per-receiver distance from raw samples.
+- [Tuning live](#tuning-live) — every knob above set from an action, no restart.
 - [Receiver auto-calibration](#receiver-auto-calibration) — the probes calibrate each other, continuously.
 - [Kalman position smoothing](#kalman-position-smoothing) — a motion-aware filter replaces the fixed moving average: less lag when walking, steadier when still.
 - [Trilateration visualization](#trilateration-visualization) — see the distance circles that place each device.
@@ -670,12 +674,14 @@ per-floor scenarios) instead of on a single loudest reading:
   corroborate it. A through-ceiling reading fits one receiver and
   contradicts the rest — it scores poorly.
 - Scores feed **smoothed per-floor probabilities**. A challenger must lead
-  the incumbent for **several consecutive cycles** before the floor
-  switches (~3 s when you really change floors), and a cycle where the
-  incumbent floor briefly drops below three receivers simply **holds the
-  last position** instead of handing the tracker to whoever else was
-  solvable that instant. A single blip no longer flaps the floor, the
-  published zone, or the position filter.
+  the incumbent continuously for **`floor_switch_secs` of wall-clock time**
+  (60 s by default; see [Tuning](#tuning-live)) before the floor switches,
+  and the lead it needs grows a little with how long the incumbent has held
+  the floor (`floor_tenure_bonus`). A cycle where the incumbent floor
+  briefly drops below three receivers simply **holds the last position**
+  instead of handing the tracker to whoever else was solvable that
+  instant. A single blip no longer flaps the floor, the published zone, or
+  the position filter.
 - The probabilities are published per tracker (`floors` in
   `/api/bps/cords`), so "why did it pick this floor" is now inspectable.
 - Bonus: a tracker heard by too few receivers on the nearest floor but by
@@ -761,6 +767,86 @@ The full card guide (all options, per-floor behavior, labels/icons/zones,
 troubleshooting) is in the [upstream wiki](https://github.com/Hogster/BPS/wiki/Lovelace-map-card).
 
 ---
+
+## Zone stability
+
+Floors had hysteresis; zones did not. The published zone was the polygon
+the filtered point happened to land in, re-tested every cycle, so a phone
+resting near a doorway toggled rooms with every fit. On the reference
+install that was **30 zone changes per tracker-hour, 56 % of them A → B → A
+flips, at a median dwell of 21 s** — for trackers that were mostly not
+moving.
+
+The `*_bps_zone` sensor is now elected the way the floor is:
+
+- **Membership, not a point test.** Samples on the position filter's error
+  ellipse are attributed to zones, giving each zone a share; the shares are
+  smoothed over cycles.
+- **Margin and dwell.** The current zone holds until a challenger leads its
+  smoothed share by `zone_switch_margin` continuously for
+  `zone_switch_secs` (20 s by default).
+- **Stationary lock.** When the filter's speed stays under
+  `stationary_speed` (0.3 m/s) for `stationary_secs` (20 s), the tracker is
+  on a table and the zone locks. It unlocks only when the point sits more
+  than `zone_unlock_margin` (1 m) outside the locked zone for
+  `zone_unlock_secs` (30 s) — the time already spent away then counts
+  toward the dwell, so the switch follows at once — or when the tracker is
+  clearly moving again.
+
+`*_bps_nearest_zone` stays instantaneous for automations that want the raw
+answer, and `/api/bps/cords` carries `zone_raw` (the point's own zone),
+`zone_locked` and `speed` per tracker. Sub-zones get the same dwell
+(`subzone_switch_secs`) and can only be published against their own parent
+zone. Set `zone_hysteresis` to false to publish the raw zone as before.
+
+## Nearest-receiver cap
+
+With thirty receivers on a floor, the ones 8 m and further away contribute
+mostly noise, and the solver's 1/r² weight does not zero them out. Each
+floor's solve now uses every receiver within `solver_near_always` metres
+(3 m) plus the nearest `solver_max_receivers` (8), and drops readings beyond
+`solver_max_range` (12 m) once three points are kept, so a floor is never
+starved below the solver's minimum by the cap alone. Set
+`solver_max_receivers` to 0 for the old behaviour.
+
+## Median RSSI estimator (opt-in)
+
+Bermuda's smoothed distance is a running-minimum-biased average built for
+"which scanner is nearest": it lags on the way out and reads far receivers
+short, and a short far receiver drags a least-squares fit toward it. With
+`distance_estimator` set to `median`, each receiver's distance is instead
+the **median of its recent raw RSSI samples** (those newer than
+`median_window_secs`, at least `median_min_samples` of them), converted with
+exactly the path-loss parameters Bermuda would have used, so it lands on the
+same scale as the calibration. A distance backed by one packet weighs less
+in the solve than one backed by five. Needs a Bermuda build whose API
+exposes RSSI history (the `rssi_history` feature; this fork's
+`0.8.7-fork-testing.9` or later); without it every reading silently keeps
+Bermuda's own distance. It is off by default so it can be A/B'd against the
+[stability KPI](#measuring-room-stability) on a live install.
+
+## Tuning live
+
+Every knob above lives in a `tuning` map stored with the floor plan and is
+set through the `bps.set_tuning` action — never by editing `.storage/bps`
+under a running Home Assistant, which is silently lost on the next save:
+
+```yaml
+action: bps.set_tuning
+data:
+  settings:
+    distance_estimator: median
+    zone_switch_secs: 30
+```
+
+Keys: `distance_estimator`, `median_window_secs`, `median_min_samples`,
+`solver_max_receivers`, `solver_max_range`, `solver_near_always`,
+`zone_hysteresis`, `zone_prob_smoothing`, `zone_switch_margin`,
+`zone_switch_secs`, `stationary_speed`, `stationary_secs`,
+`zone_unlock_margin`, `zone_unlock_secs`, `subzone_switch_secs`,
+`floor_switch_secs`, `floor_tenure_bonus`, `floor_tenure_full_secs`. An
+unknown key or an out-of-range value is refused with the allowed range;
+`reset: true` restores the defaults. Changes apply on the next cycle.
 
 ## Measuring room stability
 

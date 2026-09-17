@@ -138,3 +138,35 @@ set_tracker_heights:
       example: '{"primrose": 0.5, "leela": 0.2}'
       selector:
         object:
+
+set_tuning:
+  name: Set positioning tuning
+  description: >-
+    Change the positioning tuning live, without a restart or a code change.
+    Values are stored with the floor plan and survive restarts. Keys:
+    distance_estimator ("bermuda" or "median"), median_window_secs,
+    median_min_samples, solver_max_receivers, solver_max_range,
+    solver_near_always, zone_hysteresis, zone_prob_smoothing,
+    zone_switch_margin, zone_switch_secs, stationary_speed, stationary_secs,
+    zone_unlock_margin, zone_unlock_secs, subzone_switch_secs,
+    floor_switch_secs, floor_tenure_bonus, floor_tenure_full_secs. An
+    unknown key or an out-of-range value is refused with the allowed range.
+  fields:
+    settings:
+      name: Settings
+      description: >-
+        A map of tuning key to value. Only the keys given change; the others
+        keep their current value (or their default).
+      required: false
+      example: '{"distance_estimator": "median", "zone_switch_secs": 30}'
+      selector:
+        object:
+    reset:
+      name: Reset first
+      description: >-
+        Drop every stored override before applying the settings, so a call
+        with reset and no settings restores the defaults.
+      required: false
+      default: false
+      selector:
+        boolean:

@@ -59,9 +59,9 @@ _TRACKED_TTL = 5.0
 
 _CACHE_KEY = "bps_bermuda_source_cache"
 _EMPTY_CACHE = {
-    "readings_at": 0.0, "readings": None,
+    "readings_at": 0.0, "readings": None, "readings_history": False,
     "slug_map_at": 0.0, "slug_map": None,
-    "snapshot_at": 0.0, "snapshot": None,
+    "snapshot_at": 0.0, "snapshot": None, "snapshot_history": False,
     "tracked_at": 0.0, "tracked": None,
 }
 
@@ -271,7 +271,7 @@ def async_get_scanner_ages(hass) -> dict[str, float] | None:
     return ages
 
 
-def _snapshot(hass):
+def _snapshot(hass, include_history=False):
     """
     A version-checked snapshot, or None.
 
@@ -282,19 +282,32 @@ def _snapshot(hass):
     doing any per-advert work, instead of serialising every device in range
     for this module to discard. Cached for _SNAPSHOT_TTL so the several
     callers within one positioning cycle share a single build.
+
+    ``include_history`` asks for each advert's recent raw RSSI samples (the
+    ``rssi_history`` feature; silently absent on older builds). A cached
+    snapshot without history is rebuilt when history is wanted; one with
+    history serves either request.
     """
     cache = _cache_for(hass)
     now = time.monotonic()
-    if cache is not None and cache["snapshot"] is not None and now - cache["snapshot_at"] <= _SNAPSHOT_TTL:
+    if (
+        cache is not None
+        and cache["snapshot"] is not None
+        and now - cache["snapshot_at"] <= _SNAPSHOT_TTL
+        and (cache.get("snapshot_history") or not include_history)
+    ):
         return cache["snapshot"]
 
     api = _bermuda_api()
     if api is None:
         return None
-    if "tracked_only" in _features(api):
-        snapshot = api.async_get_advert_snapshot(hass, tracked_only=True)
-    else:
-        snapshot = api.async_get_advert_snapshot(hass)
+    features = _features(api)
+    kwargs = {}
+    if "tracked_only" in features:
+        kwargs["tracked_only"] = True
+    if include_history and "rssi_history" in features:
+        kwargs["include_history"] = True
+    snapshot = api.async_get_advert_snapshot(hass, **kwargs)
     if snapshot is None:
         return None
     if snapshot.get("version") not in _SUPPORTED_SNAPSHOT_VERSIONS:
@@ -308,6 +321,7 @@ def _snapshot(hass):
     if cache is not None:
         cache["snapshot"] = snapshot
         cache["snapshot_at"] = now
+        cache["snapshot_history"] = bool(kwargs.get("include_history"))
     return snapshot
 
 
@@ -399,11 +413,15 @@ def _index_snapshot(snapshot):
     return devices
 
 
-def async_get_readings(hass) -> dict[tuple[str, str], dict] | None:
+def async_get_readings(hass, include_history=False) -> dict[tuple[str, str], dict] | None:
     """
     Current distances keyed by ``(device_prefix, scanner_slug)``.
 
-    Each value is ``{"distance": metres|None, "age": seconds|None}``.
+    Each value is ``{"distance": metres|None, "age": seconds|None}`` plus,
+    when the Bermuda build provides them, the path-loss parameters it applied
+    (``ref_power``, ``attenuation``, ``rssi_offset``) and - only with
+    ``include_history`` - ``history``: the recent raw ``[rssi, stamp]`` samples,
+    newest first. Those let a caller run its own estimator on Bermuda's scale.
 
     ``distance`` is metres always - unlike the entities, which render feet or
     metres per the user's unit settings and which BPS therefore had to convert.
@@ -416,10 +434,15 @@ def async_get_readings(hass) -> dict[tuple[str, str], dict] | None:
     """
     cache = _cache_for(hass)
     now = time.monotonic()
-    if cache is not None and cache["readings"] is not None and now - cache["readings_at"] <= _READINGS_TTL:
+    if (
+        cache is not None
+        and cache["readings"] is not None
+        and now - cache["readings_at"] <= _READINGS_TTL
+        and (cache.get("readings_history") or not include_history)
+    ):
         return cache["readings"]
 
-    snapshot = _snapshot(hass)
+    snapshot = _snapshot(hass, include_history=include_history)
     if snapshot is None:
         return None
 
@@ -432,11 +455,18 @@ def async_get_readings(hass) -> dict[tuple[str, str], dict] | None:
         scanner = scanners.get(scanner_uid.lower())
         if scanner is None:
             continue
-        readings[(device_prefix, scanner_slug)] = {
+        reading = {
             "distance": scanner.get("distance"),
             "age": scanner.get("age"),
         }
+        for key in ("ref_power", "attenuation", "rssi_offset"):
+            if key in scanner:
+                reading[key] = scanner[key]
+        if include_history and "history" in scanner:
+            reading["history"] = scanner["history"]
+        readings[(device_prefix, scanner_slug)] = reading
     if cache is not None:
         cache["readings"] = readings
         cache["readings_at"] = now
+        cache["readings_history"] = bool(include_history)
     return readings

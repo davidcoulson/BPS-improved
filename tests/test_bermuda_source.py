@@ -588,3 +588,31 @@ def test_scanner_ages_are_none_without_the_feature(monkeypatch):
     _install_bermuda_api(monkeypatch, _snapshot())
 
     assert bermuda_source.async_get_scanner_ages(object()) is None
+
+
+def test_readings_carry_history_and_path_loss_when_asked(monkeypatch):
+    snap = _snapshot()
+    scanner = snap["devices"]["aa:bb:cc:dd:ee:ff"]["scanners"]["11:22:33:44:55:66"]
+    scanner.update({"ref_power": -55.0, "attenuation": 3.0, "rssi_offset": 2,
+                    "history": [[-70, 999.0], [-72, 998.0]]})
+    api = _install_featureful_api(monkeypatch, snap)
+    api.SNAPSHOT_FEATURES = frozenset(api.SNAPSHOT_FEATURES | {"rssi_history"})
+    hass = _hass_with_data()
+
+    plain = bermuda_source.async_get_readings(hass)
+    assert plain[("phone", "probe")]["ref_power"] == -55.0
+    assert "history" not in plain[("phone", "probe")]
+    assert api.calls[-1] == {"tracked_only": True}
+
+    with_hist = bermuda_source.async_get_readings(hass, include_history=True)
+    assert with_hist[("phone", "probe")]["history"] == [[-70, 999.0], [-72, 998.0]]
+    assert api.calls[-1] == {"tracked_only": True, "include_history": True}
+    # A history-bearing snapshot then serves a plain request from cache.
+    bermuda_source.async_get_readings(hass)
+    assert len(api.calls) == 2
+
+
+def test_history_is_not_requested_from_a_build_without_the_feature(monkeypatch):
+    api = _install_featureful_api(monkeypatch, _snapshot())
+    bermuda_source.async_get_readings(_hass_with_data(), include_history=True)
+    assert api.calls[-1] == {"tracked_only": True}

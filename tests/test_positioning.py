@@ -193,18 +193,29 @@ def test_probabilities_converge_and_drop_renamed():
 
 def test_elect_hysteresis_and_dwell():
     # No incumbent: adopt the best immediately.
-    floor, ch = bps._elect_floor({"a": 0.6, "b": 0.4}, None, {"a", "b"}, None)
+    floor, ch = bps._elect_floor({"a": 0.6, "b": 0.4}, None, {"a", "b"}, None, now=0.0)
     assert floor == "a" and ch is None
     # Incumbent holds within the margin.
-    floor, _ = bps._elect_floor({"a": 0.52, "b": 0.48}, "b", {"a", "b"}, None)
+    floor, _ = bps._elect_floor({"a": 0.52, "b": 0.48}, "b", {"a", "b"}, None, now=0.0)
     assert floor == "b"
-    # A leading challenger must persist FLOOR_SWITCH_CYCLES before switching.
-    ch = None
+    # A leading challenger must persist for switch_secs of WALL CLOCK before
+    # switching - however many cycles that takes.
+    ch, incumbent = None, "b"
     seen = []
-    for _ in range(4):
-        floor, ch = bps._elect_floor({"a": 0.7, "b": 0.3}, "b", {"a", "b"}, ch)
-        seen.append(floor)
-    assert seen[:bps.FLOOR_SWITCH_CYCLES] == ["b"] * (bps.FLOOR_SWITCH_CYCLES - 1) + ["a"]
+    for t in (0.0, 10.0, 20.0, 59.0, 60.0, 70.0):
+        incumbent, ch = bps._elect_floor({"a": 0.7, "b": 0.3}, incumbent, {"a", "b"}, ch, now=t, switch_secs=60.0)
+        seen.append(incumbent)
+    assert seen == ["b", "b", "b", "b", "a", "a"]
+    # A lapse in the lead ends the challenge; the clock restarts.
+    ch = None
+    _, ch = bps._elect_floor({"a": 0.7, "b": 0.3}, "b", {"a", "b"}, ch, now=0.0, switch_secs=60.0)
+    _, ch = bps._elect_floor({"a": 0.5, "b": 0.5}, "b", {"a", "b"}, ch, now=30.0, switch_secs=60.0)
+    assert ch is None
+    floor, ch = bps._elect_floor({"a": 0.7, "b": 0.3}, "b", {"a", "b"}, ch, now=61.0, switch_secs=60.0)
+    assert floor == "b" and ch["since"] == 61.0
+    # A wider margin (incumbent tenure bonus) can hold off the same lead.
+    floor, ch = bps._elect_floor({"a": 0.56, "b": 0.44}, "b", {"a", "b"}, None, now=0.0, margin=0.15)
+    assert floor == "b" and ch is None
 
 
 # --------------------------------------------------------------------------- #
@@ -784,3 +795,303 @@ def test_registry_device_iteration_handles_both_registry_shapes():
 
     old_style = types.SimpleNamespace(devices={"id-a": entry_a, "id-b": entry_b})
     assert list(bps._iter_registry_devices(old_style)) == [entry_a, entry_b]
+
+
+# ---------------------------------------------------------------------------
+# Tuning knobs (bps.set_tuning)
+# ---------------------------------------------------------------------------
+
+
+def test_tuning_reads_validated_values_and_falls_back():
+    layout = {"tuning": {
+        "zone_switch_secs": 45, "distance_estimator": "median", "zone_hysteresis": False,
+        "solver_max_receivers": 999,      # out of range -> default
+        "stationary_speed": True,         # bool is not a number -> default
+        "median_min_samples": "3",        # wrong type -> default
+    }}
+    assert bps._tuning(layout, "zone_switch_secs") == 45.0
+    assert isinstance(bps._tuning(layout, "zone_switch_secs"), float)
+    assert bps._tuning(layout, "distance_estimator") == "median"
+    assert bps._tuning(layout, "zone_hysteresis") is False
+    assert bps._tuning(layout, "solver_max_receivers") == 8
+    assert bps._tuning(layout, "stationary_speed") == 0.3
+    assert bps._tuning(layout, "median_min_samples") == 3
+    assert bps._tuning([], "floor_switch_secs") == 60.0
+    assert bps._tuning({"tuning": "junk"}, "floor_switch_secs") == 60.0
+    assert bps._coerce_tuning("distance_estimator", "mean", None) is None
+    assert bps._coerce_tuning("zone_hysteresis", False, None) is False
+
+
+# ---------------------------------------------------------------------------
+# Nearest-receiver cap
+# ---------------------------------------------------------------------------
+
+
+def _entries(*distances):
+    return [(d, ("pt", d)) for d in distances]
+
+
+def test_select_receivers_keeps_near_plus_nearest_k_and_drops_far():
+    kept = bps._select_receivers(_entries(1, 2, 2.5, 4, 5, 6, 7, 9, 14, 20), 4, 12.0, 3.0)
+    assert [p[1] for p in kept] == [1, 2, 2.5, 4]           # near-always + nearest 4
+    kept = bps._select_receivers(_entries(0.5, 2.9, 2.95, 4, 5, 6), 3, 12.0, 3.0)
+    assert [p[1] for p in kept] == [0.5, 2.9, 2.95]          # K coincides with the near set
+    kept = bps._select_receivers(_entries(9, 14, 20, 30), 8, 12.0, 3.0)
+    assert [p[1] for p in kept] == [9, 14, 20]               # never starved below three
+    kept = bps._select_receivers(_entries(1, 2, 3, 14, 20), 8, 12.0, 3.0)
+    assert [p[1] for p in kept] == [1, 2, 3]                 # beyond range dropped once 3 kept
+    kept = bps._select_receivers(_entries(5, 4, 3, 2, 1), 0, 0.0, 0.0)
+    assert [p[1] for p in kept] == [1, 2, 3, 4, 5]           # 0 = unlimited, sorted nearest-first
+    kept = bps._select_receivers(_entries(1, 2, 3, 4, 5), 1, 0.0, 0.0)
+    assert [p[1] for p in kept] == [1, 2, 3]                 # K clamps to the solver minimum
+
+
+def test_extract_candidate_floors_applies_the_cap_and_carries_quality():
+    floor = {"name": "F", "scale": SCALE, "receivers": []}
+    for i, d in enumerate([1.0, 2.0, 4.0, 6.0, 8.0, 15.0, 30.0]):
+        floor["receivers"].append({"entity_id": f"r{i}", "cords": {"x": i * 100.0, "y": 0.0, "r": d * SCALE},
+                                   "distance": d, "quality": 0.5 if i == 0 else None})
+    layout = {"floor": [floor], "tuning": {"solver_max_receivers": 4, "solver_max_range": 12.0}}
+    cands = bps.extract_candidate_floors([{"entity": "e", "data": layout}], "e")
+    assert len(cands) == 1 and cands[0]["nearest_m"] == 1.0
+    pts = cands[0]["cords"]
+    assert [p[0] for p in pts] == [0.0, 100.0, 200.0, 300.0]
+    assert pts[0][4] == 0.5 and pts[1][4] == 1.0
+
+
+# ---------------------------------------------------------------------------
+# Median RSSI estimator
+# ---------------------------------------------------------------------------
+
+
+def _reading(history, age=1.0, ref_power=-55.0, attenuation=3.0, offset=0):
+    return {"distance": 9.9, "age": age, "history": history,
+            "ref_power": ref_power, "attenuation": attenuation, "rssi_offset": offset}
+
+
+def test_median_distance_matches_bermudas_path_loss_model():
+    hist = [[-65, 100.0], [-67, 99.0], [-63, 98.0], [-90, 97.0], [-65, 96.5]]
+    dist, quality = bps._median_distance(_reading(hist), 15.0, 3)
+    # median rssi is -65 -> 10 ** ((-55 + 65) / 30)
+    assert abs(dist - 10 ** (10 / 30)) < 1e-9
+    assert quality == 1.0                                    # 5 samples saturate
+    # The per-scanner rssi offset is added before conversion, like Bermuda.
+    dist_off, _ = bps._median_distance(_reading(hist, offset=2), 15.0, 3)
+    assert abs(dist_off - 10 ** ((-55 + 63) / 30)) < 1e-9
+
+
+def test_median_distance_respects_window_and_minimum():
+    # age 1 s; samples at 100, 99 are fresh, 80 is 21 s old.
+    hist = [[-60, 100.0], [-62, 99.0], [-99, 80.0]]
+    assert bps._median_distance(_reading(hist), 15.0, 3) is None          # only 2 fresh
+    dist, quality = bps._median_distance(_reading(hist), 15.0, 2)
+    assert abs(dist - 10 ** ((-55 + 61) / 30)) < 1e-9                    # median of -60,-62
+    assert quality == 2 / 5
+    assert bps._median_distance(_reading([]), 15.0, 1) is None
+    assert bps._median_distance({"history": hist, "age": 0}, 15.0, 1) is None  # no parameters
+
+
+# ---------------------------------------------------------------------------
+# Zone election: hysteresis, dwell, stationary lock
+# ---------------------------------------------------------------------------
+
+from shapely.geometry import Point, Polygon  # noqa: E402
+
+
+def _two_rooms():
+    # Kitchen x in [0, 100), Dining x in [100, 200]; boundary at x = 100. One
+    # pixel = 1 cm (scale 100 px/m).
+    kitchen = Polygon([(0, 0), (100, 0), (100, 100), (0, 100)])
+    dining = Polygon([(100, 0), (200, 0), (200, 100), (100, 100)])
+    return [("Kitchen", kitchen, 5.0, False), ("Dining", dining, 5.0, False)]
+
+
+def _kf(x, y, vx=0.0, vy=0.0, sigma_px=10.0, floor="F"):
+    import numpy as np
+    return {"x": np.array([x, y, vx, vy], float), "P": np.diag([sigma_px ** 2] * 2 + [1.0, 1.0]), "ts": 0.0, "floor": floor}
+
+
+def _elect(entity, x, t, vx=0.0, layout=None, sigma=10.0):
+    layout = layout if layout is not None else {}
+    zone, locked, _speed = bps._elect_zone(
+        entity, "F", "Kitchen" if x < 100 else "Dining", Point(x, 50.0),
+        _kf(x, 50.0, vx=vx, sigma_px=sigma), _two_rooms(), 100.0, layout, now=t,
+    )
+    return zone, locked
+
+
+def test_zone_election_ignores_a_brief_excursion_and_follows_a_sustained_one():
+    bps._zone_state.clear()
+    layout = {"tuning": {"stationary_secs": 600.0}}  # keep the lock out of this test
+    assert _elect("e", 50, 0.0, layout=layout) == ("Kitchen", False)
+    # One cycle across the line: not published.
+    assert _elect("e", 130, 10.0, layout=layout)[0] == "Kitchen"
+    assert _elect("e", 50, 20.0, layout=layout)[0] == "Kitchen"
+    # Sustained on the other side: switches once the dwell has elapsed.
+    seen = [_elect("e", 140, t, layout=layout)[0] for t in (30.0, 40.0, 50.0, 60.0, 70.0)]
+    assert seen[0] == "Kitchen" and seen[-1] == "Dining"
+
+
+def test_zone_election_off_publishes_the_instant_zone():
+    bps._zone_state.clear()
+    layout = {"tuning": {"zone_hysteresis": False}}
+    assert _elect("e", 50, 0.0, layout=layout) == ("Kitchen", False)
+    assert _elect("e", 130, 10.0, layout=layout) == ("Dining", False)
+
+
+def test_stationary_lock_holds_the_zone_and_releases_when_clearly_away():
+    bps._zone_state.clear()
+    assert _elect("e", 90, 0.0)[0] == "Kitchen"          # resting 10 cm from the boundary
+    for t in (10.0, 20.0, 30.0):
+        zone, locked = _elect("e", 90, t)
+    assert zone == "Kitchen" and locked is True            # still for 30 s (> stationary_secs)
+    # Boundary jitter: the fix wanders 30 cm into Dining and back. Locked, so
+    # nothing changes, however long it wanders within the unlock margin (1 m).
+    for t in (40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0):
+        zone, locked = _elect("e", 130, t)
+        assert (zone, locked) == ("Kitchen", True)
+    # Now genuinely gone: 2.5 m into Dining. Unlocks after zone_unlock_secs
+    # and the switch follows at once (the time away counts toward the dwell).
+    seen = [_elect("e", 250 - 100 + 100, t) for t in (110.0, 120.0, 130.0, 140.0, 150.0)]
+    assert seen[0] == ("Kitchen", True)
+    assert seen[-1] == ("Dining", False)
+
+
+def test_stationary_lock_releases_when_the_tracker_keeps_moving():
+    bps._zone_state.clear()
+    for t in (0.0, 10.0, 20.0, 30.0):
+        zone, locked = _elect("e", 50, t)
+    assert locked is True
+    # Walking (1 m/s) inside the same room for longer than stationary_secs.
+    for t in (40.0, 50.0, 60.0, 70.0):
+        zone, locked = _elect("e", 50, t, vx=100.0)
+    assert (zone, locked) == ("Kitchen", False)
+
+
+def test_zone_election_resets_on_floor_change_and_prune():
+    bps._zone_state.clear()
+    _elect("e", 50, 0.0)
+    assert bps._zone_state["e"]["floor"] == "F"
+    zone, _, _ = bps._elect_zone("e", "G", "Dining", Point(150, 50), _kf(150, 50, floor="G"), _two_rooms(), 100.0, {}, now=10.0)
+    assert zone == "Dining" and bps._zone_state["e"]["floor"] == "G"
+
+
+def test_sub_zone_dwell_publishes_only_a_persisted_change():
+    bps._subzone_state.clear()
+    layout = {"tuning": {"subzone_switch_secs": 20.0}}
+    assert bps._subzone_with_dwell("e", ("Sofa", "Living"), layout, now=0.0) == ("Sofa", "Living")
+    assert bps._subzone_with_dwell("e", ("unknown", "Living"), layout, now=5.0) == ("Sofa", "Living")
+    assert bps._subzone_with_dwell("e", ("Sofa", "Living"), layout, now=10.0) == ("Sofa", "Living")
+    assert bps._subzone_with_dwell("e", ("Desk", "Living"), layout, now=20.0) == ("Sofa", "Living")
+    assert bps._subzone_with_dwell("e", ("Desk", "Living"), layout, now=39.0) == ("Sofa", "Living")
+    assert bps._subzone_with_dwell("e", ("Desk", "Living"), layout, now=40.0) == ("Desk", "Living")
+
+
+# ---------------------------------------------------------------------------
+# End to end: one positioning cycle through election, filter, zones, publish
+# ---------------------------------------------------------------------------
+
+
+class _Sensor:
+    def __init__(self):
+        self.hass = object()
+        self._state = None
+        self._attrs = {}
+
+    def async_write_ha_state(self):
+        pass
+
+
+def _square_layout(tuning=None):
+    # 10 m x 10 m floor at 100 px/m, receivers on the corners, Kitchen on the
+    # left half and Dining on the right half.
+    layout = {
+        "floor": [{
+            "name": "F", "scale": 100.0,
+            "receivers": [
+                {"entity_id": "r0", "cords": {"x": 0.0, "y": 0.0}},
+                {"entity_id": "r1", "cords": {"x": 1000.0, "y": 0.0}},
+                {"entity_id": "r2", "cords": {"x": 0.0, "y": 1000.0}},
+                {"entity_id": "r3", "cords": {"x": 1000.0, "y": 1000.0}},
+            ],
+            "zones": [
+                {"zone_id": "k", "entity_id": "Kitchen", "poly": True,
+                 "cords": [{"x": 0, "y": 0}, {"x": 500, "y": 0}, {"x": 500, "y": 1000}, {"x": 0, "y": 1000}]},
+                {"zone_id": "d", "entity_id": "Dining", "poly": True,
+                 "cords": [{"x": 500, "y": 0}, {"x": 1000, "y": 0}, {"x": 1000, "y": 1000}, {"x": 500, "y": 1000}]},
+            ],
+            "subzones": [],
+        }],
+    }
+    if tuning:
+        layout["tuning"] = tuning
+    return layout
+
+
+def _cycle(hass, layout, x_m, y_m):
+    """Feed exact distances for a true position and run one cycle."""
+    import copy
+    data = copy.deepcopy(layout)
+    for rx in data["floor"][0]["receivers"]:
+        d = math.hypot(rx["cords"]["x"] / 100.0 - x_m, rx["cords"]["y"] / 100.0 - y_m)
+        rx["distance"] = d
+        rx["cords"]["r"] = d * 100.0
+    ngd = [{"entity": "e", "data": data}]
+    run(bps.update_trilateration_and_zone(hass, ngd, "e"))
+    return next(item for item in bps.apitricords if item["ent"] == "e")
+
+
+def _reset_tracker_state():
+    for d in (bps._floor_probability, bps._floor_challenge, bps._floor_dark_cycles, bps._floor_since,
+              bps._kf_position_state, bps._zone_state, bps._subzone_state):
+        d.clear()
+    bps.apitricords = []
+    for attr in ("last_r_values", "last_floor"):
+        if hasattr(bps.update_trilateration_and_zone, attr):
+            getattr(bps.update_trilateration_and_zone, attr).clear()
+
+
+def test_full_cycle_publishes_a_stable_zone_and_the_raw_one(monkeypatch):
+    _reset_tracker_state()
+    hass = make_hass()
+    sensors = {f"sensor.e_bps_{k}": _Sensor() for k in ("zone", "nearest_zone", "floor", "sub_zone")}
+    hass.data["bps_sensors"] = sensors
+    layout = _square_layout({"stationary_secs": 600.0})
+    # Pin the clock so the dwell is deterministic: each cycle is 10 s.
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(bps.time, "time", lambda: clock["t"])
+
+    entry = _cycle(hass, layout, 2.0, 5.0)
+    assert entry["floor"] == "F" and entry["zone"] == "Kitchen" and entry["zone_raw"] == "Kitchen"
+    assert entry["zone_locked"] is False and "speed" in entry
+    assert sensors["sensor.e_bps_zone"]._state == "Kitchen"
+    assert sensors["sensor.e_bps_floor"]._state == "F"
+
+    # One cycle 1.5 m over the line: raw says Dining, published stays Kitchen.
+    clock["t"] += 10
+    entry = _cycle(hass, layout, 6.5, 5.0)
+    assert entry["zone_raw"] == "Dining" and entry["zone"] == "Kitchen"
+    assert sensors["sensor.e_bps_nearest_zone"]._state == "Dining"   # raw sensor still instant
+
+    # Sustained on the Dining side: published follows after the dwell.
+    for _ in range(6):
+        clock["t"] += 10
+        entry = _cycle(hass, layout, 8.0, 5.0)
+    assert entry["zone"] == "Dining"
+    assert sensors["sensor.e_bps_zone"]._state == "Dining"
+    assert sensors["sensor.e_bps_sub_zone"]._attrs == {"parent_zone": "Dining"}
+
+
+def test_full_cycle_with_hysteresis_off_publishes_instantly(monkeypatch):
+    _reset_tracker_state()
+    hass = make_hass()
+    hass.data["bps_sensors"] = {f"sensor.e_bps_{k}": _Sensor() for k in ("zone", "nearest_zone", "floor", "sub_zone")}
+    layout = _square_layout({"zone_hysteresis": False})
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(bps.time, "time", lambda: clock["t"])
+    assert _cycle(hass, layout, 2.0, 5.0)["zone"] == "Kitchen"
+    clock["t"] += 10
+    entry = _cycle(hass, layout, 8.0, 5.0)
+    # The Kalman filter lags the raw fix, so the published point may still be
+    # near the line on this cycle; what matters is that zone == zone_raw.
+    assert entry["zone"] == entry["zone_raw"]

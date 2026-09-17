@@ -251,7 +251,11 @@ MIN_WEIGHT_RADIUS_M = 0.5
 FLOOR_CANDIDATES = 3         # solve at most this many floors per cycle
 FLOOR_PROB_SMOOTHING = 0.7   # EMA weight on the previous probability
 FLOOR_SWITCH_MARGIN = 0.05   # probability lead that starts/keeps a challenge
-FLOOR_SWITCH_CYCLES = 3      # consecutive leading cycles before the floor switches
+# Dwell is WALL-CLOCK, not cycles: "three cycles" was 30 s at the default
+# interval, and 20 of 39 floor changes in a 12 h sample were A->B->A flips.
+# The default lives in TUNING_SPEC ("floor_switch_secs") so it can be changed
+# live; this is the fallback when _elect_floor is called without one.
+FLOOR_SWITCH_SECS = 60.0
 FLOOR_DARK_GRACE_CYCLES = 3  # cycles a dark incumbent holds everything frozen
 FLOOR_RESIDUAL_SCALE_M = 2.0 # weighted RMS residual (m) at which fit quality = 0.5
 COVERAGE_TARGET_N = 5.0      # heard receivers at which the coverage term saturates
@@ -281,10 +285,167 @@ NO_GO_SNAP_MARGIN_PX = 3.0
 _floor_probability = {}
 _floor_challenge = {}
 _floor_dark_cycles = {}
+# When the incumbent floor was elected (wall clock), for the tenure bonus.
+_floor_since = {}
 
 # Per-tracker Kalman state: entity -> {"x": np.array(4), "P": np.array(4,4),
 # "ts": float, "floor": str}. Reset on floor change, long gap, or prune.
 _kf_position_state = {}
+
+# Per-tracker zone election state (see _elect_zone) and the published
+# sub-zone's dwell state (see _subzone_with_dwell). Reset on floor change and
+# on prune, like the Kalman state.
+_zone_state = {}
+_subzone_state = {}
+
+# --- Runtime tuning (bps.set_tuning) ------------------------------------------
+# Knobs for the accuracy work that are safe to flip on a live install without
+# a code change. They live under a top-level "tuning" map in the layout store
+# and are set through the bps.set_tuning service (never by editing
+# .storage/bps under a running HA, which is silently lost on the next save).
+# Each entry is (default, type, min, max) for numbers, (default, bool) for
+# switches, or (default, str, allowed) for choices.
+TUNING_SPEC = {
+    # Which per-pair distance feeds the solver. "bermuda" is Bermuda's own
+    # smoothed distance: a running-minimum-biased average built for "which
+    # scanner is nearest", which lags on the way out and reads far receivers
+    # short - and a short far receiver drags a least-squares fit toward it.
+    # "median" takes the median of the recent raw RSSI samples and converts it
+    # with the same path-loss parameters Bermuda used: symmetric, no low bias.
+    # It needs a Bermuda build with the rssi_history feature and falls back to
+    # "bermuda" per reading when history is missing or too thin.
+    "distance_estimator": ("bermuda", str, ("bermuda", "median")),
+    "median_window_secs": (15.0, float, 3.0, 120.0),    # samples newer than this
+    "median_min_samples": (3, int, 1, 20),              # fewer -> fall back
+    # Receivers per solve: everything within solver_near_always metres, plus
+    # the nearest solver_max_receivers (0 = unlimited); readings beyond
+    # solver_max_range (0 = no cap) are dropped unless needed to reach three
+    # points. At 8 m and beyond a BLE range estimate is mostly noise, and the
+    # 1/r^2 weight does not zero it out.
+    "solver_max_receivers": (8, int, 0, 100),
+    "solver_max_range": (12.0, float, 0.0, 100.0),
+    "solver_near_always": (3.0, float, 0.0, 50.0),
+    # Zone election (see _elect_zone). Off = publish the instantaneous zone.
+    "zone_hysteresis": (True, bool),
+    "zone_prob_smoothing": (0.6, float, 0.0, 0.95),     # EMA weight on the previous probability
+    "zone_switch_margin": (0.15, float, 0.0, 1.0),      # lead a challenger needs
+    "zone_switch_secs": (20.0, float, 0.0, 600.0),      # ...held this long, wall clock
+    "stationary_speed": (0.3, float, 0.0, 5.0),         # m/s; below this the tracker is still
+    "stationary_secs": (20.0, float, 0.0, 600.0),       # still this long -> zone locked
+    "zone_unlock_margin": (1.0, float, 0.0, 20.0),      # m outside the locked zone...
+    "zone_unlock_secs": (30.0, float, 0.0, 600.0),      # ...for this long -> unlocked
+    "subzone_switch_secs": (20.0, float, 0.0, 600.0),
+    # Floor election dwell (see _elect_floor).
+    "floor_switch_secs": (FLOOR_SWITCH_SECS, float, 0.0, 3600.0),
+    "floor_tenure_bonus": (0.05, float, 0.0, 0.5),      # extra margin at full tenure
+    "floor_tenure_full_secs": (600.0, float, 1.0, 86400.0),
+}
+
+
+def _coerce_tuning(key, value, fallback=None):
+    """Validate one tuning value against TUNING_SPEC; ``fallback`` when invalid."""
+    spec = TUNING_SPEC[key]
+    kind = spec[1]
+    if kind is bool:
+        return value if isinstance(value, bool) else fallback
+    if kind is str:
+        return value if isinstance(value, str) and value in spec[2] else fallback
+    # not-bool: isinstance(True, int) holds in Python.
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return fallback
+    if not spec[2] <= value <= spec[3]:
+        return fallback
+    return kind(value)
+
+
+def _tuning(data, key):
+    """A validated tuning value from the layout's top-level "tuning" map.
+
+    Out-of-range, wrong-type or unknown values fall through to the default,
+    so a hand-edited store can never poison the loop. ``data`` may be the
+    layout dict or anything else (-> defaults).
+    """
+    default = TUNING_SPEC[key][0]
+    tuning = data.get("tuning") if isinstance(data, dict) else None
+    if not isinstance(tuning, dict) or key not in tuning:
+        return default
+    return _coerce_tuning(key, tuning[key], default)
+
+
+def _layout_for(new_global_data, entity):
+    """The layout dict a tracker's per-cycle data was built from (or None)."""
+    for ent in new_global_data:
+        if ent.get("entity") == entity:
+            return ent.get("data")
+    return None
+
+
+# --- Per-pair distance from raw RSSI (distance_estimator = "median") ---------
+MEDIAN_TARGET_SAMPLES = 5  # sample count at which a median's weight saturates
+
+
+def _median_distance(reading, window_secs, min_samples):
+    """(distance_m, quality) from a reading's raw RSSI history, or None.
+
+    ``reading`` is one bermuda_source reading carrying ``history`` (newest
+    first ``[rssi, stamp]`` pairs, monotonic stamps), ``age`` (seconds since
+    the newest sample) and the path-loss parameters Bermuda applied. Samples
+    older than ``window_secs`` are ignored; with fewer than ``min_samples``
+    left the caller keeps Bermuda's own distance. The median is taken in the
+    RSSI (log) domain, where the noise is closer to symmetric, and converted
+    once. quality in (0, 1] rises with the sample count, so a distance backed
+    by one packet pulls the fit less than one backed by five.
+    """
+    history = reading.get("history")
+    ref_power = reading.get("ref_power")
+    attenuation = reading.get("attenuation")
+    if (
+        not history
+        or not isinstance(ref_power, (int, float)) or isinstance(ref_power, bool)
+        or not isinstance(attenuation, (int, float)) or isinstance(attenuation, bool)
+        or attenuation <= 0
+    ):
+        return None
+    offset = reading.get("rssi_offset") or 0.0
+    age = reading.get("age") or 0.0
+    newest = None
+    samples = []
+    for item in history:
+        try:
+            rssi, stamp = float(item[0]), float(item[1])
+        except (TypeError, ValueError, IndexError):
+            continue
+        if newest is None:
+            newest = stamp
+        if age + (newest - stamp) <= window_secs:
+            samples.append(rssi)
+    if len(samples) < max(1, int(min_samples)):
+        return None
+    rssi_med = float(np.median(samples))
+    distance = 10.0 ** ((ref_power - (rssi_med + offset)) / (10.0 * attenuation))
+    quality = min(1.0, len(samples) / MEDIAN_TARGET_SAMPLES)
+    return distance, quality
+
+
+def _select_receivers(entries, max_receivers, max_range, near_always):
+    """Cap the receivers that feed one floor's solve.
+
+    ``entries`` are ``(distance_m, point)`` pairs. Keeps every receiver within
+    ``near_always`` metres plus the ``max_receivers`` nearest (0 = all), and
+    drops anything beyond ``max_range`` (0 = no cap) once three points are
+    already kept, so a floor can never be starved below the solver's minimum
+    by the cap alone. Returns the points nearest-first.
+    """
+    entries = sorted(entries, key=lambda e: e[0])
+    limit = max(int(max_receivers), 3) if max_receivers else 0
+    kept = []
+    for i, (distance, point) in enumerate(entries):
+        if limit and i >= limit and distance > near_always:
+            continue
+        if max_range and distance > max_range and len(kept) >= 3:
+            continue
+        kept.append(point)
+    return kept
 
 
 def _tracker_height(data, entity=None):
@@ -1225,12 +1386,15 @@ async def update_receiver_radii(hass, eids):
     tracker_h = _tracker_height(eids["data"], eids["entity"])
     tracker_factor = _tracker_distance_factor(eids["data"], eids["entity"])
     max_age = _reading_max_age(eids["data"])
+    use_median = _tuning(eids["data"], "distance_estimator") == "median"
+    median_window = _tuning(eids["data"], "median_window_secs")
+    median_min = _tuning(eids["data"], "median_min_samples")
     # Prefer Bermuda's direct API: it serves the same per-scanner readings from
     # memory without any of the distance_to entities existing, which avoids
     # thousands of recorder writes and websocket state_changed fan-outs. None
     # when Bermuda is absent or too old, in which case we scrape entities as
     # before. Fetched once per call, not per receiver.
-    readings = bermuda_source.async_get_readings(hass)
+    readings = bermuda_source.async_get_readings(hass, include_history=use_median)
     for floor in (f for f in eids["data"]["floor"] if f["scale"] is not None):
         for receiver in floor["receivers"]:
             entity_id = "sensor." + eids["entity"] + "_distance_to_" + receiver["entity_id"]
@@ -1239,6 +1403,9 @@ async def update_receiver_radii(hass, eids):
                 if readings is not None
                 else None
             )
+            # Per-point reliability of this reading in (0, 1]; only the
+            # median estimator has a basis to rate one below 1.
+            quality = 1.0
             if reading is not None:
                 # Direct path. Distance is already metres (the API never uses
                 # the user's display units), and age is seconds since the
@@ -1248,6 +1415,10 @@ async def update_receiver_radii(hass, eids):
                 # "this scanner can no longer hear it" timeout.
                 distance_m = reading["distance"]
                 age = reading["age"]
+                if use_median and distance_m is not None:
+                    estimate = _median_distance(reading, median_window, median_min)
+                    if estimate is not None:
+                        distance_m, quality = estimate
                 if distance_m is None:
                     receiver.pop("distance", None)
                     continue
@@ -1340,6 +1511,7 @@ async def update_receiver_radii(hass, eids):
                 # through the slab shrink its through-floor slant and
                 # steal the election from the correct floor.
                 receiver["distance"] = distance
+                receiver["quality"] = quality
             except ValueError:
                 #_LOGGER.info(f"Invalid numerical value: {rec_value.state}")
                 pass
@@ -1382,7 +1554,7 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
     # per-floor pixel scales and must not be compared across floors).
     new_last_r = {}
     for cand in candidates:
-        new_last_r.update({(cand["name"], x, y): r for (x, y, r, _srad) in cand["cords"]})
+        new_last_r.update({(cand["name"], pt[0], pt[1]): pt[2] for pt in cand["cords"]})
 
     incumbent = update_trilateration_and_zone.last_floor.get(entity)
 
@@ -1418,9 +1590,14 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
         # MEASURED — a projection collapsed to the minimum can't buy influence.
         weighted = []
         min_jump_w = 1.0
-        for (x, y, r, slant_px) in cords:
+        for pt in cords:
+            x, y, r, slant_px = pt[0], pt[1], pt[2], pt[3]
+            quality = pt[4] if len(pt) > 4 else 1.0
             w = _jump_weight(r, last_r.get((floor_name, x, y)), min_wr)
-            weighted.append((x, y, r, w, slant_px))
+            # The reading's own reliability (sample count behind a median)
+            # multiplies the temporal gate: both are "how much to trust this
+            # radius", from independent evidence.
+            weighted.append((x, y, r, w * quality, slant_px))
             min_jump_w = min(min_jump_w, w)
 
         # The device cannot be outside the floor: bound the solver to the
@@ -1478,11 +1655,8 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
         # behavior: sensors keep their last value until pruned).
         return
 
-    valid_floors = {
-        f["name"]
-        for e in new_global_data if e["entity"] == entity
-        for f in e["data"]["floor"]
-    }
+    layout = _layout_for(new_global_data, entity)
+    valid_floors = {f["name"] for f in (layout or {}).get("floor", [])}
 
     # The elected floor was renamed or deleted in the data file: that is a
     # change of world, not a dark blip — routing it into the grace below
@@ -1494,6 +1668,7 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
         _floor_probability.pop(entity, None)
         _floor_challenge.pop(entity, None)
         _floor_dark_cycles.pop(entity, None)
+        _floor_since.pop(entity, None)
         update_trilateration_and_zone.last_floor.pop(entity, None)
         incumbent = None
 
@@ -1516,8 +1691,17 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
     probs = _update_floor_probabilities(
         entity, {f: s["conf"] for f, s in solved.items()}, valid_floors
     )
+    now = time.time()
+    # The incumbent's required lead grows with how long it has held the floor
+    # (up to floor_tenure_bonus at floor_tenure_full_secs), so a floor that
+    # has been right for ten minutes is not unseated by one geometry fluke.
+    tenure = max(0.0, now - _floor_since.get(entity, now))
+    margin = FLOOR_SWITCH_MARGIN + _tuning(layout, "floor_tenure_bonus") * min(
+        1.0, tenure / _tuning(layout, "floor_tenure_full_secs")
+    )
     lowest_floor_name, challenge = _elect_floor(
-        probs, incumbent, solved, _floor_challenge.get(entity)
+        probs, incumbent, solved, _floor_challenge.get(entity),
+        now=now, switch_secs=_tuning(layout, "floor_switch_secs"), margin=margin,
     )
     if challenge is None:
         _floor_challenge.pop(entity, None)
@@ -1529,7 +1713,11 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
     if update_trilateration_and_zone.last_floor.get(entity) != lowest_floor_name:
         # The Kalman state holds pixel coordinates in the previously elected
         # floor's map space; it must not carry over to the newly elected floor.
+        # Neither may the zone election: its polygons are that floor's.
         _kf_position_state.pop(entity, None)
+        _zone_state.pop(entity, None)
+        _subzone_state.pop(entity, None)
+        _floor_since[entity] = now
         update_trilateration_and_zone.last_floor[entity] = lowest_floor_name
 
     elected = solved[lowest_floor_name]
@@ -1558,18 +1746,40 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
         if snapped is not None:
             test_point = snapped
             avg_x, avg_y = float(snapped.x), float(snapped.y)
-        zone = find_zone_for_point(hass, new_global_data, entity, lowest_floor_name, test_point)
+        # The instantaneous zone of the published point, and the nearest zone
+        # no matter how far - both raw, cycle-by-cycle answers, still exposed
+        # (nearest_zone as its own sensor, zone_raw in the API) for anything
+        # that wants them.
+        instant_zone = find_zone_for_point(hass, new_global_data, entity, lowest_floor_name, test_point)
         nearest_zone = find_nearest_zone(hass, new_global_data, entity, lowest_floor_name, test_point)
+        # The PUBLISHED zone gets the same treatment floors already had:
+        # membership probabilities smoothed over cycles, a margin and a
+        # wall-clock dwell before a change, and a lock while the tracker is
+        # demonstrably still. Half of all zone changes in a 24 h sample were
+        # A->B->A flips at a median dwell of 21 s; this is where they went.
+        zone, zone_locked, zone_speed = _elect_zone(
+            entity, lowest_floor_name, instant_zone, test_point,
+            _kf_position_state.get(entity), zone_polys, scale, layout, now=now,
+        )
         sub_zone, sub_parent = find_sub_zone_for_point(hass, new_global_data, entity, lowest_floor_name, test_point)
+        # A sub-zone belongs to its parent zone: while the election holds a
+        # different zone than the point sits in, no sub-zone of the other
+        # room can be published against it.
+        if sub_zone != "unknown" and sub_parent != zone:
+            sub_zone, sub_parent = "unknown", None
         # parent_zone always names the enclosing main zone: the sub-zone's
         # declared parent when inside one, otherwise the current main zone.
         parent_zone = sub_parent if sub_parent else zone
+        sub_zone, parent_zone = _subzone_with_dwell(entity, (sub_zone, parent_zone), layout, now=now)
         apitricords = update_or_add_entry(
             apitricords,
             {
                 "ent": entity,
                 "cords": [avg_x, avg_y],
                 "zone": zone,
+                "zone_raw": instant_zone,
+                "zone_locked": zone_locked,
+                "speed": None if zone_speed is None else round(zone_speed, 2),
                 "floor": lowest_floor_name,
                 # The exact solver input (post-correction, post-filter), for
                 # the panel's trilateration circles.
@@ -1607,17 +1817,14 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
         update_bps_sensor_state(hass, f"sensor.{entity}_bps_sub_zone", sub_zone, {"parent_zone": parent_zone})
 
 def update_or_add_entry(data, new_entry):
+    """Replace the entry for new_entry["ent"] in place, or append it.
+
+    Every field is refreshed (the caller always builds a complete entry), so
+    a new telemetry key needs no change here.
+    """
     for item in data:
         if item["ent"] == new_entry["ent"]:  # Check if "ent" already exists
-            item["cords"] = new_entry["cords"]  # Update "cords"
-            item["zone"] = new_entry["zone"]  # Update "zone"
-            item["floor"] = new_entry["floor"]  # Floor the fix belongs to
-            item["radii"] = new_entry["radii"]  # Solver input, for circles
-            item["floors"] = new_entry["floors"]  # Election probabilities
-            item["raw"] = new_entry["raw"]  # Pre-Kalman fix (telemetry)
-            item["rms_m"] = new_entry["rms_m"]  # Fit residual, m (telemetry)
-            item["conf"] = new_entry["conf"]  # Elected floor confidence
-            item["updated"] = new_entry["updated"]  # Freshness for pruning
+            item.update(new_entry)
             return data
 
     # If "ent" was not found, add as new post
@@ -1664,9 +1871,12 @@ async def prune_stale_positions(hass):
         # indefinitely). Jump-gate radii from before the absence are equally
         # meaningless.
         _kf_position_state.pop(ent, None)
+        _zone_state.pop(ent, None)
+        _subzone_state.pop(ent, None)
         _floor_probability.pop(ent, None)
         _floor_challenge.pop(ent, None)
         _floor_dark_cycles.pop(ent, None)
+        _floor_since.pop(ent, None)
         getattr(update_trilateration_and_zone, "last_floor", {}).pop(ent, None)
         getattr(update_trilateration_and_zone, "last_r_values", {}).pop(ent, None)
         _LOGGER.info("Tracker %s not seen for %ss; clearing its position", ent, timeout)
@@ -1728,12 +1938,16 @@ async def process_entities(hass, new_global_data):
 def extract_candidate_floors(new_global_data, tmpentity):
     """Every floor hearing the tracker, ranked by its nearest receiver.
 
-    Returns a list of {"name", "cords": [(x, y, r, slant_px), ...],
+    Returns a list of {"name", "cords": [(x, y, r, slant_px, quality), ...],
     "nearest_m"} sorted by nearest_m — slant_px is the measured (corrected)
     slant distance in this floor's pixels, carried alongside the projected
     radius r so the solver can weight by what was MEASURED rather than by the
     projection (whose height-corrected value can legitimately collapse to the
-    minimum). The ranking compares raw slant distances (meters),
+    minimum); quality is the reading's own reliability in (0, 1] (see
+    _median_distance), folded into the solver weight by the caller. The
+    per-floor list is capped to the nearest receivers (_select_receivers,
+    tuning solver_max_receivers / solver_max_range / solver_near_always).
+    The ranking compares raw slant distances (meters),
     not radii: radii are scaled into each floor's own pixel space, so
     comparing them across floors would let the floor with the smallest scale
     win regardless of where the tracker actually is. Ties (the same receiver
@@ -1745,17 +1959,28 @@ def extract_candidate_floors(new_global_data, tmpentity):
     for entity in new_global_data:
         if entity["entity"] != tmpentity:
             continue
-        for floor in entity["data"]["floor"]:
-            nearest, cords = float("inf"), []
+        layout = entity["data"]
+        max_receivers = _tuning(layout, "solver_max_receivers")
+        max_range = _tuning(layout, "solver_max_range")
+        near_always = _tuning(layout, "solver_near_always")
+        for floor in layout["floor"]:
+            entries = []
             for receiver in floor["receivers"]:
                 distance = receiver.get("distance")
                 if distance is None or "r" not in receiver.get("cords", {}):
                     continue
-                nearest = min(nearest, distance)
-                cords.append((
+                quality = receiver.get("quality")
+                if not isinstance(quality, (int, float)) or isinstance(quality, bool) \
+                        or not 0 < quality <= 1:
+                    quality = 1.0
+                entries.append((distance, (
                     receiver["cords"]["x"], receiver["cords"]["y"],
-                    receiver["cords"]["r"], distance * floor["scale"],
-                ))
+                    receiver["cords"]["r"], distance * floor["scale"], float(quality),
+                )))
+            # Nearest-K cap: with thirty receivers on a floor, the far ones
+            # contribute mostly noise, and 1/r^2 does not zero them out.
+            cords = _select_receivers(entries, max_receivers, max_range, near_always)
+            nearest = min((e[0] for e in entries), default=float("inf"))
             if cords:
                 candidates.append({
                     "name": floor["name"],
@@ -1831,7 +2056,8 @@ def _update_floor_probabilities(entity, scores, valid_floors=None):
     return dict(probs)
 
 
-def _elect_floor(probs, incumbent, solved, challenge):
+def _elect_floor(probs, incumbent, solved, challenge, now=None,
+                 switch_secs=FLOOR_SWITCH_SECS, margin=FLOOR_SWITCH_MARGIN):
     """Pick the floor to publish. Returns (floor, challenge_state).
 
     The caller guarantees the incumbent is either solved this cycle or None
@@ -1840,25 +2066,224 @@ def _elect_floor(probs, incumbent, solved, challenge):
     transferred by forfeit, it lapses).
 
     A solved incumbent only loses to a challenger that leads its probability
-    by FLOOR_SWITCH_MARGIN for FLOOR_SWITCH_CYCLES consecutive cycles
-    (challenge_state carries the count between cycles). The small margin
-    filters share noise, the dwell filters single-cycle geometry flukes, and
-    together they cannot permanently dead-band a genuinely better floor the
-    way a large margin alone would — floor flapping was the disease
-    (issue #94), a stuck wrong floor must not be the cure.
+    by ``margin`` continuously for ``switch_secs`` of wall-clock time
+    (challenge_state carries the challenge's start between cycles; a cycle
+    where the lead lapses ends the challenge). The margin filters share
+    noise, the dwell filters geometry flukes, and together they cannot
+    permanently dead-band a genuinely better floor the way a large margin
+    alone would — floor flapping was the disease (issue #94), a stuck wrong
+    floor must not be the cure. Wall clock rather than cycles because the
+    update interval is configurable: "three cycles" meant 30 s at one
+    setting and 3 s at another.
     """
+    now = time.time() if now is None else now
     contenders = {f: p for f, p in probs.items() if f in solved}
     if not contenders:
         return None, None
     best = max(contenders, key=contenders.get)
     if incumbent is None or incumbent not in contenders:
         return best, None  # no standing incumbent: adopt the best immediately
-    if best == incumbent or contenders[best] - contenders[incumbent] < FLOOR_SWITCH_MARGIN:
+    if best == incumbent or contenders[best] - contenders[incumbent] < margin:
         return incumbent, None
-    count = challenge["count"] + 1 if challenge and challenge.get("floor") == best else 1
-    if count >= FLOOR_SWITCH_CYCLES:
+    since = challenge["since"] if challenge and challenge.get("floor") == best else now
+    if now - since >= switch_secs:
         return best, None
-    return incumbent, {"floor": best, "count": count}
+    return incumbent, {"floor": best, "since": since}
+
+
+# --- Zone election ------------------------------------------------------------
+ZONE_SAMPLE_ANGLES = np.linspace(0.0, 2.0 * np.pi, 8, endpoint=False)
+ZONE_SAMPLE_CENTER_WEIGHT = 0.4  # the rest is spread over the 1-sigma ring
+
+
+def _covariance_samples(center, cov, scale=None):
+    """Weighted (x, y, w) samples: the centre plus eight points on the
+    1-sigma error ellipse of a 2x2 position covariance (pixels^2).
+
+    Not a Gaussian quadrature - a cheap, deterministic stand-in for "how much
+    of the position's uncertainty lies in each zone", which is all the zone
+    election needs. Falls back to the centre alone when the covariance is
+    unusable.
+    """
+    x0, y0 = float(center[0]), float(center[1])
+    samples = [(x0, y0, ZONE_SAMPLE_CENTER_WEIGHT)]
+    try:
+        vals, vecs = np.linalg.eigh(np.asarray(cov, dtype=float).reshape(2, 2))
+    except (np.linalg.LinAlgError, ValueError, TypeError):
+        return [(x0, y0, 1.0)]
+    if not np.all(np.isfinite(vals)) or not np.all(np.isfinite(vecs)):
+        return [(x0, y0, 1.0)]
+    a, b = np.sqrt(np.clip(vals, 0.0, None))
+    u, v = vecs[:, 0], vecs[:, 1]
+    w = (1.0 - ZONE_SAMPLE_CENTER_WEIGHT) / len(ZONE_SAMPLE_ANGLES)
+    for th in ZONE_SAMPLE_ANGLES:
+        c, s = math.cos(th), math.sin(th)
+        samples.append((x0 + c * a * u[0] + s * b * v[0], y0 + c * a * u[1] + s * b * v[1], w))
+    return samples
+
+
+def _zone_membership(zone_polys, samples):
+    """zone_id -> share of sample weight in (or, failing that, nearest to)
+    each allowed zone. No-go zones never receive membership."""
+    allowed = [(zid, poly) for zid, poly, _b, no_go in zone_polys if not no_go]
+    if not allowed:
+        return {}
+    shares = {}
+    for x, y, w in samples:
+        pt = Point(x, y)
+        hit = None
+        for zid, poly in allowed:
+            if poly.covers(pt):
+                hit = zid
+                break
+        if hit is None:
+            hit = min(allowed, key=lambda zp: zp[1].distance(pt))[0]
+        shares[hit] = shares.get(hit, 0.0) + w
+    total = sum(shares.values())
+    return {z: s / total for z, s in shares.items()} if total > 0 else {}
+
+
+def _elect_zone(entity, floor_name, instant_zone, point, kf_state, zone_polys, scale, layout, now=None):
+    """The zone to PUBLISH for a tracker this cycle. Returns
+    (zone, locked, speed_m_s).
+
+    Floors already had hysteresis; zones were assigned point-wise every
+    cycle, so a tracker resting near a boundary toggled with every fit.
+    Three mechanisms, all tunable (TUNING_SPEC, bps.set_tuning):
+
+    1. Membership probability. The published point's zone is not a yes/no:
+       samples on the Kalman filter's 1-sigma error ellipse are attributed
+       to zones, giving a share per zone, smoothed over cycles (EMA).
+    2. Margin and dwell. The incumbent zone holds until a challenger leads
+       its smoothed share by zone_switch_margin continuously for
+       zone_switch_secs of wall clock.
+    3. Stationary lock. When the filter's speed stays under stationary_speed
+       for stationary_secs, the tracker is on a table and the zone locks.
+       The lock releases only when the point sits more than
+       zone_unlock_margin metres outside the locked zone for
+       zone_unlock_secs (the time already spent away then counts toward
+       the dwell, so the switch follows at once), or when the tracker is
+       clearly moving again for stationary_secs.
+
+    nearest_zone stays instantaneous for automations that want the raw
+    answer, and zone_raw in the API carries the point's own zone. Turning
+    zone_hysteresis off publishes zone_raw as before.
+    """
+    now = time.time() if now is None else now
+    valid = {zid for zid, _p, _b, no_go in zone_polys if not no_go}
+    if not _tuning(layout, "zone_hysteresis") or not valid:
+        _zone_state.pop(entity, None)
+        return instant_zone, False, None
+
+    st = _zone_state.get(entity)
+    if st is None or st["floor"] != floor_name or (st["zone"] is not None and st["zone"] not in valid):
+        st = _zone_state[entity] = {
+            "floor": floor_name, "zone": None, "since": now, "probs": {},
+            "challenge": None, "still_since": None, "moving_since": None,
+            "away_since": None, "locked": False,
+        }
+
+    # 1. Membership, smoothed.
+    center = (point.x, point.y) if isinstance(point, Point) else (point[0], point[1])
+    speed = None
+    if kf_state is not None and kf_state.get("floor") == floor_name:
+        samples = _covariance_samples(center, kf_state["P"][:2, :2])
+        if isinstance(scale, (int, float)) and scale > 0:
+            speed = math.hypot(float(kf_state["x"][2]), float(kf_state["x"][3])) / scale
+    else:
+        samples = [(center[0], center[1], 1.0)]
+    shares = _zone_membership(zone_polys, samples)
+    if not shares and instant_zone in valid:
+        shares = {instant_zone: 1.0}
+    alpha = _tuning(layout, "zone_prob_smoothing")
+    probs = st["probs"]
+    for z in set(probs) | set(shares):
+        probs[z] = alpha * probs.get(z, 0.0) + (1.0 - alpha) * shares.get(z, 0.0)
+    for z in [z for z, p in probs.items() if p < 0.01 or z not in valid]:
+        del probs[z]
+    norm = sum(probs.values())
+    if norm > 0:
+        for z in probs:
+            probs[z] /= norm
+
+    # 3a. Stillness / motion clocks.
+    if speed is not None:
+        if speed < _tuning(layout, "stationary_speed"):
+            st["still_since"] = st["still_since"] or now
+            st["moving_since"] = None
+        else:
+            st["still_since"] = None
+            st["moving_since"] = st["moving_since"] or now
+    else:
+        st["still_since"] = st["moving_since"] = None
+
+    incumbent = st["zone"]
+    if not probs:
+        return (incumbent if incumbent is not None else instant_zone), False, speed
+    best = max(probs, key=probs.get)
+    if incumbent is None:
+        st.update(zone=best, since=now, challenge=None, locked=False, away_since=None)
+        return best, False, speed
+
+    # 3b. Lock and unlock.
+    stationary_secs = _tuning(layout, "stationary_secs")
+    if not st["locked"] and st["still_since"] is not None and now - st["still_since"] >= stationary_secs:
+        st["locked"] = True
+        st["away_since"] = None
+    challenge_since = None
+    if st["locked"]:
+        incumbent_poly = next((p for zid, p, _b, _n in zone_polys if zid == incumbent), None)
+        margin_px = _tuning(layout, "zone_unlock_margin") * (scale if isinstance(scale, (int, float)) and scale > 0 else 1.0)
+        pt = point if isinstance(point, Point) else Point(center)
+        away = incumbent_poly is None or incumbent_poly.distance(pt) > margin_px
+        st["away_since"] = (st["away_since"] or now) if away else None
+        left_for_long = st["away_since"] is not None and now - st["away_since"] >= _tuning(layout, "zone_unlock_secs")
+        moving_for_long = st["moving_since"] is not None and now - st["moving_since"] >= stationary_secs
+        if not left_for_long and not moving_for_long:
+            st["challenge"] = None
+            return incumbent, True, speed
+        # Unlocked. Time already spent outside counts toward the dwell below.
+        challenge_since = st["away_since"]
+        st.update(locked=False, still_since=None, away_since=None)
+
+    # 2. Margin and dwell.
+    margin = _tuning(layout, "zone_switch_margin")
+    if best == incumbent or probs[best] - probs.get(incumbent, 0.0) < margin:
+        st["challenge"] = None
+        return incumbent, False, speed
+    ch = st["challenge"]
+    if ch and ch.get("zone") == best:
+        since = ch["since"]
+    else:
+        since = challenge_since if challenge_since is not None else now
+    if now - since >= _tuning(layout, "zone_switch_secs"):
+        st.update(zone=best, since=now, challenge=None)
+        return best, False, speed
+    st["challenge"] = {"zone": best, "since": since}
+    return incumbent, False, speed
+
+
+def _subzone_with_dwell(entity, candidate, layout, now=None):
+    """Publish a (sub_zone, parent_zone) pair only once it has persisted for
+    subzone_switch_secs; until then the previous pair stands. Sub-zones are
+    small (a couch, a desk), so they flap at least as readily as zones."""
+    now = time.time() if now is None else now
+    st = _subzone_state.get(entity)
+    if st is None:
+        _subzone_state[entity] = {"value": candidate, "pending": None}
+        return candidate
+    if candidate == st["value"]:
+        st["pending"] = None
+        return candidate
+    pending = st["pending"]
+    if pending is None or pending[0] != candidate:
+        st["pending"] = (candidate, now)
+        return st["value"]
+    if now - pending[1] >= _tuning(layout, "subzone_switch_secs"):
+        st["value"] = candidate
+        st["pending"] = None
+        return candidate
+    return st["value"]
 
 # Compiled zone/sub-zone polygons for a floor, keyed by (cache kind, floor_name)
 # -> (layout_version, [result tuples]). A zone's geometry only changes when the
@@ -2262,6 +2687,53 @@ def _register_calibration_services(hass) -> None:
         schema=vol.Schema({
             vol.Optional("heights", default=dict): vol.Schema({cv.string: vol.Coerce(float)}),
             vol.Optional("default"): vol.All(vol.Coerce(float), vol.Range(min=0, max=10)),
+        }),
+    )
+
+    async def _set_tuning(call: ServiceCall) -> None:
+        """Change positioning tuning live (TUNING_SPEC), through the store.
+
+        Validation is strict here where a human is typing, and lenient in
+        _tuning where the store is read: an unknown key or an out-of-range
+        value is refused with the allowed range, rather than silently
+        ignored later. ``reset`` drops every override first.
+        """
+        settings = call.data.get("settings") or {}
+        updates = {}
+        for key, value in settings.items():
+            if key not in TUNING_SPEC:
+                raise HomeAssistantError(
+                    f"unknown tuning key {key!r}; known: {', '.join(sorted(TUNING_SPEC))}"
+                )
+            coerced = _coerce_tuning(key, value, None)
+            if coerced is None:
+                spec = TUNING_SPEC[key]
+                allowed = (
+                    f"one of {', '.join(spec[2])}" if spec[1] is str
+                    else "true or false" if spec[1] is bool
+                    else f"a number between {spec[2]} and {spec[3]}"
+                )
+                raise HomeAssistantError(f"{key} must be {allowed}, got {value!r}")
+            updates[key] = coerced
+
+        async with BPS_FILE_LOCK:
+            data = get_bps_data_for_edit(hass)
+            if not isinstance(data, dict):
+                raise HomeAssistantError("No BPS layout saved yet; place receivers first.")
+            tuning = {} if call.data.get("reset") else dict(data.get("tuning") or {})
+            tuning.update(updates)
+            if tuning:
+                data["tuning"] = tuning
+            else:
+                data.pop("tuning", None)
+            await save_bps_data(hass, data)
+        _LOGGER.info("bps.set_tuning: %s", tuning or "defaults restored")
+
+    hass.services.async_register(
+        DOMAIN, "set_tuning", _set_tuning,
+        schema=vol.Schema({
+            vol.Optional("settings", default=dict): dict,
+            vol.Optional("reset", default=False): cv.boolean,
         }),
     )
 
