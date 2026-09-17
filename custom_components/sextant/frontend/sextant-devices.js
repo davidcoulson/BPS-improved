@@ -387,8 +387,9 @@ class SextantDevices extends LitElement {
     const filter = this._filter.toLowerCase();
     const all = (this._candidates || []).filter((c) => !this._isProxyBeacon(c) && !this._onlyUnplaced(c, placed));
     const recent = all.filter((c) => (c.last_seen_age ?? 1e9) <= RECENT_SECS);
+    const haystack = (c) => { const w = this._heardWhere(c, index); return `${c.name} ${c.address} ${c.manufacturer || ""} ${c.area_name || ""} ${c.kind} ${w ? `${w.room || ""} ${w.floor || ""} ${w.proxy || ""}` : ""}`.toLowerCase(); };
     const candidates = (this._showAll ? all : recent)
-      .filter((c) => (this._kind === "all" || c.kind === this._kind) && (!filter || `${c.name} ${c.address} ${c.manufacturer || ""} ${c.area_name || ""}`.toLowerCase().includes(filter)))
+      .filter((c) => (this._kind === "all" || c.kind === this._kind) && (!filter || haystack(c).includes(filter)))
       .sort((a, b) => (a.last_seen_age ?? 1e9) - (b.last_seen_age ?? 1e9));
     return html`
       <section class="card">
@@ -419,7 +420,7 @@ class SextantDevices extends LitElement {
       <section class="card">
         <h3>Heard, not tracked <span class="muted">${candidates.length}${this._showAll ? "" : ` in the last ${RECENT_SECS} s`}</span></h3>
         <div class="row">
-          <input class="grow" type="search" placeholder="Filter by name, address, maker or area" .value=${this._filter} @input=${(e) => { this._filter = e.target.value; }}>
+          <input class="grow" type="search" placeholder="Filter by name, address, maker, room, floor, proxy or kind" .value=${this._filter} @input=${(e) => { this._filter = e.target.value; }}>
           ${uiSelect({ label: "Kind", value: this._kind, options: KIND_FILTERS.map(([v, l]) => ({ value: v, label: l })), onChange: (v) => { this._kind = v; }, style: "min-width: 150px" })}
           <span class="chips">${uiSwitch({ label: `Show all (${all.length})`, checked: this._showAll, onChange: (v) => { this._showAll = v; } })}</span>
           ${uiButton({ label: "Refresh", kind: "text", icon: "mdi:refresh", onClick: () => this._refreshLight() })}
