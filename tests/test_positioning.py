@@ -1400,3 +1400,45 @@ def test_anchor_needs_a_clear_nearest_and_can_be_disabled():
     assert sextant._elect_anchor("w", "G", swapped, layout, now=4.0)["slug"] == "b" and sextant._anchor_state["w"]["floor"] == "G"
     off = {"floor": layout["floor"], "tuning": {"anchor_max_m": 0}}
     assert sextant._elect_anchor("w", "G", swapped, off, now=5.0) is None and "w" not in sextant._anchor_state
+
+
+def test_selftest_reports_rooms_and_the_breakdown_by_floor_and_room():
+    recs = SQUARE + [("r5", 300, 300)]            # r5 has no samples: unsolved
+    hass = _hass_with(recs, _exact_samples(SQUARE))
+    hass.data["sextant"]["layout"]["floor"][0]["zones"] = [
+        {"zone_id": "z1", "entity_id": "West", "poly": True, "cords": [{"x": -10, "y": -10}, {"x": 50, "y": -10}, {"x": 50, "y": 110}, {"x": -10, "y": 110}]},
+        {"zone_id": "z2", "entity_id": "East", "poly": True, "cords": [{"x": 50, "y": -10}, {"x": 110, "y": -10}, {"x": 110, "y": 110}, {"x": 50, "y": 110}]},
+        {"zone_id": "z3", "entity_id": "Empty", "poly": True, "cords": [{"x": 200, "y": 0}, {"x": 250, "y": 0}, {"x": 250, "y": 50}, {"x": 200, "y": 50}]},
+        {"zone_id": "z4", "entity_id": "Void", "no_go": True, "poly": True, "cords": [{"x": 290, "y": 290}, {"x": 310, "y": 290}, {"x": 310, "y": 310}, {"x": 290, "y": 310}]},
+    ]
+    res = sextant.run_selftest(hass)
+    assert {r["entity"]: r["room"] for r in res["receivers"]} == {"r1": "West", "r3": "West", "r2": "East", "r4": "East"}
+    assert res["unsolved"] and res["unsolved"][0]["entity"] == "r5" and res["unsolved"][0]["room"] is None  # a no-go area is not a room
+    assert res["floors"] == ["F"] and res["rooms"] == {"F": ["West", "East", "Empty"]}
+
+    bd = sextant.selftest_breakdown(res)
+    assert [f["floor"] for f in bd["floors"]] == ["F"]
+    assert bd["floors"][0]["solved"] == 4 and bd["floors"][0]["unsolved"] == 1 and bd["floors"][0]["cep95_m"] < 0.5
+    by_room = {(r["floor"], r["room"]): r for r in bd["rooms"]}
+    assert by_room[("F", "West")]["solved"] == 2 and by_room[("F", "East")]["solved"] == 2
+    assert by_room[("F", "West")]["worst"] in ("r1", "r3")
+    assert by_room[("F", "Empty")] == {"floor": "F", "room": "Empty", "solved": 0, "unsolved": 0}  # a room with no proxy
+    assert by_room[("F", None)]["unsolved"] == 1 and by_room[("F", None)]["solved"] == 0
+    # Rooms with proxies come before the empty one.
+    assert [r["room"] for r in bd["rooms"]][-2:] == ["Empty", None] or [r["room"] for r in bd["rooms"]][-1] == "Empty"
+
+    state, attrs = sextant._selftest_summary(res)
+    assert state == attrs["cep95_m"] and set(attrs["per_room_cep95_m"]) == {"F / West", "F / East"}
+    assert attrs["per_floor_cep95_m"] == {"F": attrs["cep95_m"]}
+
+
+def test_selftest_breakdown_of_an_empty_result_is_empty():
+    assert sextant.selftest_breakdown({"receivers": [], "unsolved": [], "counts": {}}) == {"floors": [], "rooms": []}
+
+
+def test_legacy_rectangle_zone_corners_are_ordered_before_the_point_test():
+    # Scan-order corners (a bow tie if joined as stored) still make a rectangle.
+    coords = {"floor": [{"name": "F", "scale": 1, "receivers": [], "zones": [
+        {"entity_id": "R", "poly": False, "cords": [{"x": 0, "y": 0}, {"x": 10, "y": 10}, {"x": 10, "y": 0}, {"x": 0, "y": 10}]}]}]}
+    rooms = sextant._selftest_rooms(coords)
+    assert sextant._room_at(rooms["F"], 5, 5) == "R" and sextant._room_at(rooms["F"], 15, 5) is None

@@ -615,7 +615,7 @@ async def ws_selftest(hass, connection, msg):
     samples = {k: list(v) for k, v in get_calibration_state(hass).get("samples", {}).items()}
     result = await hass.async_add_executor_job(core.run_selftest, hass, samples)
     state, attrs = core._selftest_summary(result)
-    connection.send_result(msg["id"], {"result": result, "state": state, "summary": attrs})
+    connection.send_result(msg["id"], {"result": result, "state": state, "summary": attrs, "breakdown": core.selftest_breakdown(result)})
 
 
 @websocket_api.websocket_command({vol.Required("type"): "sextant/scanner_linking"})

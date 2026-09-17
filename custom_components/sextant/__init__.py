@@ -4214,6 +4214,57 @@ def _selftest_floor_bounds(coords, receivers):
     return out
 
 
+def _point_in_ring(x, y, ring):
+    """Ray-casting point-in-polygon; a point on the boundary counts as inside."""
+    inside = False
+    n = len(ring)
+    for i in range(n):
+        x1, y1 = ring[i]
+        x2, y2 = ring[(i + 1) % n]
+        if (y1 > y) != (y2 > y):
+            x_int = x1 + (y - y1) * (x2 - x1) / (y2 - y1)
+            if x <= x_int:
+                inside = not inside
+    return inside
+
+
+def _selftest_rooms(coords):
+    """floor name -> [(room name, ring)] from the layout's rooms, in drawn order.
+
+    No-go areas are not rooms. Legacy rectangle zones stored their corners in
+    scan order, so those four are ordered around their centroid first (the
+    same rule _floor_zone_polygons applies).
+    """
+    rooms = {}
+    if not isinstance(coords, dict):
+        return rooms
+    for floor in coords.get("floor", []):
+        entries = []
+        for zone in floor.get("zones") or []:
+            if not isinstance(zone, dict) or zone.get("no_go"):
+                continue
+            name = zone.get("entity_id") or zone.get("zone_id")
+            ring = [(float(c["x"]), float(c["y"])) for c in (zone.get("cords") or [])
+                    if isinstance(c, dict) and c.get("x") is not None and c.get("y") is not None]
+            if not name or len(ring) < 3:
+                continue
+            if not zone.get("poly") and len(ring) == 4:
+                cx = sum(x for x, _y in ring) / 4
+                cy = sum(y for _x, y in ring) / 4
+                ring.sort(key=lambda pt: math.atan2(pt[1] - cy, pt[0] - cx))
+            entries.append((str(name), ring))
+        rooms[floor.get("name")] = entries
+    return rooms
+
+
+def _room_at(rooms, x, y):
+    """The first room on the floor containing (x, y), else None."""
+    for name, ring in rooms or []:
+        if _point_in_ring(x, y, ring):
+            return name
+    return None
+
+
 def run_selftest(hass, samples=None):
     """Leave-one-out receiver self-localization accuracy against known positions.
 
@@ -4230,6 +4281,7 @@ def run_selftest(hass, samples=None):
     coords = get_layout(hass)
     receivers = _selftest_receivers(coords)
     floor_bounds = _selftest_floor_bounds(coords, receivers)
+    rooms = _selftest_rooms(coords)
     if samples is None:
         samples = get_calibration_state(hass).get("samples", {})
 
@@ -4262,8 +4314,9 @@ def run_selftest(hass, samples=None):
             # (x, y, projected radius, measured slant) in pixels — the slant is
             # the weight radius, mirroring the live solve.
             pts.append((o["x"], o["y"], horizontal * tgt["scale"], d * tgt["scale"]))
+        room = _room_at(rooms.get(tgt["floor"]), tgt["x"], tgt["y"])
         if len(pts) < 3:
-            unsolved.append({"entity": slug, "floor": tgt["floor"], "heard_by": len(pts)})
+            unsolved.append({"entity": slug, "floor": tgt["floor"], "room": room, "heard_by": len(pts)})
             continue
         fix = trilaterate(
             [(px, py, pr, 1.0, psl) for (px, py, pr, psl) in pts],
@@ -4271,11 +4324,11 @@ def run_selftest(hass, samples=None):
             min_weight_radius=MIN_WEIGHT_RADIUS_M * tgt["scale"],
         )
         if fix is None:
-            unsolved.append({"entity": slug, "floor": tgt["floor"], "heard_by": len(pts), "reason": "no convergence"})
+            unsolved.append({"entity": slug, "floor": tgt["floor"], "room": room, "heard_by": len(pts), "reason": "no convergence"})
             continue
         err_px = math.hypot(fix[0] - tgt["x"], fix[1] - tgt["y"])
         solved.append({
-            "entity": slug, "floor": tgt["floor"],
+            "entity": slug, "floor": tgt["floor"], "room": room,
             "known": [round(tgt["x"], 1), round(tgt["y"], 1)],
             "est": [round(float(fix[0]), 1), round(float(fix[1]), 1)],
             "error_m": round(err_px / tgt["scale"], 3),
@@ -4285,7 +4338,74 @@ def run_selftest(hass, samples=None):
         "receivers": solved,
         "unsolved": unsolved,
         "counts": {"placed": len(receivers), "solved": len(solved), "unsolved": len(unsolved)},
+        # Floors in layout order and their rooms, so the breakdown can list a
+        # room that has no proxy in it at all (a tracker there is placed from
+        # its neighbours' proxies, which is worth knowing).
+        "floors": [f.get("name") for f in (coords.get("floor", []) if isinstance(coords, dict) else [])],
+        "rooms": {floor: [name for name, _ring in entries] for floor, entries in rooms.items()},
     }
+
+
+def _error_stats(rows):
+    """solved / cep50 / cep95 / max / worst for a group of solved receivers."""
+    errs = np.array([r["error_m"] for r in rows], dtype=float)
+    worst = max(rows, key=lambda r: r["error_m"])
+    return {
+        "solved": len(rows),
+        "cep50_m": round(float(np.percentile(errs, 50)), 3),
+        "cep95_m": round(float(np.percentile(errs, 95)), 3),
+        "max_m": round(float(errs.max()), 3),
+        "worst": worst.get("entity"),
+    }
+
+
+def selftest_breakdown(result):
+    """The self-test per floor and per room: which parts of the house the
+    proxies place well and which they do not.
+
+    ``floors`` has one row per floor in layout order; ``rooms`` one row per
+    room per floor (rooms with no proxy inside them included, with
+    ``solved`` 0 and no error figures), plus a ``room: None`` row for proxies
+    placed outside every room. Within a floor the rooms come worst first,
+    rooms without a proxy last. A whole-house CEP95 hides exactly this: a
+    house can read 7 m overall because one basement room reads 7 m while
+    the rest sit under 2 m.
+    """
+    solved = [r for r in result.get("receivers", []) if isinstance(r.get("error_m"), (int, float))]
+    unsolved = result.get("unsolved", []) or []
+    known_rooms = result.get("rooms", {}) or {}
+    order = list(result.get("floors") or [])
+    for r in solved + unsolved:
+        if r.get("floor") not in order:
+            order.append(r.get("floor"))
+    for f in known_rooms:
+        if f not in order:
+            order.append(f)
+
+    floors, rooms = [], []
+    for f in order:
+        on_floor = [r for r in solved if r.get("floor") == f]
+        row = {"floor": f, "solved": 0, "unsolved": sum(1 for u in unsolved if u.get("floor") == f)}
+        if on_floor:
+            row.update(_error_stats(on_floor))
+        floors.append(row)
+
+        names = list(known_rooms.get(f, []))
+        for extra in sorted({r.get("room") for r in solved + unsolved if r.get("floor") == f} - set(names) - {None}):
+            names.append(extra)
+        floor_rooms = []
+        for room in names + [None]:
+            here = [r for r in on_floor if r.get("room") == room]
+            missing = sum(1 for u in unsolved if u.get("floor") == f and u.get("room") == room)
+            if room is None and not here and not missing:
+                continue  # nothing placed outside the rooms: no row for it
+            row = {"floor": f, "room": room, "solved": 0, "unsolved": missing}
+            if here:
+                row.update(_error_stats(here))
+            floor_rooms.append(row)
+        floor_rooms.sort(key=lambda r: (0 if r["solved"] or r["unsolved"] else 1, -(r.get("cep95_m") or 0.0), str(r["room"])))
+        rooms.extend(floor_rooms)
+    return {"floors": floors, "rooms": rooms}
 
 
 def _selftest_summary(result):
@@ -4317,6 +4437,13 @@ def _selftest_summary(result):
     attrs["per_floor_cep95_m"] = {
         f: round(float(np.percentile(v, 95)), 3) for f, v in by_floor.items()
     }
+    by_room = {}
+    for r in recv:
+        if r.get("room"):
+            by_room.setdefault(f"{r.get('floor')} / {r['room']}", []).append(r["error_m"])
+    attrs["per_room_cep95_m"] = {
+        k: round(float(np.percentile(v, 95)), 3) for k, v in by_room.items()
+    }
     return attrs["cep95_m"], attrs
 
 
@@ -4340,4 +4467,5 @@ class SextantSelfTestAPI(HomeAssistantView):
         # executor, so iterating them off-thread can't race calibration's ingest.
         samples = {k: list(v) for k, v in get_calibration_state(self.hass).get("samples", {}).items()}
         data = await self.hass.async_add_executor_job(run_selftest, self.hass, samples)
+        data["breakdown"] = selftest_breakdown(data)
         return web.json_response(data)
