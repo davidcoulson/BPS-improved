@@ -234,8 +234,10 @@ export function trackerName(data, ent) {
 /** A proxy's display name from the scanner directory (by address or slug), else the slug. */
 export function proxyName(data, slugOrAddress) {
   const scanners = data?.scanners || {};
-  if (scanners[slugOrAddress]?.name) return scanners[slugOrAddress].name;
-  for (const info of Object.values(scanners)) if (info.slug === slugOrAddress && info.name) return info.name;
+  // Bermuda appends " (aa:bb:cc:dd:ee:ff)" when two devices share a name; the address is not part of the name.
+  const tidy = (n) => String(n).replace(/\s*\([0-9a-f]{2}(:[0-9a-f]{2}){5}\)\s*$/i, "");
+  if (scanners[slugOrAddress]?.name) return tidy(scanners[slugOrAddress].name);
+  for (const info of Object.values(scanners)) if (info.slug === slugOrAddress && info.name) return tidy(info.name);
   return slugOrAddress;
 }
 

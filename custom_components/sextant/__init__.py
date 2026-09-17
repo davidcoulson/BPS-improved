@@ -401,9 +401,27 @@ FINGERPRINT_REFRESH_SECS = 20.0
 _fingerprint_db = fingerprint.ReferenceDB()
 
 
+def _tracker_estimator(layout, entity):
+    """The position estimator for one tracker: its own override (tracker_estimators, set from the
+    tracker dialog: a Tile the fingerprint makes worse can be geometric only), else the tuning."""
+    overrides = layout.get("tracker_estimators") if isinstance(layout, dict) else None
+    own = overrides.get(entity) if isinstance(overrides, dict) else None
+    if own in TUNING_SPEC["position_estimator"][2]:
+        return own
+    return _tuning(layout, "position_estimator")
+
+
+def _fingerprint_wanted(layout):
+    """Whether anything needs the reference DB: the tuning, or any tracker's own override."""
+    if _tuning(layout, "position_estimator") != "geometric":
+        return True
+    overrides = layout.get("tracker_estimators") if isinstance(layout, dict) else None
+    return isinstance(overrides, dict) and any(v in ("fused", "fingerprint") for v in overrides.values())
+
+
 def _refresh_fingerprint_references(hass, layout, now_ts):
     """Sample Bermuda's scanner ranging into the reference DB when due."""
-    if _tuning(layout, "position_estimator") == "geometric":
+    if not _fingerprint_wanted(layout):
         return
     if now_ts - getattr(_refresh_fingerprint_references, "last", 0.0) < FINGERPRINT_REFRESH_SECS:
         return
@@ -1817,14 +1835,14 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
     # The incumbent, when solvable, ALWAYS defends its title — even ranked
     # below the cut — so nearest-slant noise alone can never evict it.
     layout = _layout_for(new_global_data, entity)
-    estimator = _tuning(layout, "position_estimator")
+    estimator = _tracker_estimator(layout, entity)
     refs_by_floor = {}
     tracker_vec = {}
     fp_gain = 1.0
     if estimator != "geometric":
         fp_gain = _tuning(layout, "fingerprint_ref_gain")
         if _tuning(layout, "fingerprint_auto_gain"):
-            fp_gain *= _fingerprint_db.learned_gain
+            fp_gain *= _fingerprint_db.gain_for(entity)
         refs_by_floor = fingerprint.build_references(layout, _fingerprint_db.vectors(), fp_gain)
         tracker_vec = fingerprint.tracker_vector(layout)
     # A floor with references can compete on its fingerprint with a single
@@ -2032,7 +2050,7 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
     # ratio says something about the probe gain; fold it in (slowly).
     fp_tel = elected.get("fp")
     if fp_tel and fp_tel.get("ratio") and _tuning(layout, "fingerprint_auto_gain"):
-        _fingerprint_db.learn(fp_tel["ratio"], fp_tel.get("conf") or 0.0)
+        _fingerprint_db.learn(fp_tel["ratio"], fp_tel.get("conf") or 0.0, entity=entity)
     weighted = elected["weighted"]
     zone_polys = elected["zone_polys"]
     floor_bounds = elected["bounds"]
@@ -2205,7 +2223,12 @@ def _fuse_fingerprint(spec, geo_fix, geo_conf):
         return geo_fix, geo_conf, None
     if spec["mode"] == "fingerprint" or geo_fix is None:
         return (m["x"], m["y"]), m["conf"], telemetry
-    w, wf = spec["weight"], spec["floor_weight"]
+    # A match whose scale disagrees with the tracker (its own gain still being learned, or a radio
+    # unlike the probes) is trusted less: the Office Tile read 1.5x its best reference and the
+    # fingerprint half of every fix dragged it two rooms over.
+    trust = fingerprint.trust(m.get("ratio"))
+    telemetry["trust"] = round(trust, 2)
+    w, wf = spec["weight"] * trust, spec["floor_weight"] * trust
     fix = ((1.0 - w) * geo_fix[0] + w * m["x"], (1.0 - w) * geo_fix[1] + w * m["y"])
     conf = (1.0 - wf) * geo_conf + wf * m["conf"]
     return fix, conf, telemetry

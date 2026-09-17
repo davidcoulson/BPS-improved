@@ -224,3 +224,43 @@ def test_learned_gain_converges_on_references_that_read_short():
     assert abs(db.learned_gain - 2.0) < 0.1
     refs = fp.build_references(layout, vectors, gain=db.learned_gain)
     assert abs(fp.match(tracker, refs["F"])["ratio"] - 1.0) < 0.05
+
+
+def test_each_tracker_learns_its_own_gain_on_top_of_the_shared_one():
+    db = fp.ReferenceDB()
+    for _ in range(20):
+        db.learn(2.0, conf=1.0, entity="tile")
+    shared = db.learned_gain
+    assert 1.0 < shared < 2.0                          # the shared gain moves slowly (2 ** (0.02 * 20))
+    assert db.gain_for("tile") > shared * 1.5           # the tile's own multiplier moves fast (2 ** (0.1 * 20))
+    assert db.gain_for("phone") == shared               # nobody else is touched
+    for _ in range(200):
+        db.learn(2.0, conf=1.0, entity="tile")
+    assert db.gain_for("tile") <= fp.LEARNED_GAIN_MAX * fp.LEARNED_GAIN_MAX  # both factors clamp
+
+
+def test_trust_falls_with_scale_disagreement():
+    assert fp.trust(None) == 1.0 and fp.trust(1.0) == 1.0
+    assert 0.6 < fp.trust(1.5) < 0.7 and abs(fp.trust(1.5) - fp.trust(1 / 1.5)) < 1e-9
+    assert fp.trust(3.0) == 0.0 and fp.trust(9.0) == 0.0
+
+
+def test_fused_fix_discounts_a_mis_scaled_match(monkeypatch):
+    spec = {"mode": "fused", "tracker": {"a": 1.0}, "refs": [], "k": 3, "missing_m": 12.0, "weight": 0.5, "floor_weight": 0.5, "gain": 1.0}
+    geo = (0.0, 0.0)
+    match = {"x": 100.0, "y": 0.0, "conf": 0.5, "score": 0.3, "refs": [], "ratio": 1.0}
+    monkeypatch.setattr(sextant.fingerprint, "match", lambda *a, **k: dict(match))
+    fix, conf, tel = sextant._fuse_fingerprint(spec, geo, 0.5)
+    assert fix[0] == 50.0 and tel["trust"] == 1.0           # a matched scale: the plain 50/50 blend
+    match["ratio"] = 3.0
+    fix, conf, tel = sextant._fuse_fingerprint(spec, geo, 0.5)
+    assert fix[0] == 0.0 and tel["trust"] == 0.0            # a factor-of-three disagreement: geometric only
+
+
+def test_tracker_estimator_override(monkeypatch):
+    layout = {"tuning": {"position_estimator": "fused"}, "tracker_estimators": {"tile": "geometric", "bad": "nope"}}
+    assert sextant._tracker_estimator(layout, "tile") == "geometric"
+    assert sextant._tracker_estimator(layout, "phone") == "fused"
+    assert sextant._tracker_estimator(layout, "bad") == "fused"     # an unknown value falls back to the tuning
+    assert sextant._fingerprint_wanted({"tuning": {"position_estimator": "geometric"}, "tracker_estimators": {"tile": "fused"}})
+    assert not sextant._fingerprint_wanted({"tuning": {"position_estimator": "geometric"}})

@@ -47,6 +47,12 @@ NEIGHBOUR_SCORE_RATIO = 3.0
 LEARN_ALPHA = 0.02
 LEARNED_GAIN_MIN = 0.25
 LEARNED_GAIN_MAX = 4.0
+# Every radio reads differently (a watch weak, a Tile hot): each tracker also learns its own
+# multiplier on the shared gain, faster, since it only ever affects that tracker.
+TRACKER_LEARN_ALPHA = 0.1
+# A match whose tracker/reference range ratio is this far from 1 (a factor of three) says nothing
+# about where the tracker is; the fusion weight falls linearly to zero there.
+TRUST_SCALE = math.log(3.0)
 MIN_SHARED_FOR_RATIO = 3   # receivers both vectors need before a ratio is trusted
 
 
@@ -59,8 +65,14 @@ class ReferenceDB:
         self.stamp = None
         # Multiplies the configured reference gain (see learn()).
         self.learned_gain = 1.0
+        # Per-tracker multiplier on top of learned_gain (see learn(entity=...)).
+        self.tracker_gain = {}
 
-    def learn(self, ratio, conf=1.0, alpha=LEARN_ALPHA):
+    def gain_for(self, entity=None):
+        """The learned gain for one tracker: the shared gain times its own multiplier."""
+        return self.learned_gain * self.tracker_gain.get(entity, 1.0)
+
+    def learn(self, ratio, conf=1.0, alpha=LEARN_ALPHA, entity=None):
         """Fold one match's tracker/reference range ratio into the learned gain.
 
         ``ratio`` > 1 means the tracker reads farther than the reference the
@@ -72,8 +84,11 @@ class ReferenceDB:
         """
         if not isinstance(ratio, (int, float)) or isinstance(ratio, bool) or not ratio > 0 or not math.isfinite(ratio):
             return self.learned_gain
-        step = alpha * max(0.0, min(1.0, float(conf)))
-        self.learned_gain = min(LEARNED_GAIN_MAX, max(LEARNED_GAIN_MIN, self.learned_gain * ratio ** step))
+        weight = max(0.0, min(1.0, float(conf)))
+        self.learned_gain = min(LEARNED_GAIN_MAX, max(LEARNED_GAIN_MIN, self.learned_gain * ratio ** (alpha * weight)))
+        if entity is not None:
+            own = self.tracker_gain.get(entity, 1.0) * ratio ** (TRACKER_LEARN_ALPHA * weight)
+            self.tracker_gain[entity] = min(LEARNED_GAIN_MAX, max(LEARNED_GAIN_MIN, own))
         return self.learned_gain
 
     def ingest(self, ranging, max_age=REF_MAX_AGE_SECS):
@@ -117,6 +132,14 @@ class ReferenceDB:
 
     def pairs(self):
         return sum(1 for dq in self._samples.values() if dq)
+
+
+def trust(ratio):
+    """How much a match with this tracker/reference range ratio should weigh: 1 at a ratio of 1,
+    falling to 0 at a factor of TRUST_SCALE either way. None (no ratio) is trusted in full."""
+    if not isinstance(ratio, (int, float)) or isinstance(ratio, bool) or not ratio > 0 or not math.isfinite(ratio):
+        return 1.0
+    return max(0.0, 1.0 - abs(math.log(ratio)) / TRUST_SCALE)
 
 
 def _median(values):

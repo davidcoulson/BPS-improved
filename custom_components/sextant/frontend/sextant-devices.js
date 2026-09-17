@@ -209,6 +209,7 @@ class SextantDevices extends LitElement {
       height: toDisplayLen(layout.tracker_heights?.[slug], this.hass),
       ref: layout.tracker_ref_offsets?.[slug] ?? "",
       icon: layout.tracker_icons?.[slug] || "",
+      estimator: layout.tracker_estimators?.[slug] || "",
       file: null,
     };
   }
@@ -222,6 +223,7 @@ class SextantDevices extends LitElement {
       height: w.height === "" || w.height == null ? null : fromDisplayLen(w.height, this.hass),
       ref_offset_db: w.ref === "" || w.ref == null ? null : Number(w.ref),
       icon: w.icon || null,
+      estimator: w.estimator || null,
     };
     if (w.new) {
       // Nothing has touched Bermuda yet. Now it does; the settings follow once the device has a slug.
@@ -260,6 +262,10 @@ class SextantDevices extends LitElement {
           ${uiField({ label: "Ref trim (dB)", type: "number", step: 0.5, min: -20, max: 20, value: w.ref, placeholder: "0", onChange: (v) => { w.ref = v; this.requestUpdate(); }, style: "width: 150px" })}
         </div>
         <p class="small muted">Height: how high it is usually carried or placed (a phone in a pocket about 1 m, a dog's collar 0.3 m). Ref trim: a few dB either way if this tracker always reads too near or too far.</p>
+        <div class="row">
+          ${uiSelect({ label: "Positioning", value: w.estimator || "", options: [{ value: "", label: `Default (${this.data?.layout?.tuning?.position_estimator || "geometric"})` }, { value: "geometric", label: "Geometric only, no fingerprint" }, { value: "fused", label: "Fused" }, { value: "fingerprint", label: "Fingerprint only" }], onChange: (v) => { w.estimator = v; this.requestUpdate(); }, style: "min-width: 280px" })}
+        </div>
+        <p class="small muted">Positioning: the estimator for this tracker alone. If the fingerprint makes it worse (a Tile or a tag whose radio reads unlike the phones), pick geometric only.</p>
         <h4>Custom icon <span class="muted small">optional, overrides the class icon</span></h4>
         <div class="row">
           ${w.icon ? html`<img class="icon" src=${w.icon} alt="">` : nothing}
@@ -430,7 +436,7 @@ class SextantDevices extends LitElement {
                 <button class="iconpick" title="Change the icon or class of ${name}" @click=${() => this._openWizard(slug, address)}>
                   ${icons[slug] ? html`<img class="icon" src=${icons[slug]} alt="">` : html`<ha-icon class="icon" icon=${mdi || "mdi:tag-outline"}></ha-icon>`}
                 </button>
-                <div><a href="#" class="name" title="Edit name, class, height, ref trim and icon" @click=${(e) => { e.preventDefault(); this._openWizard(slug, address); }}>${name}</a><br><span class="muted small">${address}${classes[slug] ? ` · ${(TRACKER_CLASSES.find(([k]) => k === classes[slug]) || [])[1] || classes[slug]}` : ""}</span></div>
+                <div><a href="#" class="name" title="Edit name, class, height, ref trim and icon" @click=${(e) => { e.preventDefault(); this._openWizard(slug, address); }}>${name}</a><br><span class="muted small">${address}${classes[slug] ? ` · ${(TRACKER_CLASSES.find(([k]) => k === classes[slug]) || [])[1] || classes[slug]}` : ""}${layout.tracker_estimators?.[slug] ? ` · ${layout.tracker_estimators[slug]} only` : ""}</span></div>
               </td>
               <td>${p ? html`${p.zone}${p.sub_zone && p.sub_zone !== "unknown" ? ` · ${p.sub_zone}` : ""}<br><span class="muted small">${p.floor}</span>`
                 : d.last_seen_age != null ? html`<span class="muted">no position</span><br><span class="muted small">seen ${fmtAge(d.last_seen_age)} ago</span>`

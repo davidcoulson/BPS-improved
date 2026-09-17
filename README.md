@@ -191,8 +191,8 @@ with a live preview. Nothing is written until Save.
 Bermuda's device management without its options flow. The top list is what
 is tracked: click the name or the icon to open the tracker dialog and set a
 display name, a class (person, dog, cat, phone, watch, keys, tag and more,
-each with its icon on the map), the height it is carried at, and a
-reference-power trim. **Untrack** removes it from Bermuda.
+each with its icon on the map), the height it is carried at, a
+reference-power trim, and its own position estimator. **Untrack** removes it from Bermuda.
 
 Below is everything Bermuda hears but does not track, with the kind of
 device (iBeacon, Tile, Apple, IRK, plain address), where it is (the room of
@@ -365,8 +365,14 @@ against those references and the fix is blended,
 wall that makes a proxy read the tracker long makes it read the references
 behind that wall long too, and the comparison cancels it. The gain
 between probe beacons and trackers is learned from the trackers themselves
-(`fingerprint_auto_gain`) and published per fix as `fp.gain`. A floor
-with only one or two proxies can compete on its fingerprint.
+(`fingerprint_auto_gain`): a shared gain, plus a faster multiplier per
+tracker, because a watch reads weak and a Tile reads hot. It is published
+per fix as `fp.gain`. A match whose scale still disagrees with the tracker
+counts for less (`fp.trust`, zero at a factor of three). A floor with only
+one or two proxies can compete on its fingerprint. Any tracker can opt out
+from its dialog on the Trackers page: **Positioning** is the estimator for
+that tracker alone, so a tag the fingerprint makes worse can be geometric
+only.
 
 **Smoothing.** A constant-velocity Kalman filter on the position, in
 metres so it behaves the same on any plan resolution; it resets on a floor

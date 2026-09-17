@@ -233,12 +233,15 @@ async def ws_tuning_set(hass, connection, msg):
     vol.Optional("icon"): vol.Any(None, str),
     vol.Optional("name"): vol.Any(None, str),
     vol.Optional("tracker_class"): vol.Any(None, str),
+    vol.Optional("estimator"): vol.Any(None, "", "geometric", "fingerprint", "fused"),
 })
 @websocket_api.async_response
 async def ws_tracker_tune(hass, connection, msg):
     """Per-tracker settings, each applied on its own: ref-power trim (dB),
-    carry height (m), map icon, display name and class (person, dog, phone...
-    the panel draws an icon per class). A null clears the field."""
+    carry height (m), map icon, display name, class (person, dog, phone...
+    the panel draws an icon per class) and position estimator (geometric,
+    fingerprint or fused for this tracker alone; null follows the tuning).
+    A null clears the field."""
     core = _core()
     entity = msg["entity"]
     changes = {}
@@ -284,6 +287,16 @@ async def ws_tracker_tune(hass, connection, msg):
                 icons.pop(entity, None)
             data["tracker_icons"] = icons
             changes["icon"] = msg["icon"] or None
+        if "estimator" in msg:
+            estimators = data.get("tracker_estimators")
+            if not isinstance(estimators, dict):
+                estimators = {}
+            if msg["estimator"]:
+                estimators[entity] = msg["estimator"]
+            else:
+                estimators.pop(entity, None)
+            data["tracker_estimators"] = estimators
+            changes["estimator"] = msg["estimator"] or None
         for key, store in (("name", "tracker_names"), ("tracker_class", "tracker_classes")):
             if key in msg:
                 values = data.get(store)
