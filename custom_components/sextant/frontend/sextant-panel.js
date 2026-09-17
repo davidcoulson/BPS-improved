@@ -13,7 +13,11 @@
  */
 import { LitElement, html, css, nothing } from "./lit.js";
 import { SextantMap, trackerHue } from "./sextant-map.js";
-import { sharedStyles, widgetStyles, fmtAge, toast, ensureHaComponents, uiSwitch, uiSelect, uiButton, callWS, sortFloors, trackerName, proxyName, fmtLen, fmtSpeed, classIcon, PANEL_VERSION } from "./sextant-ui.js";
+import { sharedStyles, widgetStyles, fmtAge, toast, ensureHaComponents, uiSwitch, uiSelect, uiButton, callWS, sortFloors, trackerName, proxyName, fmtLen, fmtSpeed, classIcon } from "./sextant-ui.js";
+
+// The backend registers the panel as sextant-panel.js?v=<manifest version>, so a page
+// loaded before an update carries the old version here while layout/get reports the new one.
+const PANEL_VERSION = (() => { try { return new URL(import.meta.url).searchParams.get("v"); } catch { return null; } })();
 import "./sextant-devices.js";
 import "./sextant-health.js";
 import "./sextant-edit.js";
@@ -119,6 +123,7 @@ class SextantPanel extends LitElement {
     const floors = this._data?.layout?.floor || [];
     return html`
       <div class="topbar">
+        <ha-menu-button .hass=${this.hass} .narrow=${this.narrow}></ha-menu-button>
         <a class="brand" href="#" title="Back to the live map" @click=${(e) => { e.preventDefault(); this._setMode("live"); }}>
           <ha-icon icon="mdi:compass-rose"></ha-icon>
           <span class="brand-text"><span class="brand-name">Sextant</span><span class="brand-sub">Powered by Bermuda</span></span>
@@ -138,11 +143,11 @@ class SextantPanel extends LitElement {
               ${sortFloors(floors).map((f) => html`<option value=${f.name} ?selected=${f.name === this._floor}>${f.name}</option>`)}
             </select>
           </label>` : nothing}
-        <span class="stamp" title="last position update">${this._positions.stamp ? fmtAge(Date.now() / 1000 - this._positions.stamp) : "—"}</span>
+        <span class="stamp" title="Time since the last positioning cycle"><ha-icon icon="mdi:update"></ha-icon>${this._positions.stamp ? fmtAge(Date.now() / 1000 - this._positions.stamp) : "—"}</span>
         <a class="repo" href=${REPO_URL} target="_blank" rel="noopener" title="Sextant on GitHub"><ha-icon icon="mdi:github"></ha-icon></a>
       </div>
       ${this._error ? html`<div class="banner error">${this._error} <button @click=${() => this._load()}>Retry</button></div>` : nothing}
-      ${this._data?.app_version && this._data.app_version !== PANEL_VERSION ? html`<div class="banner update">Sextant ${this._data.app_version} is installed; this page is still running ${PANEL_VERSION}. <button @click=${() => window.location.reload()}>Reload</button></div>` : nothing}
+      ${this._data?.app_version && PANEL_VERSION && this._data.app_version !== PANEL_VERSION ? html`<div class="banner update">Sextant ${this._data.app_version} is installed; this page is still running ${PANEL_VERSION}. <button @click=${() => window.location.reload()}>Reload</button></div>` : nothing}
       <div class="body">${this._renderMode()}</div>
     `;
   }
@@ -183,7 +188,9 @@ class SextantPanel extends LitElement {
     .spacer { flex: 1; }
     .floor-pick select { font: inherit; padding: 6px 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.4); background: rgba(255,255,255,0.12); color: inherit; }
     .floor-pick select option { color: #111; }
-    .stamp { font-variant-numeric: tabular-nums; opacity: 0.8; font-size: 12px; min-width: 40px; text-align: right; }
+    .stamp { display: inline-flex; align-items: center; gap: 3px; font-variant-numeric: tabular-nums; opacity: 0.8; font-size: 12px; min-width: 40px; justify-content: flex-end; }
+    .stamp ha-icon { --mdc-icon-size: 16px; }
+    ha-menu-button { --mdc-icon-button-size: 40px; }
     .repo { color: inherit; opacity: 0.85; display: flex; align-items: center; }
     .repo:hover { opacity: 1; }
     .body { flex: 1; min-height: 0; display: flex; }
@@ -193,7 +200,7 @@ class SextantPanel extends LitElement {
     .banner button { margin-left: 8px; }
     .sr { position: absolute; left: -9999px; }
     @media (max-width: 960px) { .mode-label { display: none; } .modes button { padding: 0 8px; } }
-    @media (max-width: 720px) { .brand-text { display: none; } }
+    @media (max-width: 720px) { .brand-text { display: none; } .topbar { gap: 4px; padding: 0 6px; } .brand { margin-right: 2px; } .modes { overflow-x: auto; scrollbar-width: none; } .modes button { padding: 0 6px; } .repo { display: none; } .floor-pick select { padding: 4px 2px; max-width: 120px; } }
   `];
 }
 
@@ -382,15 +389,22 @@ class SextantLive extends LitElement {
           <div class="card detail">
             <h4>${this._label(sel.ent)} <span class="muted small">click the row again to unfocus</span></h4>
             <dl>
-              <dt>Room</dt><dd>${sel.zone} ${sel.zone_locked ? html`<ha-icon icon="mdi:lock" title="stationary lock"></ha-icon>` : nothing}</dd>
-              <dt>Spot</dt><dd>${sel.sub_zone || "—"} ${sel.sub_zones ? html`<span class="muted small">${Object.entries(sel.sub_zones).sort((a, b) => b[1] - a[1]).map(([s, p]) => `${s === "unknown" ? "none" : s} ${(p * 100).toFixed(0)}%`).join(" · ")}</span>` : nothing}</dd>
-              <dt>Floor</dt><dd>${sel.floor} ${sel.floors ? html`<span class="muted small">${Object.entries(sel.floors).map(([f, p]) => `${f} ${(p * 100).toFixed(0)}%`).join(" · ")}</span>` : nothing}</dd>
-              <dt>Confidence</dt><dd>${sel.conf ?? "—"} ${sel.rms_m != null ? html`<span class="muted small">rms ${fmtLen(sel.rms_m, this.hass)}</span>` : nothing}</dd>
-              <dt>Estimator</dt><dd>${sel.estimator || "geometric"}${sel.fp ? html` <span class="muted small">fp ${sel.fp.conf}${sel.fp.gain != null ? ` · gain ×${sel.fp.gain}` : ""} · ${(sel.fp.refs || []).map((r) => proxyName(this.data, r[0])).slice(0, 2).join(", ")}</span>` : nothing}</dd>
+              <dt>Room</dt><dd>${sel.zone} ${sel.zone_locked ? html`<ha-icon icon="mdi:lock" title="stationary lock: still for a while, so the room holds"></ha-icon>` : nothing}</dd>
+              <dt>Spot</dt><dd>${sel.sub_zone && sel.sub_zone !== "unknown" ? sel.sub_zone : "—"}</dd>
+              <dt>Floor</dt><dd>${sel.floor}</dd>
               <dt>Proxies</dt><dd>${sel.radii?.length ?? 0} in the solve${sel.anchor ? html`<br><span class="pill ok" title="one proxy reads it within arm's reach and no other comes close: placed on that proxy">anchored to ${proxyName(this.data, sel.anchor)}</span>` : nothing}</dd>
-              <dt>Speed</dt><dd>${fmtSpeed(sel.speed, this.hass)}</dd>
               <dt>Updated</dt><dd>${fmtAge(Date.now() / 1000 - sel.updated)} ago</dd>
             </dl>
+            <details class="telemetry">
+              <summary>Details <span class="muted small">how sure it is, and why</span></summary>
+              <dl>
+                <dt>Floor odds</dt><dd>${sel.floors ? Object.entries(sel.floors).sort((a, b) => b[1] - a[1]).map(([f, p]) => `${f} ${(p * 100).toFixed(0)}%`).join(" · ") : "—"}</dd>
+                <dt>Spot shares</dt><dd>${sel.sub_zones ? Object.entries(sel.sub_zones).sort((a, b) => b[1] - a[1]).map(([s, p]) => `${s === "unknown" ? "none" : s} ${(p * 100).toFixed(0)}%`).join(" · ") : "—"}</dd>
+                <dt>Confidence</dt><dd>${sel.conf ?? "—"}${sel.rms_m != null ? html` <span class="muted small">rms ${fmtLen(sel.rms_m, this.hass)}</span>` : nothing}</dd>
+                <dt>Estimator</dt><dd>${sel.estimator || "geometric"}${sel.fp ? html` <span class="muted small">fp ${sel.fp.conf}${sel.fp.gain != null ? ` · gain ×${sel.fp.gain}` : ""} · ${(sel.fp.refs || []).map((r) => proxyName(this.data, r[0])).slice(0, 2).join(", ")}</span>` : nothing}</dd>
+                <dt>Speed</dt><dd>${fmtSpeed(sel.speed, this.hass)}</dd>
+              </dl>
+            </details>
             <div class="row">
               ${uiButton({ label: "Scrub history", icon: "mdi:history", disabled: h?.ent === sel.ent, onClick: () => this._loadHistory(sel.ent) })}
             </div>
@@ -447,7 +461,9 @@ class SextantLive extends LitElement {
     dl { display: grid; grid-template-columns: 90px 1fr; gap: 4px 8px; margin: 8px 0; font-size: 13px; }
     dt { color: var(--secondary-text-color); }
     dd { margin: 0; }
-    @media (max-width: 720px) { :host { grid-template-columns: 1fr; grid-template-rows: 1fr auto; } .side { border-left: 0; border-top: 1px solid var(--divider-color); max-height: 40vh; } }
+    .telemetry summary { cursor: pointer; font-size: 13px; }
+    .telemetry dl { margin-top: 6px; }
+    @media (max-width: 720px) { :host { grid-template-columns: 1fr; grid-template-rows: 1fr auto; } .side { border-left: 0; border-top: 1px solid var(--divider-color); max-height: 40vh; } .overlay { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding: 4px 8px; gap: 6px; } .overlay > * { flex: none; } }
   `];
 }
 

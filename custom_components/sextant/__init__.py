@@ -3491,16 +3491,19 @@ async def async_setup(hass, config):
         if show_sidebar_panel:
             try:
                 _LOGGER.debug("Registering the custom panel for Sextant...")
-                # A custom panel (not a bare iframe) so the panel element
-                # receives `hass` and can hand the app an HA access token to
-                # authenticate its /api/sextant/* calls (those views now require
-                # auth). The element (sextant-panel.js) still hosts the existing
-                # app in an inner iframe and only couriers the token in.
+                # A native custom panel: the element receives `hass` and talks
+                # to the backend over the websocket. The module URL carries the
+                # installed version, so a page loaded before an update sees a
+                # different version in layout/get and offers a reload; no
+                # constant in the frontend has to be bumped per release.
+                from homeassistant.loader import async_get_integration  # noqa: PLC0415  (the test stubs have no loader)
+
+                integration = await async_get_integration(hass, DOMAIN)
                 await panel_custom.async_register_panel(
                     hass,
                     frontend_url_path="sextant",
                     webcomponent_name="sextant-panel",
-                    module_url="/sextant/sextant-panel.js",
+                    module_url=f"/sextant/sextant-panel.js?v={integration.version}",
                     sidebar_title="Sextant",
                     sidebar_icon="mdi:compass-rose",
                     require_admin=False,
@@ -3656,16 +3659,12 @@ class SextantFrontendView(HomeAssistantView):
     url = "/sextant/{file_name}"
     name = "sextant:frontend"
     requires_auth = False
-    # Dashboards from before the rename still load the card from /bps/.
-    extra_urls = ["/bps/{file_name}"]
-    _RENAMED_FILES = {"bps-map-card.js": "sextant-map-card.js"}
 
     async def get(self, request, file_name):
         """Serve static files from the frontend folder."""
-        file_name = self._RENAMED_FILES.get(file_name, file_name)
         frontend_path = FRONTEND_PATH / file_name
 
-        _LOGGER.info(f"Serving file: {frontend_path}")
+        _LOGGER.debug("Serving file: %s", frontend_path)
 
         if not frontend_path.is_file():
             _LOGGER.error(f"Requested file not found: {frontend_path}")

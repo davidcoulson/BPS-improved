@@ -138,9 +138,9 @@ update:
    `sensor.<device>_sextant_room`, `_bps_floor` is `_sextant_floor`,
    `_bps_nearest_zone` is `_sextant_nearest_room`, and `_bps_sub_zone` is
    `_sextant_spot`. Services are `sextant.*`.
-4. Dashboards can switch to `custom:sextant-map-card` (resource
-   `/sextant/sextant-map-card.js`); `custom:bps-map-card` from
-   `/bps/bps-map-card.js` keeps working.
+4. Dashboards switch to `custom:sextant-map-card` (resource
+   `/sextant/sextant-map-card.js`). The old `custom:bps-map-card` type
+   and the `/bps/` path were retired in 3.10.0.
 
 ## The panel
 
@@ -149,7 +149,8 @@ copied token, Home Assistant's own form elements and theme, and one
 websocket subscription for positions. Distances, heights and speeds are
 shown in Home Assistant's unit system (inches under two feet, feet with one
 decimal to five feet, whole feet beyond, or metres); the store and the
-solver stay in metres. The floor picker in the header lists floors the way
+solver stay in metres. On a phone the pages reflow to one column with the
+map above the list. The floor picker in the header lists floors the way
 the house is stacked (top floor first, basement last) and follows the
 tracker you focus.
 
@@ -158,9 +159,10 @@ tracker you focus.
 The floor plan with every tracker drawn as an avatar in its own colour, the
 same colour as its row in the list. Click a tracker (row or avatar) to
 focus it: everything else fades, it grows a halo, the panel switches to its
-floor, and the side panel shows its room, spot, floor probabilities, the
-proxy it is anchored to if any, the estimator telemetry, and every proxy
-that hears it with the distance. A tracker with no fix shows *seen 40s
+floor, and the side panel shows its room, spot, floor, the proxy it is
+anchored to if any, and every proxy that hears it with the distance; a
+**Details** disclosure holds the floor odds, spot shares, confidence,
+estimator telemetry and speed. A tracker with no fix shows *seen 40s
 ago* rather than a blank. Switches draw the solver's distance circles, the
 fingerprint fix, a trail, and hide the plan image. A history scrubber under
 the map replays where a tracker has been over the retention window, with a
@@ -210,9 +212,10 @@ Bermuda's global options (reference power, attenuation, max area radius,
 max velocity, not-home timeout, update interval, smoothing samples, scanner
 entities, Tile identity probes) edited in place; Bermuda reloads to apply.
 **Add accessories…** walks through exporting a Find My accessory's keys and
-pasting them. The Tiles card shows each configured Tile, the address it is
-bound to, its rotation history, and an **Adopt** picker for the moment
-Bermuda loses one; see [Tiles](#tiles-find-my-and-apple-devices).
+pasting them. The Tiles card shows each configured Tile (click its name to rename it),
+the address it is bound to, its rotation history, and an **Adopt** picker
+for the moment Bermuda loses one; see
+[Tiles](#tiles-find-my-and-apple-devices).
 
 ### Proxies
 
@@ -232,13 +235,15 @@ its siblings' measurements and reports the error, published as
 ![The Calibration page: a run's per-proxy factors with a before and after error and a warning not to apply a worse solve](img/screenshots/sextant-calibration.png)
 
 Proxies calibrate each other: every proxy hears every other proxy's beacon
-at a known distance, a run collects those readings for a floor and solves
-one range correction per proxy. Start a timed run or leave **Auto
+at a known distance, a run collects those readings for the floor picked
+in the header and solves one range correction per proxy. Start a timed run
+or leave **Auto
 calibration** on (samples every 30 s into a rolling six-hour window,
 re-solves every 15 minutes, re-applies when a factor moves by more than
 1 %). The result lists each proxy's factor and the equivalent dB, flags
 low-confidence proxies, and compares the error before and after; a solve
-that makes things worse is marked *do not apply*. **Apply** stores the
+that makes things worse is marked *do not apply* and Apply asks for a
+confirmation before storing it. **Apply** stores the
 factors with the layout, or with `calibration_target: bermuda` writes them
 into Bermuda as per-scanner RSSI offsets so Bermuda's own sensors are
 corrected too. **Reset** removes them.
@@ -251,9 +256,10 @@ The **stability KPI** reads the recorder for any window and reports, per
 tracker, room changes per hour, the share that were A → B → A flips, and
 the median dwell. Save a window as a named baseline and compare later
 windows against it; the deltas turn green where the window is better. Every
-[tuning key](#tuning-reference) is below it, grouped by estimator, solver,
-rooms, spots, near-field anchor and floors, and applies on the next cycle
-without a restart. Position history retention (off, one hour to seven
+[tuning key](#tuning-reference) is below it with a plain label, its meaning
+on hover and the key underneath, grouped by estimator, solver, rooms,
+spots, near-field anchor and floors, and applies on the next cycle without
+a restart. Position history retention (off, one hour to seven
 days) and **Clear history** live here too.
 
 ## Sensors, card and API
@@ -520,10 +526,11 @@ pytest tests
   shell (`--hours 12 --json before.json`, later `--baseline before.json`).
 - `tools/sextant_eval.py` replays a layout against recorded readings;
   `tools/solver_bench.py` benchmarks the numpy solver against SciPy.
-- `tools/brand/` builds the logo.
+- `tools/brand/` builds the logo from the same compass rose the sidebar uses.
 - The panel is plain Lit modules under `custom_components/sextant/frontend/`
-  with no build step; `PANEL_VERSION` in `sextant-ui.js` must match the
-  manifest on every release or the panel asks for a reload.
+  with no build step. The backend registers the panel module with the
+  manifest version in its URL, so a page loaded before an update offers a
+  reload on its own.
 
 Issues and pull requests are welcome on
 [davidcoulson/sextant](https://github.com/davidcoulson/sextant).

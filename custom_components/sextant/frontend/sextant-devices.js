@@ -511,11 +511,11 @@ class SextantDevices extends LitElement {
       .map((c) => { const w = this._heardWhere(c, index); return { address: c.address, where: w ? `${w.room || w.floor} · ${w.proxy} (${w.rssi} dBm)` : c.area_name || "unplaced proxies only" }; })
       .sort((a, b) => a.where.localeCompare(b.where));
     return html`
-      <p class="small muted">A Tile keeps its map name from the Trackers page (click its name there to call it "Kitchen keys"). Bermuda follows each Tile across its address rotations by RSSI pattern and remembers where it last was, so it finds it again after a restart; that works while the Tile is not sitting among other Tiles. A Tile marked <span class="pill warn">not heard</span> has rotated away unseen: pick the live address that is where the Tile is and Adopt. On Private ID Tiles the ID readable over Bluetooth rotates too, so it cannot name a tag; probing stays off unless "Tile identity probes" is on above.</p>
+      <p class="small muted">Click a Tile's name to call it "Kitchen keys"; the map and the Trackers page use that name. Bermuda follows each Tile across its address rotations by RSSI pattern and remembers where it last was, so it finds it again after a restart; that works while the Tile is not sitting among other Tiles. A Tile marked <span class="pill warn">not heard</span> has rotated away unseen: pick the live address that is where the Tile is and Adopt. On Private ID Tiles the ID readable over Bluetooth rotates too, so it cannot name a tag; probing stays off unless "Tile identity probes" is on above.</p>
       <div class="wrap"><table class="compact">
         <tr><th>Tile</th><th>Bound address</th><th>This Tile is…</th><th>History</th></tr>
         ${bindings.map(([id, sources]) => { const lost = t.bound_age?.[id] == null || t.bound_age[id] > 300; return html`<tr>
-          <td><b>${trackerName(this.data, id)}</b>${t.uids?.[id] ? html`<br><code class="small">${t.uids[id]}</code>` : nothing}</td>
+          <td><a href="#" class="name" title="Name this Tile (and set its class, height and icon)" @click=${(e) => { e.preventDefault(); this._openWizard(id, sources[0]); }}>${trackerName(this.data, id)}</a>${this.data?.layout?.tracker_names?.[id] ? nothing : html`<br><span class="muted small">click to name it</span>`}${t.uids?.[id] ? html`<br><code class="small">${t.uids[id]}</code>` : nothing}</td>
           <td><code>${sources[0] || "—"}</code>${t.bound_age?.[id] != null ? html` <span class="muted small">heard ${fmtAge(t.bound_age[id])} ago</span>` : html` <span class="pill warn">not heard</span>`}</td>
           <td>${liveTiles.length ? html`<div class="row">
             ${uiSelect({ label: lost ? "pick the tag it is now" : "re-point it", value: this._adoptPick[id] || "", options: [{ value: "", label: lost ? "choose a live Tile address…" : "leave as is" }, ...liveTiles.map((c) => ({ value: c.address, label: `${c.address} · ${c.where}` }))], onChange: (v) => { this._adoptPick = { ...this._adoptPick, [id]: v }; }, style: "min-width: 300px" })}
@@ -574,6 +574,7 @@ class SextantDevices extends LitElement {
   static styles = [sharedStyles, widgetStyles, css`
     :host { display: block; overflow: auto; position: relative; }
     .cols { grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); }
+    @media (max-width: 720px) { .cols { grid-template-columns: 1fr; } .row > ha-textfield, .row > ha-input, .row > ha-select, .row > .chips, .row > label.field { width: 100% !important; min-width: 0 !important; box-sizing: border-box; } .card { min-width: 0; overflow-x: hidden; } }
     .card.wide { grid-column: 1 / -1; }
     table.compact th, table.compact td { padding: 5px 8px; }
     td.who { display: flex; align-items: center; gap: 10px; }

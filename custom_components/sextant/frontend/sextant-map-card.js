@@ -11,8 +11,7 @@
  *   subzones: true               # draw the spots
  *   follow: false                # switch floor to follow the first entity
  *
- * Resource: /sextant/sextant-map-card.js (module). The pre-rename name
- * custom:bps-map-card and /bps/bps-map-card.js keep working.
+ * Resource: /sextant/sextant-map-card.js (module).
  */
 import { LitElement, html, css, nothing } from "./lit.js";
 import { SextantMap } from "./sextant-map.js";
@@ -152,8 +151,6 @@ class SextantMapCardEditor extends LitElement {
 
 customElements.define("sextant-map-card", SextantMapCard);
 customElements.define("sextant-map-card-editor", SextantMapCardEditor);
-// Dashboards from before the rename still say `type: custom:bps-map-card`.
-if (!customElements.get("bps-map-card")) customElements.define("bps-map-card", class extends SextantMapCard {});
 
 window.customCards = window.customCards || [];
 window.customCards.push({ type: "sextant-map-card", name: "Sextant Map", description: "Trackers on a Sextant floor plan, live.", preview: true, documentationURL: "https://github.com/davidcoulson/sextant" });

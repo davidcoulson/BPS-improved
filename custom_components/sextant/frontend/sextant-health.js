@@ -13,6 +13,44 @@ import { sharedStyles, widgetStyles, fmtAge, fmtNum, toast, callWS, confirmDialo
 
 const QUIET_SECS = 120;   // online, but nothing heard for this long: "quiet"
 
+/** Plain labels for the tuning keys, with a one-line meaning; the key itself is shown under the field. */
+const TUNING_LABELS = {
+  position_estimator: ["Position estimator", "geometric = trilateration alone; fingerprint = proxy references alone; fused = a blend of both"],
+  fingerprint_weight: ["Fingerprint share of the fix", "0 is the trilateration alone, 1 the fingerprint alone"],
+  fingerprint_floor_weight: ["Fingerprint share of floor confidence", "how much the fingerprint match counts in the floor election"],
+  fingerprint_k: ["References averaged per fix", "the best-matching proxies whose positions are averaged"],
+  fingerprint_missing_m: ["Not heard counts as (m)", "a proxy that does not hear the tracker is treated as this far away"],
+  fingerprint_ref_gain: ["Reference gain", "probe beacons hotter (<1) or cooler (>1) than the trackers"],
+  fingerprint_auto_gain: ["Learn reference gain from trackers", "walk the gain in from every match, published per fix as fp.gain"],
+  distance_estimator: ["Distance estimator", "bermuda = Bermuda's smoothed distance; median = the median of the recent raw RSSI samples"],
+  median_window_secs: ["Median window (s)", "only samples newer than this feed the median"],
+  median_min_samples: ["Median minimum samples", "fewer than this falls back to Bermuda's distance"],
+  solver_max_receivers: ["Nearest proxies per solve", "0 uses every proxy that hears the tracker"],
+  solver_max_range: ["Drop readings beyond (m)", "once three proxies remain; 0 never drops"],
+  solver_near_always: ["Always use proxies within (m)", "proxies this close count whatever the cap"],
+  zone_hysteresis: ["Room hysteresis", "off publishes the instantaneous room every cycle"],
+  zone_prob_smoothing: ["Room share smoothing", "weight on the previous cycle's room shares"],
+  zone_switch_margin: ["Room switch margin", "the lead a challenger room needs"],
+  zone_switch_secs: ["Room switch dwell (s)", "held that long before the room changes"],
+  stationary_speed: ["Stationary below (m/s)", "slower than this counts as still"],
+  stationary_secs: ["Stationary after (s)", "still this long locks the room"],
+  zone_unlock_margin: ["Unlock outside room by (m)", "the fix must sit this far outside the locked room"],
+  zone_unlock_secs: ["Unlock after (s)", "for this long before the lock releases"],
+  subzone_switch_secs: ["Spot switch dwell (s)", "a spot change waits this long"],
+  subzone_enter_prob: ["Spot entry share", "the smoothed share of the fix inside a spot needed to enter it"],
+  subzone_unlock_margin: ["Leave spot outside by (m)", "the fix must sit this far outside a spot before leaving it"],
+  anchor_max_m: ["Anchor within (m)", "one proxy reading closer than this can anchor the tracker; 0 turns anchoring off"],
+  anchor_ratio: ["Others at least × farther", "every other proxy must read at least this many times farther"],
+  anchor_secs: ["Anchor after (s)", "the condition must hold this long"],
+  anchor_release_m: ["Release beyond (m)", "the anchor lets go once the reading opens past this"],
+  floor_switch_secs: ["Floor switch dwell (s)", "a challenger floor must lead this long"],
+  floor_tenure_bonus: ["Tenure bonus", "extra margin an incumbent floor earns at full tenure"],
+  floor_tenure_full_secs: ["Full tenure after (s)", "tenure is counted up to this"],
+  floor_proximity_weight: ["Proximity weight", "how much nearest-proxy proximity scales a floor's score; 0 judges the fit alone"],
+  floor_proximity_k: ["Proxies averaged for proximity", "the k nearest proxies whose distances are averaged"],
+  calibration_target: ["Calibration writes to", "sextant = a per-proxy factor in the layout; bermuda = per-scanner RSSI offsets in Bermuda"],
+};
+
 class SextantHealth extends LitElement {
   static properties = {
     hass: { attribute: false },
@@ -31,7 +69,6 @@ class SextantHealth extends LitElement {
     _linking: { state: true },
     _busy: { state: true },
     _tuning: { state: true },
-    _calFloor: { state: true },
     _calDuration: { state: true },
     _open: { state: true },
   };
@@ -50,7 +87,6 @@ class SextantHealth extends LitElement {
     this._linking = null;
     this._busy = null;
     this._tuning = {};
-    this._calFloor = null;
     this._calDuration = 600;
     this._open = new Set();   // expanded floor/room groups
   }
@@ -76,7 +112,6 @@ class SextantHealth extends LitElement {
     this._receivers = rx;
     this._cal = cal;
     this._loadBaselines();
-    if (!this._calFloor) this._calFloor = cal?.floor || this.floor || this.data?.layout?.floor?.[0]?.name || null;
   }
 
   async _poll() {
@@ -87,6 +122,9 @@ class SextantHealth extends LitElement {
     const rx = await this.hass.callWS({ type: "sextant/receivers" }).catch(() => null);
     if (rx) this._receivers = rx;
   }
+
+  /** The floor calibration acts on: the one picked in the header. */
+  get _calFloor() { return this.floor || this._cal?.floor || this.data?.layout?.floor?.[0]?.name || null; }
 
   async _calAction(action, extra = {}) {
     this._busy = action;
@@ -226,6 +264,7 @@ class SextantHealth extends LitElement {
     for (const name of new Set(placed.map((r) => r.floor).filter(Boolean))) if (!floors.includes(name)) floors.push(name);
     const total = this._counts(placed);
     const attention = placed.filter((r) => this._status(r) !== "ok");
+    const showCorr = placed.some((r) => r.correction != null);  // nothing applied yet: no empty column
     return html`<section class="card receivers">
       <h3>Proxies <span class="muted">${placed.length} placed</span></h3>
       <div class="row">
@@ -260,14 +299,14 @@ class SextantHealth extends LitElement {
                 <span class="grow"></span>${this._countPills(this._counts(rr))}
               </button>
               ${this._open.has(rkey) ? html`<div class="wrap"><table>
-                <tr><th>Proxy</th><th>Status</th><th class="num">Last heard</th><th class="num">Corr.</th><th class="num">Height</th></tr>
+                <tr><th>Proxy</th><th>Status</th><th class="num">Last heard</th>${showCorr ? html`<th class="num" title="calibration correction factor">Corr.</th>` : nothing}<th class="num">Height</th></tr>
                 ${rr.slice().sort((a, b) => (this._status(a) === "ok") - (this._status(b) === "ok") || a.slug.localeCompare(b.slug)).map((r) => {
                   const st = this._status(r);
                   return html`<tr>
                     <td><b>${proxyName(this.data, r.address || r.slug)}</b><br><span class="muted small">${r.slug}${r.address ? ` · ${r.address}` : ""}</span></td>
                     <td><span class="pill ${st === "ok" ? "ok" : st === "quiet" ? "quiet" : st === "offline" ? "bad" : "warn"}">${st}</span></td>
                     <td class="num">${r.last_seen_age != null ? fmtAge(r.last_seen_age) : r.age != null ? fmtAge(r.age) : "—"}</td>
-                    <td class="num">${r.correction != null ? fmtNum(r.correction, 3) : "—"}</td>
+                    ${showCorr ? html`<td class="num">${r.correction != null ? fmtNum(r.correction, 3) : "—"}</td>` : nothing}
                     <td class="num">${r.height != null ? fmtLen(r.height, this.hass) : "—"}</td>
                   </tr>`;
                 })}
@@ -315,11 +354,13 @@ class SextantHealth extends LitElement {
 
   _renderCalibration() {
     const cal = this._cal;
-    const floors = sortFloors(this.data?.layout?.floor || []);
     const results = cal?.results || {};
     const sampling = cal?.state === "sampling";
+    const floor = this._calFloor;
+    const cur = results[floor];
+    const worse = !!cur && cur.error_factor_after > cur.error_factor_before;
     return html`<section class="card wide">
-      <h3>Proxy calibration</h3>
+      <h3>Proxy calibration <span class="muted small">${floor ? `for ${floor}, picked in the header` : ""}</span></h3>
       <p class="small muted">Every proxy hears every other proxy's beacon at a known distance; a run collects those readings and solves one range correction per proxy. Apply only when the error factor after is lower than before, otherwise the corrections are absorbing placement error, not radio bias.</p>
       ${cal ? html`
         <div class="row">
@@ -328,19 +369,20 @@ class SextantHealth extends LitElement {
           ${cal.error ? html`<span class="pill bad">${cal.error}</span>` : nothing}
         </div>
         <div class="row">
-          ${uiSelect({ label: "Floor", value: this._calFloor, options: floors.map((f) => ({ value: f.name, label: f.name })), onChange: (v) => { this._calFloor = v; } })}
           ${uiField({ label: "Duration (s)", type: "number", min: 60, max: 3600, step: 30, value: this._calDuration, onChange: (v) => { this._calDuration = Number(v); }, style: "width: 130px" })}
-          ${uiButton({ label: "Start run", kind: "primary", disabled: sampling || !!this._busy, onClick: () => this._calAction("start", { floor: this._calFloor, duration: this._calDuration }) })}
+          ${uiButton({ label: "Start run", kind: "primary", disabled: sampling || !!this._busy, onClick: () => this._calAction("start", { floor, duration: this._calDuration }) })}
           ${uiButton({ label: "Cancel", kind: "text", disabled: !!this._busy, onClick: () => this._calAction("cancel") })}
           <span class="chips">${uiSwitch({ label: "Auto calibration", checked: cal.mode === "auto", onChange: (v) => this._calAction("auto", { enabled: v }) })}</span>
         </div>
         <div class="row">
-          ${uiButton({ label: "Solve now", disabled: !!this._busy, onClick: () => this._calAction("solve", { floor: this._calFloor }) })}
-          ${uiButton({ label: "Apply corrections", disabled: !!this._busy || !results[this._calFloor], onClick: () => this._calAction("apply", { floor: this._calFloor }) })}
-          ${uiButton({ label: "Reset", kind: "danger", disabled: !!this._busy, onClick: () => confirmDialog(`Reset corrections on ${this._calFloor}?`) && this._calAction("reset", { floor: this._calFloor }) })}
+          ${uiButton({ label: "Solve now", disabled: !!this._busy, onClick: () => this._calAction("solve", { floor }) })}
+          ${uiButton({ label: worse ? "Apply anyway" : "Apply corrections", kind: worse ? "danger" : "outline", icon: worse ? "mdi:alert" : undefined, disabled: !!this._busy || !cur,
+            title: worse ? `This solve made ${floor} worse (×${fmtNum(cur.error_factor_before, 2)} → ×${fmtNum(cur.error_factor_after, 2)}); the corrections are absorbing placement error` : cur ? `Store the ${floor} factors with the layout` : "Solve a floor first",
+            onClick: () => { if (!worse || confirmDialog(`This solve made ${floor} worse: error ×${fmtNum(cur.error_factor_before, 2)} → ×${fmtNum(cur.error_factor_after, 2)}. Corrections that make the fit worse are absorbing placement error, not radio bias. Apply anyway?`)) this._calAction("apply", { floor }); } })}
+          ${uiButton({ label: "Reset", kind: "danger", disabled: !!this._busy, onClick: () => confirmDialog(`Reset corrections on ${floor}?`) && this._calAction("reset", { floor }) })}
         </div>
-        ${Object.entries(results).map(([floor, r]) => html`<details ?open=${floor === this._calFloor}>
-          <summary>${floor}: ${r.pairs_used} pairs, error ×${fmtNum(r.error_factor_before, 2)} → ×${fmtNum(r.error_factor_after, 2)}${r.error_factor_after > r.error_factor_before ? html` <span class="pill warn">worse: do not apply</span>` : nothing}${r.low_confidence?.length ? html` <span class="pill warn">${r.low_confidence.length} low confidence</span>` : nothing}</summary>
+        ${Object.entries(results).map(([name, r]) => html`<details ?open=${name === floor}>
+          <summary>${name}: ${r.pairs_used} pairs, error ×${fmtNum(r.error_factor_before, 2)} → ×${fmtNum(r.error_factor_after, 2)}${r.error_factor_after > r.error_factor_before ? html` <span class="pill warn">worse: do not apply</span>` : nothing}${r.low_confidence?.length ? html` <span class="pill warn">${r.low_confidence.length} low confidence</span>` : nothing}</summary>
           <div class="wrap"><table><tr><th>Proxy</th><th class="num">Factor</th><th class="num">≈ dB</th></tr>
             ${Object.entries(r.receivers || {}).sort((a, b) => Math.abs(b[1] - 1) - Math.abs(a[1] - 1)).map(([slug, f]) => html`<tr><td>${proxyName(this.data, slug)}${(r.low_confidence || []).includes(slug) ? html` <span class="pill warn">low</span>` : nothing}</td><td class="num">${fmtNum(f, 3)}</td><td class="num">${fmtNum(r.rx_bias_db_equident?.[slug], 1)}</td></tr>`)}
           </table></div>
@@ -405,9 +447,12 @@ class SextantHealth extends LitElement {
       if (!s) return nothing;
       const v = this._tuning[key];
       const set = (value) => { this._tuning = { ...this._tuning, [key]: value }; };
-      if (s.type === "bool") return html`<span class="chips">${uiSwitch({ label: key, checked: v == null ? !!s.default : !!v, onChange: set })}</span>`;
-      if (s.type === "str") return uiSelect({ label: key, value: v ?? s.default, options: s.choices.map((c) => ({ value: c, label: c })), onChange: set, style: "min-width: 200px" });
-      return uiField({ label: key, type: "number", step: s.type === "int" ? 1 : "any", min: s.min, max: s.max, placeholder: String(s.default), value: v == null ? "" : v, onChange: (val) => set(val === "" ? null : Number(val)), style: "width: 200px" });
+      const [label, help] = TUNING_LABELS[key] || [key, ""];
+      let control;
+      if (s.type === "bool") control = html`<span class="chips">${uiSwitch({ label, checked: v == null ? !!s.default : !!v, onChange: set })}</span>`;
+      else if (s.type === "str") control = uiSelect({ label, value: v ?? s.default, options: s.choices.map((c) => ({ value: c, label: c })), onChange: set, style: "min-width: 220px" });
+      else control = uiField({ label, type: "number", step: s.type === "int" ? 1 : "any", min: s.min, max: s.max, placeholder: String(s.default), value: v == null ? "" : v, onChange: (val) => set(val === "" ? null : Number(val)), style: "width: 220px" });
+      return html`<div class="tfield" title=${help ? `${help} (default ${s.default})` : `default ${s.default}`}>${control}<code class="hint">${key}</code></div>`;
     };
     return html`<section class="card wide">
       <h3>Tuning <span class="muted small">applies live, no restart · distances here are metres, the solver's own unit</span></h3>
@@ -454,6 +499,9 @@ class SextantHealth extends LitElement {
     details { margin-top: 8px; }
     summary { cursor: pointer; }
     h4 { margin-top: 12px; }
+    .tfield { display: inline-flex; flex-direction: column; gap: 2px; }
+    .tfield .hint { font-size: 11px; color: var(--secondary-text-color); padding-left: 2px; }
+    @media (max-width: 720px) { .cols { grid-template-columns: 1fr; } .tfield, .tfield > * { width: 100%; } }
   `];
 }
 
