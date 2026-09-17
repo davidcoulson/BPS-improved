@@ -1,31 +1,60 @@
 ![Sextant](img/logo.png)
 
-# Sextant — BLE indoor positioning for Home Assistant
+# Sextant
 
-**Powered by [Bermuda](https://github.com/agittins/bermuda).** Sextant takes
-the per-proxy distances that the Bermuda BLE Trilateration integration
-measures and turns them into a position on your floor plan: a room, a floor,
-a spot, and a dot on a map. Bermuda is required; install it first
-([upstream](https://github.com/agittins/bermuda), or the
-[fork this project is developed against](https://github.com/davidcoulson/bermuda),
-which adds the APIs the Devices page and fingerprint fusion use).
-It began life as a fork of [Hogster/BPS](https://github.com/Hogster/BPS) via
-[maxi1134/BPS-improved](https://github.com/maxi1134/BPS-improved) and has since
-been rebuilt around Bermuda's snapshot API, a wall-clock stability model and a
-numpy solver (no scipy since 3.2.0). The name changed with version 3.0.0; see
-[Upgrading from BPS](#upgrading-from-bps) if you ran the old integration.
+**Indoor positioning for Home Assistant, powered by [Bermuda](https://github.com/agittins/bermuda).**
+Bermuda's Bluetooth proxies measure how far each phone, watch, pet tag or
+Tile is from each proxy; Sextant turns those distances into a dot on your
+floor plan, a room, a spot and a floor, and keeps the answer steady.
 
-**New here?** The upstream project's docs still describe the model well:
+![The Live page: the floor plan with every tracker, the clicked one focused with a halo, and its room, spot, floor and proxies in the side panel](img/screenshots/sextant-live.png)
 
-- [**Upstream README**](https://github.com/Hogster/BPS/blob/main/README.md) — how
-  BLE distances become a position, and the Bermuda dependency.
-- [**Upstream Wiki**](https://github.com/Hogster/BPS/wiki/) — the setup
-  walkthrough (placing proxies, defining zones, the Lovelace map card).
+## What it adds
 
-Full credit for the original integration goes to [@Hogster](https://github.com/Hogster)
+**Over Bermuda alone** (which gives you a distance per proxy and a nearest-area guess):
+
+- A position on the floor plan, not just a nearest proxy: trilateration from
+  every proxy that hears the device, fused with fingerprints the proxies
+  build for free by hearing each other, filtered over time.
+- Rooms as polygons you draw, spots inside them (a couch, a bedside table,
+  the hook the keys hang on), floors elected by evidence, and a near-field
+  anchor that puts a tracker on the proxy it is sitting next to.
+- Sensors that do not flap: room, floor and spot changes need a margin and a
+  dwell, a tracker that stops moving locks, and a stability KPI with saved
+  baselines proves it.
+- Everything Bermuda needs, done from one panel: which devices to track,
+  Apple Find My accessories, Tiles, its global options and proxy
+  calibration, with no trips to the config flow.
+
+**Over [BPS-improved](https://github.com/maxi1134/BPS-improved)**, which Sextant grew out of:
+
+- A native Home Assistant panel (Lit, Home Assistant's own form elements,
+  no iframe, no copied token) with seven pages: Live, Edit, Trackers,
+  Bermuda, Proxies, Calibration, Tuning.
+- Positioning rebuilt: numpy solver (no scipy), Kalman smoothing, floor
+  election by hypothesis competition, fingerprint fusion with auto-gain,
+  sub-zone (spot) election, the near-field anchor, per-proxy calibration
+  from proxy-to-proxy ranges, Bermuda's live readings instead of sensors.
+- Home Assistant units (feet and inches where you use them), device names
+  from Home Assistant, friendly proxy names, undo and layer locks in the
+  editor, a Lovelace map card on the same renderer.
+- Tile tracking across address rotations, with the honest caveats in
+  [Tiles by identity](#tiles-by-identity).
+
+![The Edit page: rooms, spots and proxies on the plan, with padlocks per layer and undo](img/screenshots/sextant-edit.png)
+
+![The Trackers page: what is tracked, with its class icon, and everything Bermuda hears but does not track, with where the loudest proxy is](img/screenshots/sextant-trackers.png)
+
+![The Proxies page: every proxy grouped by floor and room with a health count per group](img/screenshots/sextant-proxies.png)
+
+Sextant began as a fork of [Hogster/BPS](https://github.com/Hogster/BPS) via
+[maxi1134/BPS-improved](https://github.com/maxi1134/BPS-improved). Full
+credit for the original integration goes to [@Hogster](https://github.com/Hogster)
 and [@maxi1134](https://github.com/maxi1134), and to
-[@agittins](https://github.com/agittins) for [Bermuda](https://github.com/agittins/bermuda),
-which Sextant builds on.
+[@agittins](https://github.com/agittins) for [Bermuda](https://github.com/agittins/bermuda).
+Sextant is developed against [this Bermuda fork](https://github.com/davidcoulson/bermuda),
+which adds the APIs the Trackers and Bermuda pages, fingerprint fusion and
+Tile tracking use; upstream Bermuda works for positioning alone.
 
 ## Upgrading from BPS
 
@@ -38,7 +67,7 @@ re-install rather than an update:
    and map images from where BPS kept them; nothing is deleted.
 3. Remove the old **BPS-Optimized** integration entry. Its sensors were named
    `sensor.<device>_bps_zone`; Sextant publishes `sensor.<device>_sextant_room`
-   (and `_floor`, `_nearest_zone`, `_sub_zone`), so update any automations.
+   (and `_sextant_floor`, `_sextant_nearest_room`, `_sextant_spot`), so update any automations.
 4. Services are now `sextant.*`, the panel is at `/sextant`, and the card type is
    `custom:sextant-map-card`. Dashboards that still say `custom:bps-map-card`
    and load the resource from `/bps/bps-map-card.js` keep working.
