@@ -368,9 +368,19 @@ class SextantDevices extends LitElement {
     return c.scanner_addresses.length > 0 && !c.scanner_addresses.some((a) => placed.has(String(a).toLowerCase()));
   }
 
+  /** Where a heard device is: the room (and floor) of the loudest placed proxy that hears it. */
+  _heardWhere(c, index) {
+    const heard = Array.isArray(c.heard_by) ? c.heard_by : [];
+    const hit = heard.find((h) => index.has(String(h.address || "").toLowerCase()));
+    if (!hit) return null;
+    const p = index.get(String(hit.address).toLowerCase());
+    return { room: p.room, floor: p.floor, proxy: p.name, rssi: hit.rssi };
+  }
+
   _renderTrackers() {
     const layout = this.data?.layout || {};
     const placed = this._placedAddresses();
+    const index = this._placedIndex();
     const heights = layout.tracker_heights || {}, offsets = layout.tracker_ref_offsets || {}, icons = layout.tracker_icons || {}, classes = layout.tracker_classes || {};
     const live = new Map((this.positions?.positions || []).map((p) => [p.ent, p]));
     const tracked = Object.entries(this._tracked || {}).sort((a, b) => trackerName(this.data, a[1].slug).localeCompare(trackerName(this.data, b[1].slug)));
@@ -415,16 +425,17 @@ class SextantDevices extends LitElement {
           ${uiButton({ label: "Refresh", kind: "text", icon: "mdi:refresh", onClick: () => this._refreshLight() })}
         </div>
         <div class="wrap"><table class="compact">
-          <tr><th>Device</th><th>Maker</th><th class="num">Proxies</th><th class="num">Best dBm</th><th>Seen</th><th></th></tr>
-          ${candidates.slice(0, 200).map((c) => html`<tr>
-            <td><b>${c.name}</b> ${c.kind === "tile" ? html`<span class="pill">Tile</span>` : c.kind === "ibeacon" ? html`<span class="pill">iBeacon</span>` : nothing}<br><span class="muted small">${c.address}</span>${c.area_name ? html`<br><span class="muted small">${c.area_name}</span>` : nothing}</td>
+          <tr><th>Device</th><th>Maker</th><th>Where</th><th class="num">Proxies</th><th class="num">Signal</th><th>Seen</th><th></th></tr>
+          ${candidates.slice(0, 200).map((c) => { const w = this._heardWhere(c, index); return html`<tr>
+            <td><b>${c.name}</b> ${c.kind === "tile" ? html`<span class="pill">Tile</span>` : c.kind === "ibeacon" ? html`<span class="pill">iBeacon</span>` : nothing}<br><span class="muted small">${c.address}</span></td>
             <td>${c.manufacturer || html`<span class="muted">unknown</span>`}</td>
+            <td>${w ? html`${w.room || w.floor}${w.room ? html`<br><span class="muted small">${w.floor}</span>` : nothing}<br><span class="muted small">${w.proxy}</span>` : c.area_name ? html`${c.area_name}` : html`<span class="muted">—</span>`}</td>
             <td class="num">${c.scanners}</td>
-            <td class="num">${c.best_rssi ?? "—"}</td>
+            <td class="num" title="strongest reading (RSSI)">${w ? w.rssi : c.best_rssi ?? "—"} dBm</td>
             <td class="small">${fmtAge(c.last_seen_age)} ago<br><span class="muted">first ${fmtAge(c.first_seen_age)}</span></td>
             <td>${uiButton({ label: "Track…", kind: "primary", disabled: this._busy, onClick: () => this._startTrack(c), title: "Choose its name, class and height first; Bermuda tracks it when you confirm" })}</td>
-          </tr>`)}
-          ${candidates.length ? nothing : html`<tr><td colspan="6" class="muted">${this._candidates ? (this._showAll ? "No matching devices." : `Nothing heard in the last ${RECENT_SECS} s matches; switch on "Show all" for everything Bermuda remembers.`) : "Loading…"}</td></tr>`}
+          </tr>`; })}
+          ${candidates.length ? nothing : html`<tr><td colspan="7" class="muted">${this._candidates ? (this._showAll ? "No matching devices." : `Nothing heard in the last ${RECENT_SECS} s matches; switch on "Show all" for everything Bermuda remembers.`) : "Loading…"}</td></tr>`}
         </table></div>
         <p class="small muted">Only what a placed proxy hears is listed; anything heard solely by an unplaced proxy (a kiosk, a test board) is left out. Apple FindMy tags are not in this list: they need their pairing keys, added on the Bermuda page.</p>
       </section>`;
