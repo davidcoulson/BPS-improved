@@ -27,8 +27,11 @@ from homeassistant.components import websocket_api
 from . import bermuda_source, kpi
 from . import history as history_mod
 from .const import PROBE_BEACON_UUID
+from . import fingerprint as fingerprint_mod
+from . import truth as truth_mod
 from .storage import (
     LAYOUT_LOCK, get_layout, get_layout_for_edit, get_layout_version, load_kpi_baselines, save_kpi_baselines,
+    load_truth, save_truth,
     save_layout,
 )
 
@@ -234,6 +237,7 @@ async def ws_tuning_set(hass, connection, msg):
     vol.Optional("name"): vol.Any(None, str),
     vol.Optional("tracker_class"): vol.Any(None, str),
     vol.Optional("estimator"): vol.Any(None, "", "geometric", "fingerprint", "fused"),
+    vol.Optional("fp_weight"): vol.Any(None, vol.Coerce(float)),
 })
 @websocket_api.async_response
 async def ws_tracker_tune(hass, connection, msg):
@@ -287,6 +291,20 @@ async def ws_tracker_tune(hass, connection, msg):
                 icons.pop(entity, None)
             data["tracker_icons"] = icons
             changes["icon"] = msg["icon"] or None
+        if "fp_weight" in msg:
+            raw = msg["fp_weight"]
+            weights = data.get("tracker_fp_weights")
+            if not isinstance(weights, dict):
+                weights = {}
+            if raw is None:
+                weights.pop(entity, None)
+                changes["fp_weight"] = None
+            else:
+                if not math.isfinite(raw) or not 0.0 <= raw <= 1.0:
+                    return _error(connection, msg, "fp_weight must be between 0 (geometric) and 1 (fingerprint)")
+                weights[entity] = round(float(raw), 3)
+                changes["fp_weight"] = weights[entity]
+            data["tracker_fp_weights"] = weights
         if "estimator" in msg:
             estimators = data.get("tracker_estimators")
             if not isinstance(estimators, dict):
@@ -311,6 +329,174 @@ async def ws_tracker_tune(hass, connection, msg):
                 changes[key] = value or None
         await save_layout(hass, data)
     connection.send_result(msg["id"], {"entity": entity, **changes})
+
+
+# --- truth marks ("it is actually here") -------------------------------------
+
+
+def _zone_lookup(core, hass, data, entity, floor):
+    """A function point -> room entity id (None outside every room) for one floor."""
+    from shapely.geometry import Point  # noqa: PLC0415
+
+    polys = [(zid, poly) for zid, poly, _b, no_go in core._floor_zone_polygons(hass, data, entity, floor) if not no_go]
+
+    def zone_of(point):
+        pt = Point(float(point[0]), float(point[1]))
+        return next((zid for zid, poly in polys if poly.covers(pt)), None)
+    return zone_of
+
+
+def _mark_public(mark):
+    return {k: v for k, v in mark.items() if k != "samples"} | {"samples": len(mark.get("samples") or [])}
+
+
+async def _evaluate_mark(hass, core, mark, weights=None, gains=None):
+    """Re-solve one mark's samples under the sweep (or the current settings only)."""
+    layout = get_layout(hass)
+    layout = layout if isinstance(layout, dict) else {}
+    # The positioning helpers take the per-cycle list of {entity, data}; one entry is enough here.
+    cycle = [{"entity": mark["entity"], "data": layout}]
+    floor = mark["floor"]
+    scale = core._floor_scale(cycle, mark["entity"], floor) or 0.0
+    zone_of = _zone_lookup(core, hass, cycle, mark["entity"], floor)
+    base_gain = core._tuning(layout, "fingerprint_ref_gain")
+    if core._tuning(layout, "fingerprint_auto_gain"):
+        base_gain *= core._fingerprint_db.gain_for(mark["entity"])
+    vectors = core._fingerprint_db.vectors()
+    extra = core._mark_refs(layout)
+    # A mark must not match its own reference, or the score would be circular.
+    own = f"mark:{mark['id']}"
+    extra = [r for r in extra if r.get("slug") != own] if extra else None
+
+    def refs_for_gain(gain):
+        return fingerprint_mod.build_references(layout, vectors, gain, extra=extra).get(floor)
+
+    kwargs = {"k": core._tuning(layout, "fingerprint_k"), "missing_m": core._tuning(layout, "fingerprint_missing_m"), "base_gain": base_gain}
+    if weights is not None:
+        kwargs["weights"] = weights
+    if gains is not None:
+        kwargs["gains"] = gains
+    return await hass.async_add_executor_job(
+        lambda: truth_mod.evaluate(mark["samples"], floor, (mark["x"], mark["y"]), scale, zone_of, core._solve_floor_jobs, refs_for_gain, **kwargs)
+    )
+
+
+def _current_weight(core, layout, entity):
+    w = core._tracker_fp_weight(layout, entity)
+    if w is not None:
+        return w
+    est = core._tracker_estimator(layout, entity)
+    return 0.0 if est == "geometric" else 1.0 if est == "fingerprint" else core._tuning(layout, "fingerprint_weight")
+
+
+def _refresh_mark_refs(core, store):
+    core._fingerprint_db.extra_refs = [r for r in (truth_mod.mark_reference(m) for m in store.get("marks", [])) if r]
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "sextant/truth/mark",
+    vol.Required("entity"): str,
+    vol.Required("floor"): str,
+    vol.Required("x"): vol.Coerce(float),
+    vol.Required("y"): vol.Coerce(float),
+    vol.Optional("window_secs", default=truth_mod.DEFAULT_WINDOW_SECS): vol.Coerce(float),
+})
+@websocket_api.async_response
+async def ws_truth_mark(hass, connection, msg):
+    """Record that ``entity`` is really at (x, y) on ``floor`` right now, from the
+    cycles of the last ``window_secs``, and say which settings fit it best."""
+    core = _core()
+    since = time.time() - max(30.0, float(msg["window_secs"]))
+    samples = core._truth_buffer.samples(msg["entity"], since=since, floor=msg["floor"])
+    if len(samples) < truth_mod.MIN_SAMPLES:
+        return _error(connection, msg, f"Only {len(samples)} recent cycle(s) placed this tracker on {msg['floor']}; wait a minute with it in place and try again")
+    store = await load_truth(hass)
+    mark = {
+        "id": int(store.get("next_id") or 1), "entity": msg["entity"], "floor": msg["floor"],
+        "x": round(float(msg["x"]), 2), "y": round(float(msg["y"]), 2), "t": time.time(), "samples": samples,
+    }
+    store["next_id"] = mark["id"] + 1
+    store.setdefault("marks", []).append(mark)
+    await save_truth(hass, store)
+    _refresh_mark_refs(core, store)
+    rows = await _evaluate_mark(hass, core, mark)
+    connection.send_result(msg["id"], {"mark": _mark_public(mark), "rows": rows, "current_weight": _current_weight(core, get_layout(hass), mark["entity"])})
+
+
+@websocket_api.websocket_command({vol.Required("type"): "sextant/truth/list", vol.Optional("entity"): str})
+@websocket_api.async_response
+async def ws_truth_list(hass, connection, msg):
+    store = await load_truth(hass)
+    marks = [m for m in store.get("marks", []) if not msg.get("entity") or m["entity"] == msg["entity"]]
+    connection.send_result(msg["id"], {"marks": [_mark_public(m) for m in marks]})
+
+
+@websocket_api.websocket_command({vol.Required("type"): "sextant/truth/delete", vol.Required("mark_id"): vol.Coerce(int)})
+@websocket_api.async_response
+async def ws_truth_delete(hass, connection, msg):
+    core = _core()
+    store = await load_truth(hass)
+    before = len(store.get("marks", []))
+    store["marks"] = [m for m in store.get("marks", []) if m.get("id") != msg["mark_id"]]
+    await save_truth(hass, store)
+    _refresh_mark_refs(core, store)
+    connection.send_result(msg["id"], {"removed": before - len(store["marks"])})
+
+
+@websocket_api.websocket_command({vol.Required("type"): "sextant/truth/evaluate", vol.Optional("entity"): str, vol.Optional("mark_id"): vol.Coerce(int)})
+@websocket_api.async_response
+async def ws_truth_evaluate(hass, connection, msg):
+    """Every mark (or one tracker's, or one mark) re-solved under the settings in force
+    now: the accuracy figure per tracker, plus the full sweep for a single mark."""
+    core = _core()
+    store = await load_truth(hass)
+    data = get_layout(hass)
+    marks = [m for m in store.get("marks", []) if (not msg.get("entity") or m["entity"] == msg["entity"]) and (msg.get("mark_id") is None or m["id"] == msg["mark_id"])]
+    if msg.get("mark_id") is not None:
+        if not marks:
+            return _error(connection, msg, "No such mark")
+        mark = marks[0]
+        rows = await _evaluate_mark(hass, core, mark)
+        return connection.send_result(msg["id"], {"mark": _mark_public(mark), "rows": rows, "current_weight": _current_weight(core, data, mark["entity"])})
+    by_mark, per_mark = {}, []
+    for mark in marks:
+        w = _current_weight(core, data, mark["entity"])
+        rows = await _evaluate_mark(hass, core, mark, weights=(w,), gains=(1.0,))
+        row = rows[0] if rows else None
+        by_mark[mark["id"]] = (mark["entity"], row)
+        per_mark.append({**_mark_public(mark), "current": row})
+    connection.send_result(msg["id"], {"trackers": truth_mod.summarize(by_mark), "marks": per_mark})
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "sextant/truth/apply",
+    vol.Required("entity"): str,
+    vol.Required("weight"): vol.Coerce(float),
+    vol.Optional("gain", default=1.0): vol.Coerce(float),
+})
+@websocket_api.async_response
+async def ws_truth_apply(hass, connection, msg):
+    """Make an evaluated row the tracker's settings: its blend weight, and the gain
+    multiplier folded into its learned gain (and remembered across restarts)."""
+    core = _core()
+    entity, weight, gain = msg["entity"], float(msg["weight"]), float(msg["gain"])
+    if not 0.0 <= weight <= 1.0 or not gain > 0:
+        return _error(connection, msg, "weight must be 0..1 and gain positive")
+    async with LAYOUT_LOCK:
+        data = get_layout_for_edit(hass)
+        if not isinstance(data, dict):
+            return _error(connection, msg, "No layout saved yet")
+        weights = data.get("tracker_fp_weights") if isinstance(data.get("tracker_fp_weights"), dict) else {}
+        weights[entity] = round(weight, 3)
+        data["tracker_fp_weights"] = weights
+        seeds = data.get("tracker_fp_gains") if isinstance(data.get("tracker_fp_gains"), dict) else {}
+        new_gain = core._fingerprint_db.tracker_gain.get(entity, seeds.get(entity, 1.0)) * gain
+        new_gain = min(fingerprint_mod.LEARNED_GAIN_MAX, max(fingerprint_mod.LEARNED_GAIN_MIN, new_gain))
+        seeds[entity] = round(new_gain, 4)
+        data["tracker_fp_gains"] = seeds
+        core._fingerprint_db.tracker_gain[entity] = new_gain
+        await save_layout(hass, data)
+    connection.send_result(msg["id"], {"entity": entity, "fp_weight": weights[entity], "tracker_gain": seeds[entity], "estimator": truth_mod.estimator_for(weight)})
 
 
 # --- history -----------------------------------------------------------------

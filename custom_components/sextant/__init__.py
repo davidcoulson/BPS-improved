@@ -56,6 +56,7 @@ from .storage import (
     get_layout_for_edit,
     get_layout_version,
     load_layout,
+    load_truth,
     migrate_from_bps,
     migrate_legacy,
     save_layout,
@@ -64,6 +65,7 @@ from .const import ACCURACY_ENTITY_ID
 from . import history as history_mod
 from . import bermuda_source
 from . import fingerprint
+from . import truth as truth_mod
 from .zone_adjust import adjust_zones, adjust_subzones
 
 _LOGGER = logging.getLogger(__name__)
@@ -383,6 +385,9 @@ TUNING_SPEC = {
     # reference's, and the learned factor (fingerprint.ReferenceDB.learn)
     # multiplies fingerprint_ref_gain. Reported per fix as fp.gain.
     "fingerprint_auto_gain": (True, bool),
+    # Truth marks ("it is actually here", Live page) double as fingerprint references at
+    # the marked point, in the marking tracker's own scale: off to use only the proxies.
+    "fingerprint_marks": (True, bool),
     # Near-field anchor (see _elect_anchor): a tracker one proxy reads at
     # under anchor_max_m, with every other proxy at least anchor_ratio times
     # farther, for anchor_secs, is placed AT that proxy - a watch on the
@@ -399,11 +404,28 @@ TUNING_SPEC = {
 # cadence at the top of the loop (the receivers do not move).
 FINGERPRINT_REFRESH_SECS = 20.0
 _fingerprint_db = fingerprint.ReferenceDB()
+# The last cycles' solver inputs per tracker, for truth marks (truth.py).
+_truth_buffer = truth_mod.Buffer()
+
+
+def _tracker_fp_weight(layout, entity):
+    """This tracker's own blend weight (0 = geometric alone, 1 = fingerprint alone; the Live
+    slider, tracker_fp_weights), or None to follow the tuning."""
+    weights = layout.get("tracker_fp_weights") if isinstance(layout, dict) else None
+    w = weights.get(entity) if isinstance(weights, dict) else None
+    if isinstance(w, (int, float)) and not isinstance(w, bool) and 0.0 <= w <= 1.0:
+        return float(w)
+    return None
 
 
 def _tracker_estimator(layout, entity):
-    """The position estimator for one tracker: its own override (tracker_estimators, set from the
-    tracker dialog: a Tile the fingerprint makes worse can be geometric only), else the tuning."""
+    """The position estimator for one tracker: its own blend weight first (0 is geometric,
+    1 fingerprint, between is fused), then its estimator override (tracker_estimators, from
+    the tracker dialog: a Tile the fingerprint makes worse can be geometric only), then the
+    tuning."""
+    w = _tracker_fp_weight(layout, entity)
+    if w is not None:
+        return truth_mod.estimator_for(w)
     overrides = layout.get("tracker_estimators") if isinstance(layout, dict) else None
     own = overrides.get(entity) if isinstance(overrides, dict) else None
     if own in TUNING_SPEC["position_estimator"][2]:
@@ -411,12 +433,28 @@ def _tracker_estimator(layout, entity):
     return _tuning(layout, "position_estimator")
 
 
+def _seed_tracker_gain(layout, entity):
+    """A gain multiplier applied from a truth mark (tracker_fp_gains) seeds the learned one."""
+    seeds = layout.get("tracker_fp_gains") if isinstance(layout, dict) else None
+    g = seeds.get(entity) if isinstance(seeds, dict) else None
+    if entity not in _fingerprint_db.tracker_gain and isinstance(g, (int, float)) and not isinstance(g, bool) and g > 0:
+        _fingerprint_db.tracker_gain[entity] = float(g)
+
+
 def _fingerprint_wanted(layout):
     """Whether anything needs the reference DB: the tuning, or any tracker's own override."""
     if _tuning(layout, "position_estimator") != "geometric":
         return True
     overrides = layout.get("tracker_estimators") if isinstance(layout, dict) else None
-    return isinstance(overrides, dict) and any(v in ("fused", "fingerprint") for v in overrides.values())
+    if isinstance(overrides, dict) and any(v in ("fused", "fingerprint") for v in overrides.values()):
+        return True
+    weights = layout.get("tracker_fp_weights") if isinstance(layout, dict) else None
+    return isinstance(weights, dict) and any(isinstance(w, (int, float)) and w > 0 for w in weights.values())
+
+
+def _mark_refs(layout):
+    """The truth-mark references to add to the proxies', or None when switched off."""
+    return _fingerprint_db.extra_refs if _tuning(layout, "fingerprint_marks") and _fingerprint_db.extra_refs else None
 
 
 def _refresh_fingerprint_references(hass, layout, now_ts):
@@ -1839,11 +1877,13 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
     refs_by_floor = {}
     tracker_vec = {}
     fp_gain = 1.0
+    own_weight = _tracker_fp_weight(layout, entity)
     if estimator != "geometric":
+        _seed_tracker_gain(layout, entity)
         fp_gain = _tuning(layout, "fingerprint_ref_gain")
         if _tuning(layout, "fingerprint_auto_gain"):
             fp_gain *= _fingerprint_db.gain_for(entity)
-        refs_by_floor = fingerprint.build_references(layout, _fingerprint_db.vectors(), fp_gain)
+        refs_by_floor = fingerprint.build_references(layout, _fingerprint_db.vectors(), fp_gain, extra=_mark_refs(layout))
         tracker_vec = fingerprint.tracker_vector(layout)
     # A floor with references can compete on its fingerprint with a single
     # receiver hearing the tracker; trilateration alone needs three.
@@ -1928,11 +1968,14 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
                 "refs": refs_by_floor[floor_name],
                 "k": _tuning(layout, "fingerprint_k"),
                 "missing_m": _tuning(layout, "fingerprint_missing_m"),
-                "weight": _tuning(layout, "fingerprint_weight"),
-                "floor_weight": _tuning(layout, "fingerprint_floor_weight"),
+                "weight": own_weight if own_weight is not None else _tuning(layout, "fingerprint_weight"),
+                "floor_weight": own_weight if own_weight is not None else _tuning(layout, "fingerprint_floor_weight"),
                 "gain": fp_gain,
             },
         })
+    # Keep this cycle's inputs so a truth mark can re-solve it under other settings.
+    if jobs:
+        _truth_buffer.remember(entity, jobs, tracker_vec if estimator != "geometric" else fingerprint.tracker_vector(layout), fp_gain, estimator)
 
     solved = {}  # floor name -> everything the publish pipeline needs
     if jobs:
@@ -2218,6 +2261,8 @@ def _fuse_fingerprint(spec, geo_fix, geo_conf):
         # built with - the auto-gain loop's input and output.
         "ratio": None if m.get("ratio") is None else round(m["ratio"], 3),
         "gain": round(float(spec.get("gain", 1.0)), 3),
+        # The geometric end of the blend, so a client can show both ends of the slider.
+        "geo": None if geo_fix is None else [round(float(geo_fix[0]), 1), round(float(geo_fix[1]), 1)],
     }
     if m is None:
         return geo_fix, geo_conf, None
@@ -3664,6 +3709,12 @@ async def async_unload_entry(hass: HomeAssistant, entry):
 async def async_setup_entry(hass, entry):
     """Set the integration from a configuration entry"""
     _LOGGER.info("async_setup_entry called")
+    # Truth marks double as fingerprint references; load them before the first cycle.
+    try:
+        store = await load_truth(hass)
+        _fingerprint_db.extra_refs = [r for r in (truth_mod.mark_reference(m) for m in store.get("marks", [])) if r]
+    except Exception as e:  # noqa: BLE001
+        _LOGGER.warning("Truth marks not loaded: %s", e)
     cleanup_legacy_sextant_registry_and_states(hass)
     await hass.config_entries.async_forward_entry_setups(entry, ["sensor"])
     entry.async_on_unload(entry.add_update_listener(async_update_options))

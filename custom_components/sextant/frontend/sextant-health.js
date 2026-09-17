@@ -22,6 +22,7 @@ const TUNING_LABELS = {
   fingerprint_missing_m: ["Not heard counts as (m)", "a proxy that does not hear the tracker is treated as this far away"],
   fingerprint_ref_gain: ["Reference gain", "probe beacons hotter (<1) or cooler (>1) than the trackers"],
   fingerprint_auto_gain: ["Learn reference gain from trackers", "walk the gain in from every match, published per fix as fp.gain"],
+  fingerprint_marks: ["Truth marks as references", "each mark from the Live page is also a fingerprint reference at that point"],
   distance_estimator: ["Distance estimator", "bermuda = Bermuda's smoothed distance; median = the median of the recent raw RSSI samples"],
   median_window_secs: ["Median window (s)", "only samples newer than this feed the median"],
   median_min_samples: ["Median minimum samples", "fewer than this falls back to Bermuda's distance"],
@@ -62,6 +63,7 @@ class SextantHealth extends LitElement {
     _cal: { state: true },
     _selftest: { state: true },
     _kpi: { state: true },
+    _accuracy: { state: true },
     _kpiHours: { state: true },
     _baselines: { state: true },
     _baseline: { state: true },
@@ -209,7 +211,7 @@ class SextantHealth extends LitElement {
       case "calibration":
         return html`<div class="page"><div class="cols">${this._renderCalibration()}</div></div>`;
       case "tuning":
-        return html`<div class="page"><div class="cols">${this._renderKpi()}${this._renderTuning()}${this._renderHistory()}</div></div>`;
+        return html`<div class="page"><div class="cols">${this._renderKpi()}${this._renderAccuracy()}${this._renderTuning()}${this._renderHistory()}</div></div>`;
       default:
         return html`<div class="page"><div class="cols">${this._renderReceivers()}${this._renderSelftest()}</div></div>`;
     }
@@ -428,10 +430,32 @@ class SextantHealth extends LitElement {
     </section>`;
   }
 
+  async _runAccuracy() {
+    this._busy = "accuracy";
+    const r = await callWS(this, this.hass, { type: "sextant/truth/evaluate" });
+    this._busy = null;
+    if (r) this._accuracy = r;
+  }
+
+  _renderAccuracy() {
+    const a = this._accuracy;
+    const rows = Object.entries(a?.trackers || {}).sort((x, y) => y[1].mean_m - x[1].mean_m);
+    return html`<section class="card wide">
+      <h3>Accuracy <span class="muted small">against your truth marks</span></h3>
+      <p class="small muted">Every mark (Live page, "It's actually here…") re-solved under the settings in force now: how far each tracker lands from where you said it was, and how often it gets the room right.</p>
+      <div class="row">${uiButton({ label: this._busy === "accuracy" ? "Evaluating…" : "Evaluate marks", kind: "primary", disabled: this._busy === "accuracy", onClick: () => this._runAccuracy() })}
+        ${a ? html`<span class="pill">${(a.marks || []).length} mark${(a.marks || []).length === 1 ? "" : "s"}</span>` : nothing}</div>
+      ${rows.length ? html`<div class="wrap"><table>
+        <tr><th>Tracker</th><th class="num">Marks</th><th class="num">Mean error</th><th class="num">Right room</th></tr>
+        ${rows.map(([e, m]) => html`<tr><td>${trackerName(this.data, e)}</td><td class="num">${m.marks}</td><td class="num">${fmtLen(m.mean_m, this.hass)}</td><td class="num">${Math.round(m.room_ok * 100)}%</td></tr>`)}
+      </table></div>` : a ? html`<div class="muted small">No marks yet.</div>` : nothing}
+    </section>`;
+  }
+
   _renderTuning() {
     const spec = this.data?.tuning_spec || {};
     const groups = [
-      ["Estimator", ["position_estimator", "fingerprint_weight", "fingerprint_floor_weight", "fingerprint_k", "fingerprint_missing_m", "fingerprint_ref_gain", "fingerprint_auto_gain", "distance_estimator", "median_window_secs", "median_min_samples"]],
+      ["Estimator", ["position_estimator", "fingerprint_weight", "fingerprint_floor_weight", "fingerprint_k", "fingerprint_missing_m", "fingerprint_ref_gain", "fingerprint_auto_gain", "fingerprint_marks", "distance_estimator", "median_window_secs", "median_min_samples"]],
       ["Solver", ["solver_max_receivers", "solver_max_range", "solver_near_always"]],
       ["Rooms", ["zone_hysteresis", "zone_prob_smoothing", "zone_switch_margin", "zone_switch_secs", "stationary_speed", "stationary_secs", "zone_unlock_margin", "zone_unlock_secs"]],
       ["Spots", ["subzone_switch_secs", "subzone_enter_prob", "subzone_unlock_margin"]],

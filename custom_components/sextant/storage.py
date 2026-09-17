@@ -32,6 +32,7 @@ STORAGE_VERSION = 1
 STORAGE_KEY_LAYOUT = "sextant"                       # -> config/.storage/sextant
 STORAGE_KEY_CALIB = "sextant_calibration_state"      # -> config/.storage/sextant_calibration_state
 STORAGE_KEY_KPI = "sextant_kpi_baselines"            # -> config/.storage/sextant_kpi_baselines
+STORAGE_KEY_TRUTH = "sextant_truth"                  # -> config/.storage/sextant_truth (marks + their samples)
 
 # Serializes read-modify-write sequences on the layout across every writer
 # (panel save + calibration). Lives here so both importers share one lock
@@ -175,6 +176,35 @@ async def load_kpi_baselines(hass) -> dict:
 
 async def save_kpi_baselines(hass, baselines: dict) -> None:
     await _kpi_store(hass).async_save(baselines)
+
+
+# --- Truth marks ------------------------------------------------------------
+
+def _truth_store(hass) -> Store:
+    bucket = _bucket(hass)
+    store = bucket.get("_truth_store")
+    if store is None:
+        store = bucket["_truth_store"] = Store(hass, STORAGE_VERSION, STORAGE_KEY_TRUTH)
+    return store
+
+
+async def load_truth(hass) -> dict:
+    """``{"marks": [...], "next_id": int}``; empty when none. Marks carry their samples,
+    so they stay re-evaluable after a restart (see truth.py)."""
+    try:
+        data = await _truth_store(hass).async_load()
+    except Exception as e:
+        _LOGGER.warning("Could not load truth marks: %s", e)
+        return {"marks": [], "next_id": 1}
+    if not isinstance(data, dict):
+        return {"marks": [], "next_id": 1}
+    data.setdefault("marks", [])
+    data.setdefault("next_id", 1)
+    return data
+
+
+async def save_truth(hass, data: dict) -> None:
+    await _truth_store(hass).async_save(data)
 
 
 # --- One-time migration of the old flat files -------------------------------

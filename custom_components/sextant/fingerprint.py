@@ -67,6 +67,8 @@ class ReferenceDB:
         self.learned_gain = 1.0
         # Per-tracker multiplier on top of learned_gain (see learn(entity=...)).
         self.tracker_gain = {}
+        # References from truth marks (truth.mark_reference), in probe scale.
+        self.extra_refs = []
 
     def gain_for(self, entity=None):
         """The learned gain for one tracker: the shared gain times its own multiplier."""
@@ -149,7 +151,7 @@ def _median(values):
     return ordered[mid] if n % 2 else 0.5 * (ordered[mid - 1] + ordered[mid])
 
 
-def build_references(layout, vectors, gain=1.0):
+def build_references(layout, vectors, gain=1.0, extra=None):
     """Per floor, the reference points with their fingerprint vectors.
 
     A placed receiver becomes a reference when it carries a scanner address
@@ -159,7 +161,9 @@ def build_references(layout, vectors, gain=1.0):
     calibration correction (exactly what update_receiver_radii applies to a
     tracker's reading from the same receiver), times ``gain`` - the knob for
     a probe beacon that transmits hotter or cooler than the trackers do.
-    The receiver's own entry is SELF_DISTANCE_M.
+    The receiver's own entry is SELF_DISTANCE_M. ``extra`` adds references
+    that are not receivers (truth marks: a known point with the vector a
+    tracker read there, stored in probe scale), scaled by the same gain.
     """
     floors = (layout or {}).get("floor") if isinstance(layout, dict) else None
     if not floors or not isinstance(vectors, dict):
@@ -201,6 +205,13 @@ def build_references(layout, vectors, gain=1.0):
                 "x": float(cords["x"]),
                 "y": float(cords["y"]),
                 "vector": vector,
+            })
+        for ref in extra or []:
+            if ref.get("floor") != floor["name"] or not ref.get("vector"):
+                continue
+            refs.append({
+                "slug": ref.get("slug"), "address": None, "x": float(ref["x"]), "y": float(ref["y"]),
+                "vector": {rx: d * gain for rx, d in ref["vector"].items()},
             })
         if refs:
             refs_by_floor[floor["name"]] = refs

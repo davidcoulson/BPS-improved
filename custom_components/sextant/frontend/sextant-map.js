@@ -107,6 +107,7 @@ export class SextantMap {
     this.trackers = [];
     this.trails = new Map();
     this.offline = new Set();
+    this.marks = [];   // truth marks of the focused tracker on this floor: [{x, y, label}]
     this.options = { circles: false, trails: true, fingerprint: false, grid: "off", labels: true, subzones: true, image: true, focus: null };
     this.locks = { zone: false, subzone: false, receiver: false }; // edit mode: locked kinds cannot be selected or dragged
     this.mode = "view";
@@ -153,6 +154,7 @@ export class SextantMap {
   setTrail(ent, points) { if (points) this.trails.set(ent, points); else this.trails.delete(ent); this.invalidate(); }
   clearTrails() { this.trails.clear(); this.invalidate(); }
   setOffline(slugs) { this.offline = new Set(slugs || []); this.invalidate(); }
+  setMarks(list) { this.marks = list || []; this.invalidate(); }
   setOptions(opts) { Object.assign(this.options, opts); this.invalidate(); }
   setMode(mode) { this.mode = mode; if (mode !== "edit") { this.draft = null; this.tool = "select"; } this.invalidate(); }
   setTool(tool) { this.tool = tool; this.draft = tool === "select" ? null : this.draft; this.invalidate(); }
@@ -248,6 +250,8 @@ export class SextantMap {
       this.invalidate();
       return;
     }
+    // A host placing a truth mark takes the click before selection does.
+    if (this.mode !== "edit" && e.button === 0 && this.host.onMapClick && this.host.onMapClick(this.toMap(p), hit)) return;
     if (hit && hit.kind === "tracker" && e.button === 0 && this.mode !== "edit") {
       this.selection = hit;
       if (this.host.onSelect) this.host.onSelect(hit);
@@ -420,7 +424,7 @@ export class SextantMap {
     if (this.options.subzones) this._drawPolygons(ctx, f.subzones || [], "subzone");
     this._drawDraft(ctx);
     this._drawReceivers(ctx, f.receivers || []);
-    if (this.mode !== "edit") this._drawTrackers(ctx);
+    if (this.mode !== "edit") { this._drawTrackers(ctx); this._drawMarks(ctx); }
     ctx.restore();
   }
 
@@ -561,6 +565,20 @@ export class SextantMap {
     pts.forEach((p, i) => this._handle(ctx, p, (i === 0 ? VERTEX_SIZE * 1.3 : VERTEX_SIZE) / k, "#ffd166", "#5a4400"));
   }
 
+  /** Truth marks: a pin where the user said the focused tracker really was. */
+  _drawMarks(ctx) {
+    const k = this.view.k;
+    for (const m of this.marks) {
+      const r = 5 / k;
+      ctx.beginPath(); ctx.moveTo(m.x, m.y); ctx.lineTo(m.x, m.y - 16 / k);
+      ctx.strokeStyle = "#ffd166"; ctx.lineWidth = 2 / k; ctx.stroke();
+      ctx.beginPath(); ctx.arc(m.x, m.y - 16 / k, r, 0, Math.PI * 2);
+      ctx.fillStyle = "#ffd166"; ctx.fill(); ctx.strokeStyle = "#5a4400"; ctx.lineWidth = 1 / k; ctx.stroke();
+      ctx.beginPath(); ctx.arc(m.x, m.y, 2.5 / k, 0, Math.PI * 2); ctx.fillStyle = "#5a4400"; ctx.fill();
+      if (m.label) this._label(ctx, m.label, m.x, m.y - 24 / k, 10, 0.8);
+    }
+  }
+
   _drawTrackers(ctx) {
     const k = this.view.k;
     const focus = this.options.focus || null;
@@ -584,10 +602,18 @@ export class SextantMap {
         }
       }
       if (this.options.fingerprint && t.fp && t.fp.fix) {
+        // The two ends of the blend: the fingerprint match (dashed circle) and the geometric fit (square).
         ctx.beginPath(); ctx.arc(t.fp.fix[0], t.fp.fix[1], 7 / k, 0, Math.PI * 2);
         ctx.strokeStyle = color; ctx.lineWidth = 2 / k; ctx.setLineDash([3 / k, 3 / k]); ctx.stroke(); ctx.setLineDash([]);
         ctx.beginPath(); ctx.moveTo(t.fp.fix[0], t.fp.fix[1]); ctx.lineTo(t.cords[0], t.cords[1]);
         ctx.strokeStyle = `hsla(${hue}, 70%, 45%, 0.5)`; ctx.lineWidth = 1 / k; ctx.stroke();
+        if (t.fp.geo) {
+          const s = 6 / k;
+          ctx.beginPath(); ctx.rect(t.fp.geo[0] - s, t.fp.geo[1] - s, 2 * s, 2 * s);
+          ctx.strokeStyle = color; ctx.lineWidth = 2 / k; ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(t.fp.geo[0], t.fp.geo[1]); ctx.lineTo(t.cords[0], t.cords[1]);
+          ctx.strokeStyle = `hsla(${hue}, 70%, 45%, 0.5)`; ctx.lineWidth = 1 / k; ctx.stroke();
+        }
       }
       if (t.raw && this.options.circles) {
         ctx.beginPath(); ctx.arc(t.raw[0], t.raw[1], 4 / k, 0, Math.PI * 2);

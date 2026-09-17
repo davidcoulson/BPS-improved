@@ -243,3 +243,44 @@ def test_tracker_names_come_from_bermuda_tidied_and_user_renames_win(tmp_path, m
     assert names == {"fry": "Fry", "private_ble_device_david_s_phone": "David's Phone", "private_ble_jack_watch": "Jack Watch"}
     assert ws._tidy_device_name("Private BLE Device ").strip()   # a prefix alone never tidies to nothing
     assert ws._tidy_device_name("Fry") == "Fry"
+
+
+def test_truth_marks_are_recorded_evaluated_listed_applied_and_deleted(tmp_path, monkeypatch):
+    import math
+    from sextant import truth
+    layout = {"floor": [{"name": "F", "scale": 100.0, "receivers": [{"entity_id": f"r{i}", "cords": {"x": x, "y": y}} for i, (x, y) in enumerate([(0, 0), (1000, 0), (1000, 1000), (0, 1000)])],
+                         "zones": [{"entity_id": "Room", "cords": [{"x": 300, "y": 300}, {"x": 700, "y": 300}, {"x": 700, "y": 700}, {"x": 300, "y": 700}]}], "subzones": []}]}
+    hass = _hass_with_layout(tmp_path, layout)
+    hass.async_add_executor_job = lambda fn, *a: asyncio.sleep(0, result=fn(*a))
+    buf = truth.Buffer()
+    monkeypatch.setattr(sextant, "_truth_buffer", buf)
+    pts = [(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0), (0.0, 1000.0)]
+    for i in range(4):
+        weighted = [(px, py, math.hypot(px - 500, py - 500), 1.0, math.hypot(px - 500, py - 500)) for px, py in pts]
+        buf.remember("phone", [{"floor": "F", "weighted": weighted, "bounds": (-100, -100, 1100, 1100), "min_wr": 50.0, "scale": 100.0}], {"a": 1.0}, 1.0, "geometric")
+    conn = _Conn()
+    run(ws.ws_truth_mark(hass, conn, {"id": 1, "type": "sextant/truth/mark", "entity": "phone", "floor": "F", "x": 500.0, "y": 500.0, "window_secs": 300}))
+    assert not conn.errors, conn.errors
+    result = conn.results[-1][1]
+    assert result["mark"]["id"] == 1 and result["mark"]["samples"] == 4
+    assert result["rows"][0]["estimator"] == "geometric" and result["rows"][0]["mean_m"] < 0.2 and result["rows"][0]["room_ok"] == 1.0
+    run(ws.ws_truth_mark(hass, conn, {"id": 2, "type": "sextant/truth/mark", "entity": "ghost", "floor": "F", "x": 1, "y": 1, "window_secs": 300}))
+    assert conn.errors and "cycle" in conn.errors[-1][2]
+    run(ws.ws_truth_list(hass, conn, {"id": 3, "type": "sextant/truth/list", "entity": "phone"}))
+    assert [m["id"] for m in conn.results[-1][1]["marks"]] == [1] and "samples" in conn.results[-1][1]["marks"][0]
+    run(ws.ws_truth_evaluate(hass, conn, {"id": 4, "type": "sextant/truth/evaluate"}))
+    summary = conn.results[-1][1]
+    assert summary["trackers"]["phone"]["marks"] == 1 and summary["trackers"]["phone"]["mean_m"] < 0.2
+    run(ws.ws_truth_apply(hass, conn, {"id": 5, "type": "sextant/truth/apply", "entity": "phone", "weight": 0.25, "gain": 1.4}))
+    applied = conn.results[-1][1]
+    assert applied["fp_weight"] == 0.25 and applied["estimator"] == "fused" and abs(applied["tracker_gain"] - 1.4) < 1e-6
+    saved = st.get_layout(hass)
+    assert saved["tracker_fp_weights"]["phone"] == 0.25 and saved["tracker_fp_gains"]["phone"] == 1.4
+    run(ws.ws_tracker_tune(hass, conn, {"id": 6, "type": "sextant/tracker/tune", "entity": "phone", "fp_weight": None}))
+    assert "phone" not in st.get_layout(hass)["tracker_fp_weights"]
+    run(ws.ws_tracker_tune(hass, conn, {"id": 7, "type": "sextant/tracker/tune", "entity": "phone", "fp_weight": 1.5}))
+    assert conn.errors[-1][2].startswith("fp_weight")
+    run(ws.ws_truth_evaluate(hass, conn, {"id": 8, "type": "sextant/truth/evaluate", "mark_id": 1}))
+    assert conn.results[-1][1]["mark"]["id"] == 1 and len(conn.results[-1][1]["rows"]) >= 1
+    run(ws.ws_truth_delete(hass, conn, {"id": 9, "type": "sextant/truth/delete", "mark_id": 1}))
+    assert conn.results[-1][1]["removed"] == 1 and sextant._fingerprint_db.extra_refs == []

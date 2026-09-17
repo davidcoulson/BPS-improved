@@ -13,7 +13,7 @@
  */
 import { LitElement, html, css, nothing } from "./lit.js";
 import { SextantMap, trackerHue } from "./sextant-map.js";
-import { sharedStyles, widgetStyles, fmtAge, toast, ensureHaComponents, uiSwitch, uiSelect, uiButton, callWS, sortFloors, trackerName, proxyName, fmtLen, fmtSpeed, classIcon } from "./sextant-ui.js";
+import { sharedStyles, widgetStyles, fmtAge, fmtNum, toast, confirmDialog, ensureHaComponents, uiSwitch, uiSelect, uiButton, callWS, sortFloors, trackerName, proxyName, fmtLen, fmtSpeed, classIcon } from "./sextant-ui.js";
 
 // The backend registers the panel as sextant-panel.js?v=<manifest version>, so a page
 // loaded before an update carries the old version here while layout/get reports the new one.
@@ -169,7 +169,7 @@ class SextantPanel extends LitElement {
                                     @layout-changed=${() => this._onLayoutChanged()}></sextant-health>`;
       default:
         return html`<sextant-live .hass=${this.hass} .data=${this._data} .positions=${this._positions} .floor=${this._floor}
-                                  @floor-changed=${(e) => { this._floor = e.detail; }}></sextant-live>`;
+                                  @layout-changed=${() => this._onLayoutChanged()} @floor-changed=${(e) => { this._floor = e.detail; }}></sextant-live>`;
     }
   }
 
@@ -217,12 +217,20 @@ class SextantLive extends LitElement {
     _history: { state: true },
     _scrub: { state: true },
     _links: { state: true },
+    _marking: { state: true },
+    _truth: { state: true },
+    _marks: { state: true },
+    _blend: { state: true },
   };
 
   constructor() {
     super();
     this._selected = null;
     this._links = null;
+    this._marking = false;  // waiting for the click that says where the tracker really is
+    this._truth = null;     // the last mark's evaluation {mark, rows, current_weight}
+    this._marks = [];       // the selected tracker's marks
+    this._blend = null;     // slider value while it is being dragged (0..100)
     this._options = { circles: false, fingerprint: false, trails: true, grid: "off", labels: true, subzones: true, receiverLabels: false, image: true };
     try { Object.assign(this._options, JSON.parse(localStorage.getItem("sextant.live.options") || "{}")); } catch { /* ignore */ }
     this._history = null; // {ent, from, to, points:[{t,x,y,f}] }
@@ -233,6 +241,7 @@ class SextantLive extends LitElement {
   firstUpdated() {
     this._map = new SextantMap(this.renderRoot.querySelector("canvas"), {
       onSelect: (hit) => { this._select(hit?.kind === "tracker" ? hit.ent : null); },
+      onMapClick: (m) => this._placeMark(m),
     });
     this._linksTimer = setInterval(() => { if (this._selected) this._loadLinks(); }, 10000);
     this._pushFloor();
@@ -242,9 +251,60 @@ class SextantLive extends LitElement {
   disconnectedCallback() { super.disconnectedCallback(); this._map?.destroy(); clearInterval(this._linksTimer); }
 
   _select(ent) {
+    if (ent !== this._selected) { this._truth = null; this._marking = false; this._blend = null; }
     this._selected = ent;
     this._map?.setOptions({ focus: ent });
-    if (ent) this._loadLinks(); else this._links = null;
+    if (ent) { this._loadLinks(); this._loadMarks(ent); } else { this._links = null; this._marks = []; this._map?.setMarks([]); }
+  }
+
+  async _loadMarks(ent) {
+    const r = await this.hass.callWS({ type: "sextant/truth/list", entity: ent }).catch(() => null);
+    if (r && ent === this._selected) { this._marks = r.marks || []; this._pushMarks(); }
+  }
+
+  _pushMarks() {
+    const mine = this._selected ? this._marks.filter((m) => m.floor === this.floor) : [];
+    this._map?.setMarks(mine.map((m) => ({ x: m.x, y: m.y, label: `mark ${m.id}` })));
+  }
+
+  /** The map click while marking: record where the selected tracker really is, then evaluate. */
+  _placeMark(m) {
+    if (!this._marking || !this._selected) return false;
+    this._marking = false;
+    const ent = this._selected;
+    (async () => {
+      const r = await callWS(this, this.hass, { type: "sextant/truth/mark", entity: ent, floor: this.floor, x: m.x, y: m.y });
+      if (!r) return;
+      this._truth = r;
+      toast(this, `Mark ${r.mark.id} recorded from ${r.mark.samples} cycles`);
+      this._loadMarks(ent);
+      this.dispatchEvent(new CustomEvent("layout-changed"));
+    })();
+    return true;
+  }
+
+  async _deleteMark(id) {
+    if (!confirmDialog(`Forget mark ${id}?`)) return;
+    const r = await callWS(this, this.hass, { type: "sextant/truth/delete", mark_id: id });
+    if (r) { if (this._truth?.mark?.id === id) this._truth = null; this._loadMarks(this._selected); }
+  }
+
+  async _applyRow(ent, row) {
+    const r = await callWS(this, this.hass, { type: "sextant/truth/apply", entity: ent, weight: row.weight, gain: row.gain });
+    if (r) { toast(this, `${this._label(ent)}: ${r.estimator}${r.estimator === "fused" ? ` at ${Math.round(r.fp_weight * 100)}% fingerprint` : ""}, gain ×${fmtNum(r.tracker_gain, 2)}`); this._blend = null; this.dispatchEvent(new CustomEvent("layout-changed")); }
+  }
+
+  /** The blend in force for a tracker, 0..1: its own weight, else what the tuning means. */
+  _blendOf(ent) {
+    const own = this.data?.layout?.tracker_fp_weights?.[ent];
+    if (typeof own === "number") return own;
+    const est = this.data?.layout?.tracker_estimators?.[ent] || this.data?.layout?.tuning?.position_estimator || "geometric";
+    return est === "geometric" ? 0 : est === "fingerprint" ? 1 : (this.data?.layout?.tuning?.fingerprint_weight ?? 0.5);
+  }
+
+  async _setBlend(ent, value) {
+    const r = await callWS(this, this.hass, { type: "sextant/tracker/tune", entity: ent, fp_weight: value });
+    if (r) { this._blend = null; this.dispatchEvent(new CustomEvent("layout-changed")); }
   }
 
   async _loadLinks() {
@@ -256,6 +316,7 @@ class SextantLive extends LitElement {
     if (!this._map) return;
     if (changed.has("data") || changed.has("floor")) this._pushFloor();
     if (changed.has("positions") || changed.has("floor") || changed.has("data") || changed.has("_scrub") || changed.has("_history")) this._pushTrackers();
+    if (changed.has("floor") || changed.has("_marks")) this._pushMarks();
     if (changed.has("_options")) this._map.setOptions(this._options);
   }
 
@@ -402,9 +463,12 @@ class SextantLive extends LitElement {
                 <dt>Spot shares</dt><dd>${sel.sub_zones ? Object.entries(sel.sub_zones).sort((a, b) => b[1] - a[1]).map(([s, p]) => `${s === "unknown" ? "none" : s} ${(p * 100).toFixed(0)}%`).join(" · ") : "—"}</dd>
                 <dt>Confidence</dt><dd>${sel.conf ?? "—"}${sel.rms_m != null ? html` <span class="muted small">rms ${fmtLen(sel.rms_m, this.hass)}</span>` : nothing}</dd>
                 <dt>Estimator</dt><dd>${sel.estimator || "geometric"}${sel.fp ? html` <span class="muted small">fp ${sel.fp.conf}${sel.fp.gain != null ? ` · gain ×${sel.fp.gain}` : ""} · ${(sel.fp.refs || []).map((r) => proxyName(this.data, r[0])).slice(0, 2).join(", ")}</span>` : nothing}</dd>
+                <dt>Trust</dt><dd>${sel.fp?.trust != null ? `${Math.round(sel.fp.trust * 100)}%` : "—"} <span class="muted small">${sel.fp?.ratio != null ? `ratio ${fmtNum(sel.fp.ratio, 2)}` : ""}</span></dd>
                 <dt>Speed</dt><dd>${fmtSpeed(sel.speed, this.hass)}</dd>
               </dl>
             </details>
+            ${this._renderBlend(sel)}
+            ${this._renderTruth(sel)}
             <div class="row">
               ${uiButton({ label: "Scrub history", icon: "mdi:history", disabled: h?.ent === sel.ent, onClick: () => this._loadHistory(sel.ent) })}
             </div>
@@ -412,6 +476,43 @@ class SextantLive extends LitElement {
           </div>` : nothing}
       </aside>
     `;
+  }
+
+  _renderBlend(sel) {
+    const ent = sel.ent;
+    const own = this.data?.layout?.tracker_fp_weights?.[ent];
+    const value = this._blend != null ? this._blend : Math.round(this._blendOf(ent) * 100);
+    const what = value <= 0 ? "geometric only" : value >= 100 ? "fingerprint only" : `fused, ${value}% fingerprint`;
+    return html`<div class="blend" title="How this tracker's position is estimated: the geometric fit from proxy distances, the fingerprint match against the proxies' references, or a blend. Applies on the next cycle.">
+      <span class="muted small">Geometric</span>
+      <input type="range" min="0" max="100" step="5" .value=${String(value)}
+             @input=${(e) => { this._blend = Number(e.target.value); }}
+             @change=${(e) => this._setBlend(ent, Number(e.target.value) / 100)}>
+      <span class="muted small">Fingerprint</span>
+      <span class="small">${what}${typeof own === "number" ? nothing : html` <span class="muted">(default)</span>`}</span>
+      ${typeof own === "number" ? uiButton({ label: "Default", kind: "text", onClick: () => this._setBlend(ent, null), title: "Follow the tuning again" }) : nothing}
+    </div>`;
+  }
+
+  _renderTruth(sel) {
+    const ent = sel.ent;
+    const t = this._truth && this._truth.mark?.entity === ent ? this._truth : null;
+    const rows = (t?.rows || []).slice(0, 6);
+    return html`<div class="truth">
+      ${this._marking ? html`<div class="marking">Click the spot on the map where ${this._label(ent)} really is. ${uiButton({ label: "Cancel", kind: "text", onClick: () => { this._marking = false; } })}</div>`
+        : html`<div class="row">${uiButton({ label: "It's actually here…", icon: "mdi:map-marker-check", onClick: () => { this._marking = true; }, title: "Tell Sextant where this tracker really is; it re-solves the last few minutes under every setting and shows which fits best" })}
+            ${this._marks.length ? html`<span class="muted small">${this._marks.length} mark${this._marks.length === 1 ? "" : "s"}</span>` : nothing}</div>`}
+      ${t ? html`<div class="card inner">
+        <h4>Mark ${t.mark.id} <span class="muted small">${t.mark.samples} cycles re-solved · now ${Math.round((t.current_weight ?? 0) * 100)}% fingerprint</span></h4>
+        ${rows.length ? html`<table class="small"><tr><th>Estimator</th><th class="num">Gain</th><th class="num">Error</th><th class="num">Room</th><th></th></tr>
+          ${rows.map((r) => html`<tr><td>${r.estimator}${r.estimator === "fused" ? ` ${Math.round(r.weight * 100)}%` : ""}</td><td class="num">×${fmtNum(r.gain, 1)}</td><td class="num">${fmtLen(r.mean_m, this.hass)}</td><td class="num">${Math.round(r.room_ok * 100)}%</td>
+            <td>${uiButton({ label: "Apply", kind: "text", onClick: () => this._applyRow(ent, r) })}</td></tr>`)}
+        </table>
+        <p class="muted small">Error is the mean distance from the mark; Room is how often the fix landed in the mark's room. One mark can overfit: mark it in another room too.</p>` : html`<p class="muted small">Nothing could be re-solved for this mark.</p>`}
+        <div class="row">${uiButton({ label: "Close", kind: "text", onClick: () => { this._truth = null; } })}${uiButton({ label: "Forget mark", kind: "text", onClick: () => this._deleteMark(t.mark.id) })}</div>
+      </div>` : nothing}
+      ${!t && this._marks.length ? html`<details class="marks"><summary>Marks</summary><ul class="plain">${this._marks.map((m) => html`<li>mark ${m.id} · ${m.floor} · ${m.samples} cycles · ${new Date(m.t * 1000).toLocaleString()} ${uiButton({ label: "Forget", kind: "text", onClick: () => this._deleteMark(m.id) })}</li>`)}</ul></details>` : nothing}
+    </div>`;
   }
 
   _renderLinks(ent) {
@@ -463,6 +564,12 @@ class SextantLive extends LitElement {
     dd { margin: 0; }
     .telemetry summary { cursor: pointer; font-size: 13px; }
     .telemetry dl { margin-top: 6px; }
+    .blend { display: flex; align-items: center; gap: 6px; margin: 10px 0 4px; flex-wrap: wrap; }
+    .blend input { flex: 1; min-width: 90px; }
+    .truth { margin-top: 6px; }
+    .marking { background: var(--warning-color, #c77800); color: #fff; padding: 6px 8px; border-radius: 6px; font-size: 13px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .card.inner { margin-top: 8px; padding: 8px; }
+    ul.plain { list-style: none; padding: 0; margin: 4px 0; font-size: 12px; }
     @media (max-width: 720px) { :host { grid-template-columns: 1fr; grid-template-rows: 1fr auto; } .side { border-left: 0; border-top: 1px solid var(--divider-color); max-height: 40vh; } .overlay { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding: 4px 8px; gap: 6px; } .overlay > * { flex: none; } }
   `];
 }
