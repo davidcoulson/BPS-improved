@@ -451,6 +451,23 @@ latest solve and the rolling sample window are persisted separately in
 reappears immediately, and the window resumes warm instead of rebuilding from
 zero.
 
+### Writing corrections into Bermuda
+
+By default a solved correction is stored in this layout as a per-receiver
+distance multiplier, so it only helps BPS. A multiplier `c` is exactly an
+rssi offset of `-10 × attenuation × log10(c)` dB on the receiving scanner in
+Bermuda's path-loss model, and Bermuda already keeps a per-scanner offset
+map. With the tuning key `calibration_target` set to `bermuda`
+(`bps.set_tuning`), Apply and auto-calibration write the offsets into
+Bermuda instead — live, and persisted without reloading Bermuda — so
+Bermuda's own area and distance sensors are corrected too, and BPS applies
+nothing twice. Later solves see samples that already carry the offsets and
+fit the residual, which is added on; changes under 0.5 dB are ignored.
+Reset corrections restores whatever Bermuda had before BPS first touched
+each scanner. Needs this fork's Bermuda `0.8.7-fork-testing.11` or later
+(the `rssi_offsets` API); without it, Apply refuses with a message rather
+than silently doing nothing.
+
 ## Kalman position smoothing
 
 Published positions used to be smoothed with a fixed 3-sample moving average —
@@ -857,7 +874,7 @@ Keys: `distance_estimator`, `median_window_secs`, `median_min_samples`,
 `zone_switch_secs`, `stationary_speed`, `stationary_secs`,
 `zone_unlock_margin`, `zone_unlock_secs`, `subzone_switch_secs`,
 `floor_switch_secs`, `floor_tenure_bonus`, `floor_tenure_full_secs`,
-`floor_proximity_weight`. An
+`floor_proximity_weight`, `calibration_target` (`bps` or `bermuda`). An
 unknown key or an out-of-range value is refused with the allowed range;
 `reset: true` restores the defaults. Changes apply on the next cycle.
 

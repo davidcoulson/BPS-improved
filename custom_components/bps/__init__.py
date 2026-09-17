@@ -345,6 +345,12 @@ TUNING_SPEC = {
     # is, relative to the nearest receiver on any competing floor (see
     # _proximity_weighted_scores). 0 = pure fit-quality election.
     "floor_proximity_weight": (0.5, float, 0.0, 1.0),
+    # Where receiver calibration writes its corrections. "bps": a per-receiver
+    # distance multiplier in this layout (the original behaviour). "bermuda":
+    # the equivalent per-scanner rssi offset written into Bermuda itself
+    # (needs a Bermuda build with the rssi_offsets API), so Bermuda's own
+    # area/distance sensors are corrected too and BPS applies nothing twice.
+    "calibration_target": ("bps", str, ("bps", "bermuda")),
 }
 
 

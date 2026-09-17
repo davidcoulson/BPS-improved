@@ -47,6 +47,7 @@ _LOGGER = logging.getLogger(__name__)
 # Layout + calibration state now live in HA's Store (see storage.py). The
 # shared write lock lives there too so both modules serialize on one lock
 # without an import cycle.
+from . import bermuda_source
 from .storage import (
     BPS_FILE_LOCK,
     get_bps_data_for_edit,
@@ -756,24 +757,25 @@ async def _auto_solve_and_apply_locked(hass, cal: dict) -> None:
         cal["last_solved_at"] = result["solved_at"]
 
         previous = cal["applied"].get(floor_name, {})
-        deltas = [
-            abs(result["receivers"][slug] / previous.get(slug, 1.0) - 1.0)
-            for slug in result["receivers"]
-        ]
-        if previous and deltas and max(deltas) < APPLY_EPSILON:
-            continue  # nothing moved enough to rewrite the file
+        if _calibration_target(coords) == "bermuda":
+            # Offsets already written are inside the samples, so each solve
+            # fits the RESIDUAL: nothing to do while it stays near 1.0.
+            deltas = [abs(c - 1.0) for c in result["receivers"].values()]
+            if previous and deltas and max(deltas) < APPLY_EPSILON:
+                continue
+        else:
+            deltas = [
+                abs(result["receivers"][slug] / previous.get(slug, 1.0) - 1.0)
+                for slug in result["receivers"]
+            ]
+            if previous and deltas and max(deltas) < APPLY_EPSILON:
+                continue  # nothing moved enough to rewrite the file
 
-        for receiver in floor.get("receivers", []):
-            correction = result["receivers"].get(str(receiver.get("entity_id")))
-            if correction is not None:
-                receiver["correction"] = correction
-        floor["calibration"] = {
-            "applied_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "auto": True,
-            "pairs_used": result["pairs_used"],
-            "error_factor_before": result["error_factor_before"],
-            "error_factor_after": result["error_factor_after"],
-        }
+        try:
+            _write_floor_corrections(hass, coords, floor, result, auto=True)
+        except ValueError as err:
+            _LOGGER.warning("Auto-calibration could not apply for %s: %s", floor_name, err)
+            continue
         cal["applied"][floor_name] = dict(result["receivers"])
         changed = True
 
@@ -946,6 +948,91 @@ async def async_shutdown_calibration(hass) -> None:
             await save_calibration_state(hass)
 
 
+PATH_LOSS_EXPONENT_DEFAULT = 3.0  # Bermuda's default attenuation, if it does not report one
+APPLY_MIN_DB = 0.5  # smallest offset change worth writing into Bermuda
+
+
+def _calibration_target(coords) -> str:
+    """"bps" (multiplier in the layout) or "bermuda" (rssi offset in Bermuda)."""
+    tuning = coords.get("tuning") if isinstance(coords, dict) else None
+    target = tuning.get("calibration_target") if isinstance(tuning, dict) else None
+    return target if target in ("bps", "bermuda") else "bps"
+
+
+def _push_corrections_to_bermuda(hass, coords, floor, result) -> int:
+    """Write one floor's solved corrections into Bermuda as rssi offsets.
+
+    A per-receiver distance multiplier ``c`` is exactly an rssi offset of
+    ``-10 * attenuation * log10(c)`` dB on the receiving scanner in Bermuda's
+    path-loss model, so the correction moves into Bermuda without changing
+    what the solver fitted. Offsets ACCUMULATE: the samples the next solve
+    sees already carry the offsets written now, so that solve fits the
+    residual, and the residual is added to what is there. Bermuda's own value
+    before BPS first touched a scanner is remembered per address
+    (``bermuda_offset_base`` in the layout) so reset can restore it.
+
+    Returns the number of scanners written. Raises ValueError when the
+    Bermuda build cannot do this, so the caller can say why nothing changed.
+    """
+    info = bermuda_source.async_get_rssi_offsets(hass)
+    slug_to_addr = bermuda_source.async_get_scanner_addresses_by_slug(hass)
+    if info is None or slug_to_addr is None:
+        raise ValueError(
+            "This Bermuda build has no rssi_offsets API; set calibration_target to bps "
+            "(bps.set_tuning) or update Bermuda."
+        )
+    attenuation = info.get("attenuation")
+    if not isinstance(attenuation, (int, float)) or attenuation <= 0:
+        attenuation = PATH_LOSS_EXPONENT_DEFAULT
+    current = {str(k).lower(): float(v) for k, v in (info.get("offsets") or {}).items()}
+    base = coords.setdefault("bermuda_offset_base", {})
+    updates = {}
+    for receiver in floor.get("receivers", []):
+        slug = str(receiver.get("entity_id") or "")
+        correction = result["receivers"].get(slug)
+        address = slug_to_addr.get(slug)
+        if not address or not isinstance(correction, (int, float)) or correction <= 0:
+            continue
+        address = str(address).lower()
+        delta_db = -10.0 * float(attenuation) * math.log10(float(correction))
+        if abs(delta_db) < APPLY_MIN_DB:
+            continue
+        old = current.get(address, 0.0)
+        base.setdefault(address, old)
+        updates[address] = round(old + delta_db, 1)
+    if updates:
+        bermuda_source.async_set_rssi_offsets(hass, updates)
+    return len(updates)
+
+
+def _write_floor_corrections(hass, coords, floor, result, *, auto: bool) -> int:
+    """Apply a solve result to one floor, per calibration_target. Returns the
+    number of receivers (or Bermuda scanners) updated."""
+    target = _calibration_target(coords)
+    if target == "bermuda":
+        updated = _push_corrections_to_bermuda(hass, coords, floor, result)
+        # The correction now lives in Bermuda's distances; a multiplier here
+        # would apply it twice.
+        for receiver in floor.get("receivers", []):
+            receiver.pop("correction", None)
+    else:
+        updated = 0
+        for receiver in floor.get("receivers", []):
+            correction = result["receivers"].get(str(receiver.get("entity_id")))
+            if correction is not None:
+                receiver["correction"] = correction
+                updated += 1
+    floor["calibration"] = {
+        "applied_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "auto": auto,
+        "target": target,
+        "pairs_used": result["pairs_used"],
+        "error_factor_before": result["error_factor_before"],
+        "error_factor_after": result["error_factor_after"],
+    }
+    return updated
+
+
 async def apply_corrections(hass, cal: dict, floor_name: str) -> int:
     """Write the solved corrections into bpsdata.txt. Returns receivers updated."""
     result = None
@@ -967,19 +1054,7 @@ async def _apply_result_locked(hass, cal: dict, result: dict) -> int:
     if floor is None:
         raise ValueError(f'Floor "{result["floor"]}" no longer exists.')
 
-    updated = 0
-    for receiver in floor.get("receivers", []):
-        correction = result["receivers"].get(str(receiver.get("entity_id")))
-        if correction is not None:
-            receiver["correction"] = correction
-            updated += 1
-    floor["calibration"] = {
-        "applied_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "auto": False,
-        "pairs_used": result["pairs_used"],
-        "error_factor_before": result["error_factor_before"],
-        "error_factor_after": result["error_factor_after"],
-    }
+    updated = _write_floor_corrections(hass, coords, floor, result, auto=False)
     cal["applied"][floor.get("name")] = dict(result["receivers"])
 
     await save_bps_data(hass, coords)
@@ -999,6 +1074,22 @@ async def reset_corrections(hass, cal: dict, floor_name: str) -> int:
         for receiver in floor.get("receivers", []):
             if receiver.pop("correction", None) is not None:
                 removed += 1
+        # Offsets BPS wrote into Bermuda for this floor's scanners go back to
+        # what Bermuda had before BPS first touched them (whatever the target
+        # is set to now).
+        base = coords.get("bermuda_offset_base")
+        slug_to_addr = bermuda_source.async_get_scanner_addresses_by_slug(hass) or {}
+        if isinstance(base, dict) and base:
+            restore = {}
+            for receiver in floor.get("receivers", []):
+                address = slug_to_addr.get(str(receiver.get("entity_id") or ""))
+                if address and str(address).lower() in base:
+                    restore[str(address).lower()] = base.pop(str(address).lower())
+            if restore:
+                bermuda_source.async_set_rssi_offsets(hass, restore)
+                removed += len(restore)
+            if not base:
+                coords.pop("bermuda_offset_base", None)
         floor.pop("calibration", None)
         cal["applied"].pop(floor.get("name"), None)
 

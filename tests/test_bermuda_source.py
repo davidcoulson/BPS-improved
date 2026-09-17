@@ -616,3 +616,23 @@ def test_history_is_not_requested_from_a_build_without_the_feature(monkeypatch):
     api = _install_featureful_api(monkeypatch, _snapshot())
     bermuda_source.async_get_readings(_hass_with_data(), include_history=True)
     assert api.calls[-1] == {"tracked_only": True}
+
+
+def test_rssi_offset_helpers_pass_through_when_the_feature_exists(monkeypatch):
+    api = _install_featureful_api(monkeypatch, _snapshot(),
+                                  scanners={"aa:01": {"slug": "kitchen", "last_seen_age": 1}, "aa:02": {"slug": "", "last_seen_age": 1}})
+    api.SNAPSHOT_FEATURES = frozenset(api.SNAPSHOT_FEATURES | {"rssi_offsets"})
+    api.async_get_rssi_offsets = lambda _hass: {"offsets": {"aa:01": 2.0}, "attenuation": 3.0, "ref_power": -55.0}
+    api.async_set_rssi_offsets = lambda _hass, offsets: {"aa:01": 2.0, **offsets}
+
+    assert bermuda_source.async_get_rssi_offsets(object())["offsets"] == {"aa:01": 2.0}
+    assert bermuda_source.async_set_rssi_offsets(object(), {"aa:03": -1.0}) == {"aa:01": 2.0, "aa:03": -1.0}
+    assert bermuda_source.async_get_scanner_addresses_by_slug(object()) == {"kitchen": "aa:01"}
+
+
+def test_rssi_offset_helpers_are_none_without_the_feature(monkeypatch):
+    _install_featureful_api(monkeypatch, _snapshot())  # no rssi_offsets feature
+    assert bermuda_source.async_get_rssi_offsets(object()) is None
+    assert bermuda_source.async_set_rssi_offsets(object(), {"aa:01": 1.0}) is None
+    _install_bermuda_api(monkeypatch, _snapshot())  # plain v1: no scanners either
+    assert bermuda_source.async_get_scanner_addresses_by_slug(object()) is None

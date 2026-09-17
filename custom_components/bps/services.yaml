@@ -149,7 +149,8 @@ set_tuning:
     solver_near_always, zone_hysteresis, zone_prob_smoothing,
     zone_switch_margin, zone_switch_secs, stationary_speed, stationary_secs,
     zone_unlock_margin, zone_unlock_secs, subzone_switch_secs,
-    floor_switch_secs, floor_tenure_bonus, floor_tenure_full_secs. An
+    floor_switch_secs, floor_tenure_bonus, floor_tenure_full_secs,
+    floor_proximity_weight, calibration_target ("bps" or "bermuda"). An
     unknown key or an out-of-range value is refused with the allowed range.
   fields:
     settings:

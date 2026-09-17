@@ -470,3 +470,46 @@ def async_get_readings(hass, include_history=False) -> dict[tuple[str, str], dic
         cache["readings_at"] = now
         cache["readings_history"] = bool(include_history)
     return readings
+
+
+# --- rssi offsets (calibration_target = "bermuda") ---------------------------
+
+
+def async_get_rssi_offsets(hass) -> dict | None:
+    """
+    Bermuda's per-scanner rssi offsets plus its global path-loss parameters:
+    ``{"offsets": {address: dB}, "attenuation": n, "ref_power": p}``.
+
+    None when the Bermuda build lacks the ``rssi_offsets`` feature.
+    """
+    api = _bermuda_api()
+    if api is None or "rssi_offsets" not in _features(api):
+        return None
+    return api.async_get_rssi_offsets(hass)
+
+
+def async_set_rssi_offsets(hass, offsets: dict) -> dict | None:
+    """
+    Merge per-scanner rssi offsets (dB, keyed by scanner address) into
+    Bermuda, applied live and persisted without a reload. Returns the
+    resulting full map, or None when unsupported.
+    """
+    api = _bermuda_api()
+    if api is None or "rssi_offsets" not in _features(api):
+        return None
+    return api.async_set_rssi_offsets(hass, offsets)
+
+
+def async_get_scanner_addresses_by_slug(hass) -> dict[str, str] | None:
+    """``{scanner slug: scanner address}`` from Bermuda's scanner map, or None."""
+    api = _bermuda_api()
+    if api is None or "scanners" not in _features(api):
+        return None
+    scanners = api.async_get_scanners(hass)
+    if scanners is None:
+        return None
+    return {
+        scanner["slug"]: address
+        for address, scanner in scanners.items()
+        if scanner.get("slug") and address
+    }
