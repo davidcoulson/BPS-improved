@@ -150,3 +150,68 @@ def test_legacy_cleanup_retries_when_store_already_populated(tmp_path):
     run(st.migrate_legacy(hass))
     assert not stale.exists()                          # removed despite store non-empty
     assert st.get_layout(hass) == {"floor": [{"name": "Home"}]}  # data untouched
+
+
+# --- migration from the pre-rename "bps" integration ------------------------
+def _bps_dirs(hass):
+    maps = Path(hass.config.path("www", "bps_maps"))
+    hist = Path(hass.config.path(".storage", "bps_history"))
+    maps.mkdir(parents=True, exist_ok=True)
+    hist.mkdir(parents=True, exist_ok=True)
+    (maps / "ground.png").write_bytes(b"png")
+    (hist / "primrose.jsonl").write_text("{}\n")
+    return maps, hist
+
+
+def test_migrate_from_bps_copies_everything(tmp_path):
+    hass = make_hass(tmp_path)
+    layout = {"floor": [{"name": "Home"}], "tuning": {"calibration_target": "bps"}}
+    hass._store_backing["bps"] = layout
+    hass._store_backing["bps_calibration_state"] = {"auto_enabled": True}
+    maps, hist = _bps_dirs(hass)
+
+    run(st.migrate_from_bps(hass))
+    run(st.load_layout(hass))
+
+    assert st.get_layout(hass) == layout
+    assert hass._store_backing["sextant_calibration_state"] == {"auto_enabled": True}
+    assert (Path(hass.config.path("www", "sextant_maps")) / "ground.png").read_bytes() == b"png"
+    assert (Path(hass.config.path(".storage", "sextant_history")) / "primrose.jsonl").exists()
+    # Copied, never moved: a rollback to bps must still find its data.
+    assert hass._store_backing["bps"] == layout
+    assert (maps / "ground.png").exists() and (hist / "primrose.jsonl").exists()
+
+
+def test_migrate_from_bps_never_overwrites_sextant_data(tmp_path):
+    hass = make_hass(tmp_path)
+    hass._store_backing["sextant"] = {"floor": [{"name": "New"}]}
+    hass._store_backing["bps"] = {"floor": [{"name": "Old"}]}
+    _bps_dirs(hass)
+    new_maps = Path(hass.config.path("www", "sextant_maps"))
+    new_maps.mkdir(parents=True)
+    (new_maps / "keep.png").write_bytes(b"keep")
+
+    run(st.migrate_from_bps(hass))
+
+    assert hass._store_backing["sextant"] == {"floor": [{"name": "New"}]}
+    assert sorted(p.name for p in new_maps.iterdir()) == ["keep.png"]
+    # The history dir had no sextant copy yet, so that one is still filled in.
+    assert (Path(hass.config.path(".storage", "sextant_history")) / "primrose.jsonl").exists()
+
+
+def test_migrate_from_bps_is_a_noop_on_a_fresh_install(tmp_path):
+    hass = make_hass(tmp_path)
+    run(st.migrate_from_bps(hass))
+    run(st.load_layout(hass))
+    assert st.get_layout(hass) == []
+    assert "sextant_calibration_state" not in hass._store_backing
+    assert not Path(hass.config.path("www", "sextant_maps")).exists()
+
+
+def test_migrate_from_bps_survives_a_corrupt_old_store(tmp_path):
+    hass = make_hass(tmp_path)
+    hass._store_raise_on_load.add("bps")
+    hass._store_backing["bps_calibration_state"] = {"auto_enabled": False}
+    run(st.migrate_from_bps(hass))          # must not raise
+    assert "sextant" not in hass._store_backing
+    assert hass._store_backing["sextant_calibration_state"] == {"auto_enabled": False}

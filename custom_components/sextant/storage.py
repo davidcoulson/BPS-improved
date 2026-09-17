@@ -186,9 +186,9 @@ async def migrate_from_bps(hass) -> None:
     copied rather than moved: rolling back to the old integration must still
     find its data where it left it.
     """
-    for store, old_key, label in (
-        (_layout_store(hass), LEGACY_DOMAIN, "layout"),
-        (_calib_store(hass), f"{LEGACY_DOMAIN}_calibration_state", "calibration state"),
+    for store, old_key, new_key, label in (
+        (_layout_store(hass), LEGACY_DOMAIN, STORAGE_KEY_LAYOUT, "layout"),
+        (_calib_store(hass), f"{LEGACY_DOMAIN}_calibration_state", STORAGE_KEY_CALIB, "calibration state"),
     ):
         try:
             if await store.async_load() is not None:
@@ -200,7 +200,7 @@ async def migrate_from_bps(hass) -> None:
         if old is None:
             continue
         await store.async_save(old)
-        _LOGGER.info("Copied the %s from .storage/%s (bps) into .storage/%s", label, old_key, store.key)
+        _LOGGER.info("Copied the %s from .storage/%s (bps) into .storage/%s", label, old_key, new_key)
 
     def _copy_dirs() -> list[str]:
         copied = []

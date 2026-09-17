@@ -144,3 +144,10 @@ def test_calibration_target_tuning_is_validated():
     assert cal_mod._calibration_target({"tuning": {"calibration_target": "bermuda"}}) == "bermuda"
     assert cal_mod._calibration_target({}) == "sextant"
     assert cal_mod._calibration_target("junk") == "sextant"
+
+
+def test_calibration_target_reads_pre_rename_bps_value():
+    from sextant.calibration import _calibration_target
+    assert _calibration_target({"tuning": {"calibration_target": "bps"}}) == "sextant"
+    assert _calibration_target({"tuning": {"calibration_target": "bermuda"}}) == "bermuda"
+    assert _calibration_target({}) == "sextant"
