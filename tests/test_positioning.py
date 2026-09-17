@@ -41,12 +41,12 @@ def test_stable_hint_solves_once_instead_of_the_full_battery():
     d = math.hypot(5, 5)
     pts = [(0, 0, d), (10, 0, d), (0, 10, d)]
     calls = []
-    real_least_squares = bps.least_squares
+    real_least_squares = bps.least_squares_bounded_soft_l1
     try:
-        bps.least_squares = lambda *a, **kw: calls.append(1) or real_least_squares(*a, **kw)
+        bps.least_squares_bounded_soft_l1 = lambda *a, **kw: calls.append(1) or real_least_squares(*a, **kw)
         x, y = bps.trilaterate(pts, stable_hint=(5.0, 5.0))
     finally:
-        bps.least_squares = real_least_squares
+        bps.least_squares_bounded_soft_l1 = real_least_squares
     assert len(calls) == 1
     assert abs(x - 5) < 0.05 and abs(y - 5) < 0.05
 
@@ -57,7 +57,7 @@ def test_stable_hint_falls_back_to_full_battery_when_it_fails():
     were given, not the failed hint solve's own (unreliable) answer."""
     d = math.hypot(5, 5)
     pts = [(0, 0, d), (10, 0, d), (0, 10, d)]
-    real_least_squares = bps.least_squares
+    real_least_squares = bps.least_squares_bounded_soft_l1
     calls = []
 
     def fake(*a, **kw):
@@ -68,10 +68,10 @@ def test_stable_hint_falls_back_to_full_battery_when_it_fails():
         return r
 
     try:
-        bps.least_squares = fake
+        bps.least_squares_bounded_soft_l1 = fake
         x_hint, y_hint = bps.trilaterate(pts, stable_hint=(5.0, 5.0))
     finally:
-        bps.least_squares = real_least_squares
+        bps.least_squares_bounded_soft_l1 = real_least_squares
 
     assert len(calls) > 1  # fell through to the full battery, not just the hint
     x_plain, y_plain = bps.trilaterate(pts)
@@ -700,7 +700,6 @@ def test_multistart_never_worse_than_centroid_only_and_sometimes_better():
     keep rather than silently doing nothing.
     """
     import numpy as np
-    from scipy.optimize import least_squares
 
     rng = np.random.default_rng(4)
     # A deliberately awkward ring of receivers: symmetric layouts are where
@@ -730,10 +729,20 @@ def test_multistart_never_worse_than_centroid_only_and_sometimes_better():
             return sqrt_w * (np.hypot(px - X[0], py - X[1]) - pr)
 
         centroid = np.array([px.mean(), py.mean()])
-        single = least_squares(
-            obj, centroid,
-            bounds=([bounds[0], bounds[1]], [bounds[2], bounds[3]]),
-            method="trf", loss="soft_l1", f_scale=bps.SOLVER_ROBUST_F_SCALE,
+
+        def jac(X, px=px, py=py, sqrt_w=sqrt_w):
+            dx, dy = X[0] - px, X[1] - py
+            dd = np.maximum(np.hypot(dx, dy), 1e-9)
+            return np.column_stack((sqrt_w * dx / dd, sqrt_w * dy / dd))
+
+        # Same solver, single start from the centroid: the comparison must be
+        # apples to apples, or a solver's own convergence tolerance (scipy's
+        # trf polishes ~1e-5 tighter than the numpy LM) masquerades as a
+        # multi-start regression.
+        single = bps.least_squares_bounded_soft_l1(
+            obj, centroid, jac,
+            ([bounds[0], bounds[1]], [bounds[2], bounds[3]]),
+            f_scale=bps.SOLVER_ROBUST_F_SCALE,
         )
 
         def cost(res):
@@ -1153,3 +1162,70 @@ def test_full_cycle_floor_switches_on_proximity_when_fits_tie(monkeypatch):
         clock["t"] += 10
         seen.append(cycle(2.0, 5.0, "F")["floor"])
     assert seen[-1] == "F", seen
+# ---------------------------------------------------------------------------
+# Solves run in the executor; positions are pushed over the websocket
+# ---------------------------------------------------------------------------
+
+
+def test_solves_run_through_the_executor(monkeypatch):
+    """The per-floor fits are the cycle's CPU work and must go through
+    hass.async_add_executor_job, with the election and publish staying on
+    the loop (they touch hass state)."""
+    _reset_tracker_state()
+    hass = make_hass()
+    hass.data["bps_sensors"] = {f"sensor.e_bps_{k}": _Sensor() for k in ("zone", "nearest_zone", "floor", "sub_zone")}
+    calls = []
+    real = hass.async_add_executor_job
+
+    async def spy(func, *args):
+        calls.append(func.__name__)
+        return await real(func, *args)
+
+    hass.async_add_executor_job = spy
+    entry = _cycle(hass, _square_layout(), 2.0, 5.0)
+    assert entry["zone"] == "Kitchen"
+    assert calls == ["_solve_floor_jobs"]
+
+
+class _Conn:
+    def __init__(self):
+        self.subscriptions = {}
+        self.sent = []
+
+    def send_message(self, msg):
+        self.sent.append(msg)
+
+    def send_result(self, msg_id, result=None):
+        self.sent.append({"id": msg_id, "type": "result", "result": result})
+
+
+def test_websocket_subscribe_streams_each_cycle_and_unsubscribes():
+    hass = make_hass()
+    hass.data[bps.DOMAIN] = {"apitricords": [{"ent": "e", "zone": "Kitchen"}], "rl_offline": ["dead_rx"]}
+    conn = _Conn()
+
+    run(bps._ws_subscribe(hass, conn, {"id": 7, "type": "bps/subscribe"}))
+
+    # Result first, then an immediate event carrying the current state.
+    assert conn.sent[0]["type"] == "result" and conn.sent[0]["id"] == 7
+    first = conn.sent[1]
+    assert first["type"] == "event" and first["id"] == 7
+    assert first["event"]["positions"] == [{"ent": "e", "zone": "Kitchen"}]
+    assert first["event"]["offline_receivers"] == ["dead_rx"]
+    assert "stamp" in first["event"]
+
+    # A cycle's push reaches the subscriber.
+    bps.async_dispatcher_send(hass, bps.SIGNAL_BPS_UPDATE, {"stamp": 1, "positions": [], "offline_receivers": []})
+    assert len(conn.sent) == 3 and conn.sent[2]["event"]["stamp"] == 1
+
+    # Unsubscribing (what HA's unsubscribe_events does) stops the stream.
+    conn.subscriptions[7]()
+    bps.async_dispatcher_send(hass, bps.SIGNAL_BPS_UPDATE, {"stamp": 2})
+    assert len(conn.sent) == 3
+
+
+def test_websocket_command_is_registered_once(monkeypatch):
+    hass = make_hass()
+    bps._register_websocket(hass)
+    bps._register_websocket(hass)
+    assert hass.data["_ws_commands"] == [bps._ws_subscribe]

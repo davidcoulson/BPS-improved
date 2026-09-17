@@ -7,14 +7,16 @@ from homeassistant.components.http import HomeAssistantView
 from homeassistant.components.frontend import async_remove_panel
 from homeassistant.components import panel_custom
 from homeassistant.helpers.event import async_track_state_change_event
-from homeassistant.core import HomeAssistant
+from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
+from homeassistant.components import websocket_api
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import device_registry as dr
 from homeassistant.const import UnitOfLength
 from homeassistant.util.unit_conversion import DistanceConverter
 from homeassistant.util import slugify
 import numpy as np
-from scipy.optimize import least_squares
+from .solver_numpy import least_squares_bounded_soft_l1
 import voluptuous as vol
 from homeassistant.core import ServiceCall
 from homeassistant.exceptions import HomeAssistantError
@@ -889,6 +891,7 @@ async def update_tracked_entities(hass):
             new_global_data = [{"entity": ent, "data": copy.deepcopy(layout)} for ent in unique_values]
 
             await process_entities(hass, new_global_data)
+            async_dispatcher_send(hass, SIGNAL_BPS_UPDATE, _push_payload(hass))
 
         except Exception as e:
             _LOGGER.info(f"Error executing Jinja code: {e}")
@@ -1574,7 +1577,11 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
         if inc_cand is not None:
             to_solve.append(inc_cand)
 
-    solved = {}  # floor name -> everything the publish pipeline needs
+    # Phase 1 (event loop): prepare every candidate floor's solve inputs.
+    # Phase 2 (executor): the solves themselves - the only real CPU work in
+    # the cycle - run off the loop, all of this tracker's floors in one job.
+    # Phase 3 (event loop): election, filter, zones, publish.
+    jobs = []
     for cand in to_solve:
         floor_name, cords = cand["name"], cand["cords"]
 
@@ -1631,16 +1638,27 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
         ):
             stable_hint = (float(kf_state["x"][0]), float(kf_state["x"][1]))
 
-        fix = trilaterate(weighted, bounds=floor_bounds, min_weight_radius=min_wr, stable_hint=stable_hint)
-        if fix is None:
+        jobs.append({
+            "floor": floor_name, "weighted": weighted, "bounds": floor_bounds,
+            "min_wr": min_wr, "stable_hint": stable_hint, "scale": scale,
+            "zone_polys": zone_polys,
+        })
+
+    solved = {}  # floor name -> everything the publish pipeline needs
+    if jobs:
+        # asyncio.gather of synchronous work is sequential: with the solves
+        # inline, every tracker's fits ran back to back on the event loop in
+        # one burst per cycle. On a Pi that burst visibly stalled HA; this is
+        # why the upstream interval had to go from 1 s to 15 s.
+        results = await hass.async_add_executor_job(_solve_floor_jobs, jobs)
+    else:
+        results = []
+    for job, outcome in zip(jobs, results, strict=False):
+        if outcome is None:
             continue  # this floor's readings don't converge; not a contender
-        conf, rms_m, coverage = _score_floor_fit(fix, weighted, scale)
-        # A fit landing in this floor's no-go zone is physically impossible
-        # here (issue #60): down-weight it so the competition prefers the
-        # floor where that spot is a real room. Down-weight, not eliminate —
-        # a sole candidate still wins and is snapped out below.
-        if _point_in_no_go(fix, zone_polys):
-            conf *= NO_GO_CONF_PENALTY
+        fix, conf, rms_m = outcome
+        floor_name, weighted, floor_bounds = job["floor"], job["weighted"], job["bounds"]
+        zone_polys, scale = job["zone_polys"], job["scale"]
         solved[floor_name] = {
             "fix": fix,
             "weighted": weighted,
@@ -1827,6 +1845,34 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
         update_bps_sensor_state(hass, f"sensor.{entity}_bps_nearest_zone", nearest_zone)
         update_bps_sensor_state(hass, f"sensor.{entity}_bps_floor", lowest_floor_name)
         update_bps_sensor_state(hass, f"sensor.{entity}_bps_sub_zone", sub_zone, {"parent_zone": parent_zone})
+
+def _solve_floor_jobs(jobs):
+    """Run one tracker's candidate-floor solves. Pure CPU; executor-safe.
+
+    Each job carries everything the fit needs (see the phase comments in
+    update_trilateration_and_zone); nothing here touches hass or the
+    election state. Returns, per job, ``(fix, confidence, rms_m)`` or None
+    when that floor's readings do not converge.
+    """
+    out = []
+    for job in jobs:
+        fix = trilaterate(
+            job["weighted"], bounds=job["bounds"],
+            min_weight_radius=job["min_wr"], stable_hint=job["stable_hint"],
+        )
+        if fix is None:
+            out.append(None)
+            continue
+        conf, rms_m, _coverage = _score_floor_fit(fix, job["weighted"], job["scale"])
+        # A fit landing in this floor's no-go zone is physically impossible
+        # here (issue #60): down-weight it so the competition prefers the
+        # floor where that spot is a real room. Down-weight, not eliminate -
+        # a sole candidate still wins and is snapped out by the caller.
+        if _point_in_no_go(fix, job["zone_polys"]):
+            conf *= NO_GO_CONF_PENALTY
+        out.append((fix, conf, rms_m))
+    return out
+
 
 def update_or_add_entry(data, new_entry):
     """Replace the entry for new_entry["ent"] in place, or append it.
@@ -2580,6 +2626,50 @@ def find_sub_zone_for_point(hass, data, entity, floor_name, point):
     return "unknown", None
 
 
+# --- Live push (websocket) ------------------------------------------------------
+# Fired on the event loop at the end of every positioning cycle with the same
+# payload the /api/bps/cords poll would return, plus receiver health. The
+# panel and the Lovelace card can subscribe once instead of polling, and a
+# subscriber sees every cycle rather than whichever ones its timer lands on.
+SIGNAL_BPS_UPDATE = "bps_positions_updated"
+
+
+def _push_payload(hass):
+    """What a websocket subscriber gets on subscribe and after each cycle."""
+    dom = hass.data.get(DOMAIN, {}) if isinstance(getattr(hass, "data", None), dict) else {}
+    return {
+        "stamp": time.time(),
+        "positions": list(dom.get("apitricords") or []),
+        "offline_receivers": list(dom.get("rl_offline") or []),
+    }
+
+
+@websocket_api.websocket_command({vol.Required("type"): "bps/subscribe"})
+@websocket_api.async_response
+async def _ws_subscribe(hass, connection, msg):
+    """``bps/subscribe``: stream positions and receiver health, one event per cycle.
+
+    The first event is sent immediately with the current state, so a client
+    has something to draw before the next cycle. Unsubscribing is the
+    standard ``unsubscribe_events`` on the subscription id.
+    """
+
+    @callback
+    def _forward(payload):
+        connection.send_message(websocket_api.event_message(msg["id"], payload))
+
+    connection.subscriptions[msg["id"]] = async_dispatcher_connect(hass, SIGNAL_BPS_UPDATE, _forward)
+    connection.send_result(msg["id"])
+    _forward(_push_payload(hass))
+
+
+def _register_websocket(hass) -> None:
+    if hass.data.get("bps_ws_registered"):
+        return
+    websocket_api.async_register_command(hass, _ws_subscribe)
+    hass.data["bps_ws_registered"] = True
+
+
 def _register_calibration_services(hass) -> None:
     """Expose the calibration actions as HA services.
 
@@ -2816,6 +2906,7 @@ async def async_setup(hass, config):
         if "bps_services_registered" not in hass.data:
             _register_calibration_services(hass)
             hass.data["bps_services_registered"] = True
+        _register_websocket(hass)
 
         config_path = hass.config.path()
         target_dir = os.path.join(config_path, "www", "bps_maps")
@@ -3487,13 +3578,18 @@ def trilaterate(known_points, bounds=None, min_weight_radius=1e-3, stable_hint=N
     else:
         lo, hi = [-np.inf, -np.inf], [np.inf, np.inf]
 
+    # The fits run on the pure-numpy Levenberg-Marquardt solver in
+    # solver_numpy.py rather than scipy's least_squares. Benchmarked on this
+    # install's real floorplans (tools/solver_bench.py, 3000 fits, 15%
+    # gross outliers): identical convergence, median accuracy 1.08 m vs
+    # 1.08 m for scipy with the same multi-start, p95 6.1 m vs 6.0 m. The
+    # positioning hot path therefore no longer needs scipy at all; the
+    # calibration solver still does, until it is reworked.
     result = None
     if stable_hint is not None:
         hint = np.clip(np.asarray(stable_hint, dtype=float), lo, hi)
-        r = least_squares(
-            objective_function, hint, jac=jacobian,
-            bounds=(lo, hi), method="trf",
-            loss="soft_l1", f_scale=SOLVER_ROBUST_F_SCALE,
+        r = least_squares_bounded_soft_l1(
+            objective_function, hint, jacobian, (lo, hi), f_scale=SOLVER_ROBUST_F_SCALE,
         )
         if r.success:
             result = r
@@ -3519,25 +3615,14 @@ def trilaterate(known_points, bounds=None, min_weight_radius=1e-3, stable_hint=N
         if not any(np.allclose(s, u, rtol=0, atol=1e-6) for u in unique_starts):
             unique_starts.append(s)
 
-    for start in unique_starts:
-        r = least_squares(
-            objective_function, start, jac=jacobian,
-            bounds=(lo, hi), method="trf",
-            loss="soft_l1", f_scale=SOLVER_ROBUST_F_SCALE,
-        )
-        # r.cost is the robust cost for this loss/f_scale, so it is directly
-        # comparable between starts.
-        if r.success and (result is None or r.cost < result.cost):
-            result = r
-    if result is None:
-        # Keep the shape of a failed scipy result for the check below.
-        result = least_squares(
-            objective_function, unique_starts[0], jac=jacobian,
-            bounds=(lo, hi), method="trf",
-            loss="soft_l1", f_scale=SOLVER_ROBUST_F_SCALE,
-        )
+    # One call solves every start and keeps the lowest robust cost (the cost
+    # is the same objective for every start, so it is directly comparable).
+    result = least_squares_bounded_soft_l1(
+        objective_function, unique_starts[0], jacobian, (lo, hi),
+        f_scale=SOLVER_ROBUST_F_SCALE, extra_starts=unique_starts[1:],
+    )
 
-    if not result.success:
+    if result is None or not result.success:
         # Non-convergence is an expected, handled outcome on ill-conditioned
         # input — a floor whose readings don't agree, or the self-test's
         # leave-one-out on a corner/degenerate receiver. Every caller treats

@@ -3,7 +3,7 @@
     "name": "BPS-Optimized (BLE Positioning)",
     "codeowners": ["@maxi1134"],
     "config_flow": true,
-    "dependencies": ["http", "panel_custom"],
+    "dependencies": ["http", "panel_custom", "websocket_api"],
     "documentation": "https://github.com/maxi1134/BPS-improved",
     "integration_type": "device",
     "iot_class": "calculated",

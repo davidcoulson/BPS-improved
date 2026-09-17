@@ -72,14 +72,19 @@ upstream docs.
 
 ### SciPy dependency
 
-This integration depends on SciPy, which requires native binary support.
+Positioning itself no longer needs SciPy: the trilateration solver is a
+pure-numpy Levenberg–Marquardt fit (`solver_numpy.py`), benchmarked against
+SciPy on a real 48-receiver layout at identical convergence and accuracy,
+and the solves run off the event loop in Home Assistant's executor. SciPy
+is still required for the receiver **calibration** solver, so it stays in
+the manifest until that is reworked.
 
 - Supported: 64-bit Home Assistant installs (aarch64 / ARM64 or x86_64).
-- Not supported: 32-bit systems (e.g. ARMv7).
+- Not supported: 32-bit systems (e.g. ARMv7), until calibration drops SciPy.
 
-Even on supported hardware, installation can fail inside the restricted Python
-environment some HA installs use. If you hit that, run Home Assistant in a
-container where you control the Python environment.
+If SciPy fails to install inside the restricted Python environment some HA
+installs use, run Home Assistant in a container where you control the
+Python environment.
 
 ---
 
@@ -855,6 +860,23 @@ Keys: `distance_estimator`, `median_window_secs`, `median_min_samples`,
 `floor_proximity_weight`. An
 unknown key or an out-of-range value is refused with the allowed range;
 `reset: true` restores the defaults. Changes apply on the next cycle.
+
+## Live updates over the websocket
+
+Positions and receiver health are pushed once per positioning cycle over
+Home Assistant's websocket, so a client can subscribe once instead of
+polling `/api/bps/cords`:
+
+```js
+hass.connection.subscribeMessage(
+  (event) => console.log(event.positions, event.offline_receivers),
+  { type: "bps/subscribe" },
+);
+```
+
+The first event arrives immediately with the current state; every later one
+follows a cycle. `positions` is exactly what `/api/bps/cords` returns. The
+panel and the map card still poll today; the rebuilt UI subscribes.
 
 ## Measuring room stability
 

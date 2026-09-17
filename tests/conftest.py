@@ -139,6 +139,46 @@ def _install_homeassistant_stubs():
     # on its parent (as done for panel_custom above).
     helpers.storage = sys.modules["homeassistant.helpers.storage"]
     _module("homeassistant.helpers.event", async_track_state_change_event=lambda *a, **k: None)
+
+    # A working in-memory dispatcher, keyed per hass, so the websocket
+    # subscription and the per-cycle push can be exercised for real.
+    def _dispatch_bucket(hass):
+        return hass.data.setdefault("_test_dispatcher", {})
+
+    def _async_dispatcher_connect(hass, signal, target):
+        _dispatch_bucket(hass).setdefault(signal, []).append(target)
+
+        def _unsub():
+            try:
+                _dispatch_bucket(hass)[signal].remove(target)
+            except (KeyError, ValueError):
+                pass
+        return _unsub
+
+    def _async_dispatcher_send(hass, signal, *args):
+        for target in list(_dispatch_bucket(hass).get(signal, [])):
+            target(*args)
+
+    _module("homeassistant.helpers.dispatcher",
+            async_dispatcher_connect=_async_dispatcher_connect,
+            async_dispatcher_send=_async_dispatcher_send)
+
+    # websocket_api: the decorators are pass-through, messages are plain dicts
+    # a fake connection can record.
+    def _websocket_command(schema):
+        def deco(func):
+            func._ws_schema = schema
+            return func
+        return deco
+
+    components.websocket_api = _module(
+        "homeassistant.components.websocket_api",
+        websocket_command=_websocket_command,
+        async_response=lambda f: f,
+        async_register_command=lambda hass, func: hass.data.setdefault("_ws_commands", []).append(func),
+        event_message=lambda msg_id, event: {"id": msg_id, "type": "event", "event": event},
+        result_message=lambda msg_id, result=None: {"id": msg_id, "type": "result", "success": True, "result": result},
+    )
     _module("homeassistant.helpers.template", Template=object)
     _module("homeassistant.core", HomeAssistant=object, ServiceCall=object, callback=lambda f: f)
     _module("homeassistant.exceptions", HomeAssistantError=Exception)
