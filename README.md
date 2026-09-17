@@ -16,16 +16,25 @@ room** when the fix sits between two.
 
 ## TL;DR
 
-- Bermuda gives you a distance from every Bluetooth proxy to every device.
-  Sextant turns those into a position on your floor plan and four sensors
-  per device: floor, room, spot and nearest room.
-- Install from HACS, add the integration, draw your rooms and place your
-  proxies in the panel, pick what to track. Nothing else to configure.
-- Positions come from trilateration fused with fingerprints the proxies
-  build by hearing each other; rooms need a margin and a dwell before
-  they change, so sensors do not flap.
-- If a tracker sits in the wrong place, tell it where it really is on the
-  Live page and Sextant works out which settings fit that tracker best.
+- 🐱 **Where is the cat?** Put a tag on her collar and Sextant shows her on
+  your floor plan: which floor, which room, even which spot in the room
+  (the sofa, the bed, the litter box). Same for the dog, your watch, your
+  phone, the kids, the car keys.
+- 🏠 **Automations that know who is where.** Lights that follow you from
+  room to room, heating that knows the bedroom is empty, a nudge when the
+  dog is on the couch again, a TV that pauses when you walk out. Every
+  tracked thing gets four sensors: floor, room, spot and nearest room.
+- 🔧 **Set up in an afternoon.** Install from HACS, upload a floor plan,
+  draw your rooms, drop your Bluetooth proxies where they sit in the house,
+  choose what to track. That is all.
+- 📍 **Steady, not jumpy.** A cat asleep on the bed stays "on the bed". A
+  watch on the boundary between the kitchen and the dining room does not
+  flip back and forth every few seconds.
+- 🎯 **Teach it.** If something shows in the wrong place, click where it
+  really is and Sextant works out which settings fit that tracker best.
+- 🤖 **Built with AI.** Sextant was developed with Claude as a coding
+  partner, tested in a real house full of proxies, pets and phones. See
+  [AI-assisted development](#ai-assisted-development).
 
 ## Docs
 
@@ -82,6 +91,18 @@ token, in Home Assistant's own theme and unit system. Seven pages:
   Tiles followed across address rotation (with the fork).
 - Four sensors per tracker, a map card, services and a websocket push per
   cycle. Pure numpy, no SciPy.
+
+## AI-assisted development
+
+Sextant was written with [Claude](https://claude.ai) as a pair programmer,
+through Claude Code. The author sets the direction, runs every change
+against a real house with dozens of proxies, four floors, pets, phones and
+watches, and decides what ships. Claude wrote most of the code, the tests
+and these docs in that loop. Expect the codebase to read that way: long
+comments explaining why, a consistent shape from file to file, and a test
+for nearly everything. Bugs are still bugs, whoever typed them; issues and
+pull requests are welcome on
+[davidcoulson/sextant](https://github.com/davidcoulson/sextant).
 
 ## Credits
 
