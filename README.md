@@ -1,4 +1,4 @@
-![Sextant Logo](img/icon.png)
+![Sextant](img/logo.png)
 
 # Sextant — BLE indoor positioning for Home Assistant
 

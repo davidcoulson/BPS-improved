@@ -3338,7 +3338,7 @@ async def async_setup(hass, config):
                     webcomponent_name="sextant-panel",
                     module_url="/sextant/sextant-panel.js",
                     sidebar_title="Sextant",
-                    sidebar_icon="mdi:map",
+                    sidebar_icon="mdi:compass-rose",
                     require_admin=False,
                     embed_iframe=False,
                 )
