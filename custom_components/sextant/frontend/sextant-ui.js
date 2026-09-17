@@ -210,7 +210,9 @@ export function fmtLen(metres, hass, digits = 1) {
   if (metres == null || !isFinite(metres)) return "—";
   if (!isImperial(hass)) return `${Number(metres).toFixed(digits)} m`;
   const ft = metres * 3.28084;
-  return ft < 2 ? `${Math.round(ft * 12)} in` : `${ft.toFixed(digits)} ft`;   // under two feet reads better in inches
+  if (ft < 2) return `${Math.round(ft * 12)} in`;      // under two feet reads better in inches
+  if (ft >= 5) return `${Math.round(ft)} ft`;          // past five feet a decimal is noise
+  return `${ft.toFixed(digits)} ft`;
 }
 export function fmtSpeed(mps, hass) {
   if (mps == null || !isFinite(mps)) return "—";
