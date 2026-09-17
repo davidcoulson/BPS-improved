@@ -387,7 +387,7 @@ class SextantDevices extends LitElement {
     const filter = this._filter.toLowerCase();
     const all = (this._candidates || []).filter((c) => !this._isProxyBeacon(c) && !this._onlyUnplaced(c, placed));
     const recent = all.filter((c) => (c.last_seen_age ?? 1e9) <= RECENT_SECS);
-    const haystack = (c) => { const w = this._heardWhere(c, index); return `${c.name} ${c.address} ${c.manufacturer || ""} ${c.area_name || ""} ${c.kind} ${w ? `${w.room || ""} ${w.floor || ""} ${w.proxy || ""}` : ""}`.toLowerCase(); };
+    const haystack = (c) => { const w = this._heardWhere(c, index); return `${c.name} ${c.address} ${c.manufacturer || ""} ${c.apple_summary || ""} ${c.area_name || ""} ${c.kind} ${w ? `${w.room || ""} ${w.floor || ""} ${w.proxy || ""}` : ""}`.toLowerCase(); };
     const candidates = (this._showAll ? all : recent)
       .filter((c) => (this._kind === "all" || c.kind === this._kind) && (!filter || haystack(c).includes(filter)))
       .sort((a, b) => (a.last_seen_age ?? 1e9) - (b.last_seen_age ?? 1e9));
@@ -400,10 +400,14 @@ class SextantDevices extends LitElement {
             const slug = d.slug, p = live.get(slug), name = trackerName(this.data, slug), mdi = classIcon(classes[slug]);
             return html`<tr>
               <td class="who">
-                ${icons[slug] ? html`<img class="icon" src=${icons[slug]} alt="">` : html`<ha-icon class="icon" icon=${mdi || "mdi:tag-outline"}></ha-icon>`}
+                <button class="iconpick" title="Change the icon or class of ${name}" @click=${() => this._openWizard(slug, address)}>
+                  ${icons[slug] ? html`<img class="icon" src=${icons[slug]} alt="">` : html`<ha-icon class="icon" icon=${mdi || "mdi:tag-outline"}></ha-icon>`}
+                </button>
                 <div><a href="#" class="name" title="Edit name, class, height, ref trim and icon" @click=${(e) => { e.preventDefault(); this._openWizard(slug, address); }}>${name}</a><br><span class="muted small">${address}${classes[slug] ? ` · ${(TRACKER_CLASSES.find(([k]) => k === classes[slug]) || [])[1] || classes[slug]}` : ""}</span></div>
               </td>
-              <td>${p ? html`${p.zone}${p.sub_zone && p.sub_zone !== "unknown" ? ` · ${p.sub_zone}` : ""}<br><span class="muted small">${p.floor}</span>` : html`<span class="muted">—</span>`}</td>
+              <td>${p ? html`${p.zone}${p.sub_zone && p.sub_zone !== "unknown" ? ` · ${p.sub_zone}` : ""}<br><span class="muted small">${p.floor}</span>`
+                : d.last_seen_age != null ? html`<span class="muted">no position</span><br><span class="muted small">seen ${fmtAge(d.last_seen_age)} ago</span>`
+                : html`<span class="muted">not heard yet</span>`}</td>
               <td class="num">${heights[slug] != null ? fmtLen(heights[slug], this.hass) : html`<span class="muted">default</span>`}</td>
               <td class="num">${offsets[slug] != null && offsets[slug] !== 0 ? `${offsets[slug] > 0 ? "+" : ""}${fmtNum(offsets[slug], 1)} dB` : html`<span class="muted">0</span>`}</td>
               <td class="actions">
@@ -429,7 +433,7 @@ class SextantDevices extends LitElement {
           <tr><th>Device</th><th>Maker</th><th>Where</th><th class="num">Proxies</th><th class="num">Signal</th><th>Seen</th><th></th></tr>
           ${candidates.slice(0, 200).map((c) => { const w = this._heardWhere(c, index); return html`<tr>
             <td><b>${c.name}</b> ${c.kind === "tile" ? html`<span class="pill">Tile</span>` : c.kind === "ibeacon" ? html`<span class="pill">iBeacon</span>` : nothing}<br><span class="muted small">${c.address}</span></td>
-            <td>${c.manufacturer || html`<span class="muted">unknown</span>`}</td>
+            <td>${c.manufacturer || html`<span class="muted">unknown</span>`}${c.apple_summary ? html`<br><span class="small muted">${c.apple_summary}</span>` : c.address_type === "bd_addr_random_resolvable" ? html`<br><span class="small muted">rotating address (IRK)</span>` : nothing}</td>
             <td>${w ? html`${w.room || w.floor}${w.room ? html`<br><span class="muted small">${w.floor}</span>` : nothing}<br><span class="muted small">${w.proxy}</span>` : c.area_name ? html`${c.area_name}` : html`<span class="muted">—</span>`}</td>
             <td class="num">${c.scanners}</td>
             <td class="num" title="strongest reading (RSSI)">${w ? w.rssi : c.best_rssi ?? "—"} dBm</td>
@@ -551,6 +555,8 @@ class SextantDevices extends LitElement {
     table.compact th, table.compact td { padding: 5px 8px; }
     td.who { display: flex; align-items: center; gap: 10px; }
     .icon { width: 28px; height: 28px; object-fit: contain; flex: none; color: var(--secondary-text-color); --mdc-icon-size: 26px; }
+    button.iconpick { padding: 2px; border-radius: 50%; border-color: transparent; line-height: 0; }
+    button.iconpick:hover { border-color: var(--primary-color); }
     a.name { font-weight: 600; color: var(--primary-text-color); text-decoration: none; border-bottom: 1px dotted var(--secondary-text-color); }
     a.name:hover { color: var(--primary-color); border-bottom-color: var(--primary-color); }
     td.actions { white-space: nowrap; }
