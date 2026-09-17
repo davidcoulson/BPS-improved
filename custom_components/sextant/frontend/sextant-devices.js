@@ -9,6 +9,7 @@
  * accessories (with a step-by-step add) and the Tiles' binding state.
  */
 import { LitElement, html, css, nothing } from "./lit.js";
+import { pointInPolygon } from "./sextant-map.js";
 import { sharedStyles, widgetStyles, fmtAge, fmtNum, toast, callWS, confirmDialog, slugLabel, uiField, uiSelect, uiSwitch, uiButton, trackerName, fmtLen, lenUnit, toDisplayLen, fromDisplayLen, TRACKER_CLASSES, classIcon } from "./sextant-ui.js";
 
 const KIND_FILTERS = [["all", "Everything"], ["tile", "Tiles"], ["ibeacon", "iBeacons"], ["device", "Other devices"]];
@@ -490,23 +491,44 @@ class SextantDevices extends LitElement {
       </p>`;
   }
 
+  /** The placed proxy (address -> {name, floor, room}) index, for "where is this Tile". */
+  _placedIndex() {
+    const out = new Map();
+    for (const f of this.data?.layout?.floor || []) {
+      for (const r of f.receivers || []) {
+        if (!r.address || !r.cords) continue;
+        const room = (f.zones || []).find((z) => !z.no_go && (z.cords || []).length >= 3 && pointInPolygon({ x: r.cords.x, y: r.cords.y }, z.cords));
+        out.set(String(r.address).toLowerCase(), { name: this.data?.scanners?.[r.address]?.name || r.entity_id, floor: f.name, room: room?.entity_id || null });
+      }
+    }
+    return out;
+  }
+
   _renderIdentities(tileIds) {
     const ids = Object.values(this._identities || {}).sort((a, b) => (a.last_seen_age ?? 1e9) - (b.last_seen_age ?? 1e9));
     if (!ids.length) return nothing;
     const options = [{ value: "", label: "choose a Tile…" }, ...tileIds.map((id) => ({ value: id, label: trackerName(this.data, id) }))];
-    return html`<h4>Tile IDs heard <span class="muted small">read from the tags; pick which configured Tile each one is</span></h4>
+    const placed = this._placedIndex();
+    const where = (row) => {
+      const heard = row.heard_by || (row.strongest ? [row.strongest] : []);
+      const hit = heard.find((h) => placed.has(String(h.address || "").toLowerCase()));
+      if (!hit) return { room: row.area_name || null, proxy: null, unplaced: heard.length };
+      const p = placed.get(String(hit.address).toLowerCase());
+      return { room: p.room ? `${p.room} · ${p.floor}` : p.floor, proxy: `${p.name} (${hit.rssi} dBm)`, unplaced: heard.length - heard.filter((h) => placed.has(String(h.address || "").toLowerCase())).length };
+    };
+    return html`<h4>Tile IDs heard <span class="muted small">read from the tags; pick which configured Tile each one is. To tell two apart, ring one from the Tile app, carry it to another room for two minutes and watch which ID moves.</span></h4>
       <div class="wrap"><table class="compact">
-        <tr><th>Tile ID</th><th>Last heard</th><th>Where</th><th>Loudest proxy</th><th>Is</th><th></th></tr>
-        ${ids.map((row) => html`<tr>
+        <tr><th>Tile ID</th><th>Last heard</th><th>Where</th><th>Loudest placed proxy</th><th>Is</th><th></th></tr>
+        ${ids.map((row) => { const w = where(row); return html`<tr>
           <td><code>${row.uid}</code></td>
           <td>${row.last_seen_age != null ? `${fmtAge(row.last_seen_age)} ago` : "—"}</td>
-          <td>${row.area_name || "—"}</td>
-          <td class="small">${row.strongest ? `${row.strongest.scanner} (${row.strongest.rssi} dBm)` : "—"}</td>
+          <td>${w.room || "—"}</td>
+          <td class="small">${w.proxy || html`<span class="muted">only unplaced proxies hear it</span>`}${w.unplaced && w.proxy ? html` <span class="muted">(+${w.unplaced} unplaced and ignored)</span>` : nothing}</td>
           <td>${row.tile_id ? html`<b>${trackerName(this.data, row.tile_id)}</b>` : html`<div class="row">
             ${uiSelect({ label: "", value: this._bindPick[row.uid] || "", options, onChange: (v) => { this._bindPick = { ...this._bindPick, [row.uid]: v }; }, style: "min-width: 200px" })}
             ${uiButton({ label: "Bind", kind: "primary", disabled: !this._bindPick[row.uid], onClick: () => this._bindTile(row.uid) })}</div>`}</td>
           <td class="small muted">${row.addresses?.length || 0} address${row.addresses?.length === 1 ? "" : "es"}</td>
-        </tr>`)}
+        </tr>`; })}
       </table></div>`;
   }
 
