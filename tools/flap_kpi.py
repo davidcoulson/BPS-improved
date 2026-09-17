@@ -165,8 +165,9 @@ def discover_entities(url, token, include_nearest=False):
     return sorted(s["entity_id"] for s in states if s["entity_id"].endswith(suffixes))
 
 
-def fetch_history(url, token, entity_ids, hours):
-    start = datetime.now(timezone.utc) - timedelta(hours=hours)
+def fetch_history(url, token, entity_ids, hours, end=None):
+    end = end or datetime.now(timezone.utc)
+    start = end - timedelta(hours=hours)
     data = _get(
         url,
         token,
@@ -176,6 +177,7 @@ def fetch_history(url, token, entity_ids, hours):
             "minimal_response": "",
             "no_attributes": "",
             "significant_changes_only": "",
+            **({"end_time": end.isoformat()} if end is not None else {}),
         },
     )
     # One list per entity; minimal_response omits entity_id on all but the
@@ -201,6 +203,14 @@ def _fmt(value, width, suffix=""):
     return f"{value}{suffix}".rjust(width)
 
 
+def _baseline_entry(base_entities, eid):
+    """The baseline's row for this sensor, across the bps -> sextant rename."""
+    for candidate in (eid, eid.replace("_sextant_", "_bps_"), eid.replace("_bps_", "_sextant_")):
+        if candidate in base_entities:
+            return base_entities[candidate]
+    return None
+
+
 def print_report(per_entity, summary, baseline=None):
     base_entities = (baseline or {}).get("entities", {})
     head = f"{'entity':<52}{'chg/h':>8}{'flip%':>8}{'dwell':>10}{'<60s%':>8}{'dead':>6}"
@@ -219,7 +229,7 @@ def print_report(per_entity, summary, baseline=None):
             + _fmt(m["dead"], 6)
         )
         if baseline:
-            b = base_entities.get(eid) or base_entities.get(eid.replace("_sextant_", "_bps_"))
+            b = _baseline_entry(base_entities, eid)
             if b and b.get("changes_per_hour") is not None and m["changes_per_hour"] is not None:
                 line += _fmt(m["changes_per_hour"] - b["changes_per_hour"], 9)
             else:
@@ -255,6 +265,11 @@ def main(argv=None):
     ap.add_argument("--json", metavar="FILE", help="write the metrics to FILE")
     ap.add_argument("--baseline", metavar="FILE", help="compare against a run saved with --json")
     ap.add_argument("--from-json", metavar="FILE", help="re-print a saved run instead of querying HA")
+    ap.add_argument("--end", metavar="ISO", help="score the window ending at this time instead of now "
+                    "(e.g. 2026-09-17T04:55:00-04:00); needs --entities when those sensors no longer exist")
+    ap.add_argument("--history-json", metavar="FILE",
+                    help="score a saved /api/history/period response (a list of per-entity state lists) "
+                         "instead of querying HA; pairs with --hours for the window length")
     args = ap.parse_args(argv)
 
     baseline = None
@@ -268,15 +283,30 @@ def main(argv=None):
         print_report(saved["entities"], saved["summary"], baseline)
         return 0
 
-    if not args.url or not args.token:
-        ap.error("need --url/--token or $HASS_URL/$HASS_TOKEN (or --from-json)")
+    end = None
+    if args.end:
+        end = datetime.fromisoformat(args.end)
+        if end.tzinfo is None:
+            end = end.astimezone()
 
+    if args.history_json:
+        with open(args.history_json, encoding="utf-8") as fh:
+            raw = json.load(fh)
+        history = {}
+        for states in raw:
+            if states:
+                history[states[0]["entity_id"]] = states
+        entity_ids = args.entities or sorted(history)
+    else:
+        if not args.url or not args.token:
+            ap.error("need --url/--token or $HASS_URL/$HASS_TOKEN (or --from-json / --history-json)")
     try:
-        entity_ids = args.entities or discover_entities(args.url, args.token, args.nearest)
-        if not entity_ids:
-            print("no Sextant zone/floor sensors found", file=sys.stderr)
-            return 1
-        history = fetch_history(args.url, args.token, entity_ids, args.hours)
+        if not args.history_json:
+            entity_ids = args.entities or discover_entities(args.url, args.token, args.nearest)
+            if not entity_ids:
+                print("no Sextant zone/floor sensors found", file=sys.stderr)
+                return 1
+            history = fetch_history(args.url, args.token, entity_ids, args.hours, end=end)
     except urllib.error.HTTPError as e:
         print(f"HA request failed: {e.code} {e.reason}", file=sys.stderr)
         return 2
