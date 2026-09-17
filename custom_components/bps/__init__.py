@@ -1021,6 +1021,9 @@ def _suggest_scanner(placement_slug, stored_uid, candidates):
     return best if best_score >= 0.55 else None
 
 
+_MAC_SUFFIX_RE = re.compile(r"_([0-9a-f]{2}(?:_[0-9a-f]{2}){5})$")
+
+
 def _mac_tail_matches(token, mac):
     """True when a placed slug's hex token is the tail of a MAC/uid."""
     if not token or not mac:
@@ -1082,7 +1085,18 @@ def _resolve_receiver_addresses(layout, directory):
             continue
         candidates = [a for a, s in directory.items() if s.get("slug") == slug and a not in claimed]
         if not candidates:
-            token = receiver.get("scanner_uid") or _scanner_token(slug)
+            # Bermuda disambiguates duplicate scanner names by appending the
+            # MAC, e.g. "sewing_room_rrn00_4e893c_dc_06_75_4e_89_3e". That
+            # suffix IS the address; and once the duplicate is gone Bermuda
+            # drops it again, so the plain token must be tried on the slug
+            # with the suffix stripped.
+            mac_suffix = _MAC_SUFFIX_RE.search(slug)
+            if mac_suffix:
+                mac = mac_suffix.group(1).replace("_", ":")
+                if mac in directory and mac not in claimed:
+                    candidates = [mac]
+            base_slug = slug[: mac_suffix.start()] if mac_suffix else slug
+            token = receiver.get("scanner_uid") or _scanner_token(base_slug)
             if token:
                 candidates = [
                     a for a, s in directory.items()

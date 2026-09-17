@@ -122,3 +122,25 @@ def test_calibration_matches_scanners_by_address_first():
     mapping = cal_mod._match_scanners(cal, devices)
     assert mapping == {"aa:aa:aa:aa:aa:01": "kitchen_label", "aa:aa:aa:aa:aa:02": "office_rrn00_aaaa02"}
     assert set(cal["matched_placed"]) == {"kitchen_label", "office_rrn00_aaaa02"}
+
+
+def test_resolver_handles_bermudas_mac_suffixed_slugs():
+    """Bermuda appends the MAC to a duplicate scanner name, and drops it again
+    once the duplicate is gone. Both forms must resolve to the address."""
+    directory = {"dc:06:75:4e:89:3e": {"slug": "sewing_room_rrn00_4e893c", "name": "Sewing Room RRN00 4e893c",
+                                        "unique_id": "dc:06:75:4e:89:3c", "address_wifi_mac": "dc:06:75:4e:89:3c",
+                                        "last_seen_age": 1.0}}
+    layout = {"floor": [{"name": "F", "receivers": [
+        {"entity_id": "sewing_room_rrn00_4e893c_dc_06_75_4e_89_3e", "cords": {"x": 0, "y": 0}},
+    ]}]}
+    changed, unresolved = bps._resolve_receiver_addresses(layout, directory)
+    rec = layout["floor"][0]["receivers"][0]
+    assert changed and unresolved == []
+    assert rec["address"] == "dc:06:75:4e:89:3e"
+    assert rec["entity_id"] == "sewing_room_rrn00_4e893c"       # label follows the un-suffixed name
+    # And the other way round: the directory has the suffixed name, the
+    # placement the plain one.
+    directory["dc:06:75:4e:89:3e"]["slug"] = "sewing_room_rrn00_4e893c_dc_06_75_4e_89_3e"
+    layout = {"floor": [{"name": "F", "receivers": [{"entity_id": "sewing_room_rrn00_4e893c", "cords": {"x": 0, "y": 0}}]}]}
+    assert bps._resolve_receiver_addresses(layout, directory)[0]
+    assert layout["floor"][0]["receivers"][0]["address"] == "dc:06:75:4e:89:3e"
