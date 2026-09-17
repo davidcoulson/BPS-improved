@@ -263,7 +263,7 @@ class SextantHealth extends LitElement {
     const moreIsBetter = (v) => v == null ? "—" : html`<span class=${v > 0 ? "good" : v < 0 ? "bad" : ""}>${v > 0 ? "+" : "−"}${fmtAge(Math.abs(v))}</span>`;
     const sz = d?.summary?.sextant_zone;
     const baselineOptions = [{ value: "", label: "no baseline" }, ...this._baselines.map((b) => ({ value: b.name, label: `${b.name} · ${b.hours} h · ${(b.saved_at || "").slice(0, 10)}` }))];
-    return html`<section class="card">
+    return html`<section class="card wide">
       <h3>Stability</h3>
       <div class="row">
         ${uiSelect({ label: "Window", value: this._kpiHours, options: [1, 3, 6, 12, 24, 48].map((h) => ({ value: h, label: `${h} h` })), onChange: (v) => { this._kpiHours = Number(v); }, style: "min-width: 110px" })}
@@ -337,6 +337,7 @@ class SextantHealth extends LitElement {
     .bad { color: var(--error-color, #c62828); font-weight: 600; }
     :host { display: block; overflow: auto; }
     .cols { grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); }
+    .card.wide { grid-column: 1 / -1; }   /* the KPI table, with its delta columns, needs the row */
     section.receivers { grid-column: 1 / -1; }
     ul.plain { list-style: none; padding: 0; margin: 6px 0; }
     ul.plain li { padding: 3px 0; }
