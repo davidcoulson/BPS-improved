@@ -85,11 +85,13 @@ def _tracker_names(hass, entities, layout=None) -> dict:
             # Only a name the user typed counts here: the registry's own name
             # is Sextant's "<slug> (Sextant)" device or Bermuda's, which the
             # tracked list already gave us in a nicer form.
-            for entity_id in (f"sensor.{ent}_sextant_zone", f"sensor.{ent}_area", f"device_tracker.{ent}"):
+            for entity_id in (f"sensor.{ent}_sextant_room", f"sensor.{ent}_area", f"device_tracker.{ent}"):
                 entry = ent_reg.async_get(entity_id)
                 device = dev_reg.async_get(entry.device_id) if entry and entry.device_id else None
                 if device is not None and device.name_by_user:
-                    names[ent] = device.name_by_user
+                    # A rename in HA wins, minus the integration prefix HA's
+                    # own rename dialog pre-fills ("Private BLE Device ...").
+                    names[ent] = _tidy_device_name(device.name_by_user)
                     break
     except Exception:  # noqa: BLE001 - no registries (tests), Bermuda's names stand
         pass

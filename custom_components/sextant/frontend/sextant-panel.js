@@ -293,6 +293,16 @@ class SextantLive extends LitElement {
 
   _label(ent) { return trackerName(this.data, ent); }
 
+  /** The same disc the map draws: the tracker's hue, with its custom icon, its class icon, or initials. */
+  _avatar(ent) {
+    const color = `hsl(${trackerHue(ent)}, 70%, 45%)`;
+    const src = this.data?.layout?.tracker_icons?.[ent];
+    const mdi = classIcon(this.data?.layout?.tracker_classes?.[ent]);
+    return html`<span class="avatar" style="background: ${color}">
+      ${src ? html`<img src=${src.startsWith("/") ? src : `/sextant/${src}`} alt="">` : mdi ? html`<ha-icon icon=${mdi}></ha-icon>` : html`<span class="initials">${this._label(ent).slice(0, 2).toUpperCase()}</span>`}
+    </span>`;
+  }
+
   _pointAt(h, t) {
     const pts = h.points;
     if (!pts.length) return null;
@@ -359,7 +369,7 @@ class SextantLive extends LitElement {
         <ul class="list">
           ${rows.map((p) => html`
             <li class=${p.ent === this._selected ? "selected" : ""} @click=${() => { this._select(p.ent === this._selected ? null : p.ent); if (p.floor && p.floor !== this.floor) this.dispatchEvent(new CustomEvent("floor-changed", { detail: p.floor })); }}>
-              <span class="dot" style="background: hsl(${trackerHue(p.ent)}, 70%, 45%)"></span>
+              ${this._avatar(p.ent)}
               <span class="name">${this._label(p.ent)}</span>
               <span class="where">${p.zone}${p.sub_zone && p.sub_zone !== "unknown" ? ` · ${p.sub_zone}` : ""}</span>
               <span class="muted small">${p.floor}</span>
@@ -421,7 +431,11 @@ class SextantLive extends LitElement {
     .scrub input { flex: 1; }
     .side { border-left: 1px solid var(--divider-color); overflow: auto; padding: 12px; }
     .list { list-style: none; margin: 0 0 12px; padding: 0; }
-    .list li { display: grid; grid-template-columns: 12px 1fr auto; grid-template-rows: auto auto; column-gap: 8px; align-items: center; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+    .list li { display: grid; grid-template-columns: 30px 1fr auto; grid-template-rows: auto auto; column-gap: 10px; align-items: center; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+    .avatar { grid-row: 1 / 3; width: 30px; height: 30px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,0.15); display: flex; align-items: center; justify-content: center; overflow: hidden; color: #fff; }
+    .avatar ha-icon { --mdc-icon-size: 18px; }
+    .avatar img { width: 100%; height: 100%; object-fit: cover; }
+    .avatar .initials { font-size: 11px; font-weight: 700; }
     .list li:hover, .list li.selected { background: var(--secondary-background-color); }
     .list li.selected { outline: 2px solid var(--primary-color); }
     .list .name { font-weight: 600; grid-column: 2; }
