@@ -101,18 +101,18 @@ export function ensureHaComponents() {
   if (_haReady) return _haReady;
   _haReady = (async () => {
     try {
-      if (!customElements.get("ha-textfield") || !customElements.get("ha-select") || !customElements.get("ha-switch")) {
+      if (!(customElements.get("ha-input") || customElements.get("ha-textfield")) || !customElements.get("ha-select") || !customElements.get("ha-switch")) {
         const helpers = await window.loadCardHelpers?.();
         // Creating an entities-card editor loads the shared form elements.
         const card = helpers?.createCardElement?.({ type: "entities", entities: [] });
         await card?.constructor?.getConfigElement?.();
       }
       await Promise.race([
-        Promise.all(["ha-textfield", "ha-select", "ha-switch", "ha-formfield", "ha-button"].map((t) => customElements.whenDefined(t))),
+        Promise.all(["ha-select", "ha-switch", "ha-formfield", "ha-button"].map((t) => customElements.whenDefined(t))),
         new Promise((r) => setTimeout(r, 2500)),
       ]);
     } catch { /* fall back to plain elements */ }
-    return { textfield: !!customElements.get("ha-textfield"), select: !!customElements.get("ha-select") && !!customElements.get("mwc-list-item"),
+    return { textfield: !!(customElements.get("ha-input") || customElements.get("ha-textfield")), select: !!customElements.get("ha-select"),
              switch: !!customElements.get("ha-switch") && !!customElements.get("ha-formfield"), button: !!customElements.get("ha-button") || !!customElements.get("mwc-button") };
   })();
   return _haReady;
@@ -120,9 +120,15 @@ export function ensureHaComponents() {
 
 const has = (tag) => !!customElements.get(tag);
 
-/** Text or number field. */
+/** Text or number field. HA 2026.3+ ships ha-input (a Web Awesome input);
+ *  older frontends ship ha-textfield; both emit a composed change event. */
 export function uiField({ label, value, type = "text", step, min, max, placeholder, onChange, disabled = false, style = "", suffix }) {
   const v = value == null ? "" : String(value);
+  if (has("ha-input")) {
+    return html`<ha-input .label=${label ?? ""} .value=${v} .type=${type} .step=${step ?? nothing} .min=${min ?? nothing} .max=${max ?? nothing}
+        .placeholder=${placeholder ?? ""} ?disabled=${disabled} style=${style} withoutSpinButtons
+        @change=${(e) => onChange?.(e.target.value)}></ha-input>`;
+  }
   if (has("ha-textfield")) {
     return html`<ha-textfield .label=${label ?? ""} .value=${v} .type=${type} .step=${step ?? nothing} .min=${min ?? nothing} .max=${max ?? nothing}
         .placeholder=${placeholder ?? ""} .suffix=${suffix ?? nothing} ?disabled=${disabled} style=${style}
@@ -135,7 +141,15 @@ export function uiField({ label, value, type = "text", step, min, max, placehold
 /** Dropdown. options: [{value, label, disabled?}] */
 export function uiSelect({ label, value, options, onChange, disabled = false, style = "" }) {
   const v = value == null ? "" : String(value);
-  if (has("ha-select") && has("mwc-list-item")) {
+  const Sel = customElements.get("ha-select");
+  const opts = options.map((o) => ({ value: String(o.value), label: o.label, disabled: !!o.disabled }));
+  const fire = (e) => { const nv = e.detail?.value ?? e.target?.value; if (nv != null && String(nv) !== v) onChange?.(String(nv)); };
+  if (Sel && Sel.elementProperties?.has?.("options")) {
+    // HA 2026.3+: options are a property, selection arrives as value-changed.
+    return html`<ha-select .label=${label ?? ""} .value=${v} .options=${opts} ?disabled=${disabled} style=${style}
+        @value-changed=${fire} @change=${fire} @closed=${(e) => e.stopPropagation()}></ha-select>`;
+  }
+  if (Sel && has("mwc-list-item")) {
     return html`<ha-select .label=${label ?? ""} .value=${v} ?disabled=${disabled} style=${style} naturalMenuWidth fixedMenuPosition
         @selected=${(e) => { const nv = e.target.value; if (nv !== v) onChange?.(nv); }} @closed=${(e) => e.stopPropagation()}>
       ${options.map((o) => html`<mwc-list-item .value=${String(o.value)} ?disabled=${!!o.disabled}>${o.label}</mwc-list-item>`)}
