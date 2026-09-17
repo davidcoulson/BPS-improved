@@ -3,7 +3,7 @@ from homeassistant.core import callback
 import logging
 import voluptuous as vol
 # Import DOMAIN from the lightweight const module, NOT from the package root:
-# `from . import DOMAIN` executes __init__.py (scipy/shapely/numpy/watchdog) just
+# `from . import DOMAIN` executes __init__.py (numpy/shapely/watchdog) just
 # to load the config flow, and couples config-flow loading to those heavy deps.
 from .const import DOMAIN
 
@@ -11,15 +11,6 @@ _LOGGER = logging.getLogger(__name__)
 OPTION_SHOW_SIDEBAR_PANEL = "show_sidebar_panel"
 OPTION_UPDATE_INTERVAL = "update_interval"
 DEFAULT_UPDATE_INTERVAL = 15
-
-# Definiera vilka inställningar användaren kan ange
-CONFIG_SCHEMA = vol.Schema(
-    {
-        vol.Required("hass_token"): str,
-        vol.Required("hassURL"): str,
-        vol.Optional("update_interval", default=1): int,
-    }
-)
 
 class SextantConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Sextant."""
@@ -54,9 +45,8 @@ class SextantOptionsFlow(config_entries.OptionsFlow):
         current_interval = self._config_entry.options.get(OPTION_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL)
         schema = vol.Schema({
             vol.Required(OPTION_SHOW_SIDEBAR_PANEL, default=current_value): bool,
-            # Seconds between trilateration recomputes per tracker. Trilateration
-            # is real CPU work (scipy least_squares); lower this only if you need
-            # faster-than-15s position updates and can spare the CPU.
+            # Seconds between trilateration recomputes per tracker. Lower this only
+            # if you need faster-than-15s position updates and can spare the CPU.
             vol.Required(OPTION_UPDATE_INTERVAL, default=current_interval): vol.All(
                 vol.Coerce(int), vol.Range(min=1, max=300)
             ),
