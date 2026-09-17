@@ -15,9 +15,16 @@ import { LitElement, html, css, nothing } from "./lit.js";
 import { SextantMap, trackerColor } from "./sextant-map.js";
 import { sharedStyles, widgetStyles, fmtAge, fmtNum, toast, confirmDialog, ensureHaComponents, uiSwitch, uiSelect, uiButton, callWS, sortFloors, trackerName, proxyName, fmtLen, fmtSpeed, classIcon } from "./sextant-ui.js";
 
-// The backend registers the panel as sextant-panel.js?v=<manifest version>, so a page
-// loaded before an update carries the old version here while layout/get reports the new one.
-const PANEL_VERSION = (() => { try { return new URL(import.meta.url).searchParams.get("v"); } catch { return null; } })();
+// The backend registers the panel at /sextant/v/<version>/sextant-panel.js
+// (older releases used ?v=<version>), so a page loaded before an update carries
+// the old version here while layout/get reports the new one; the version comes
+// from our own URL, never from a constant that has to be bumped per release.
+const PANEL_VERSION = (() => {
+  try {
+    const u = new URL(import.meta.url);
+    return u.pathname.match(/\/sextant\/v\/([^/]+)\//)?.[1] ?? u.searchParams.get("v");
+  } catch { return null; }
+})();
 import "./sextant-devices.js";
 import "./sextant-health.js";
 import "./sextant-edit.js";

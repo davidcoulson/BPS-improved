@@ -3599,7 +3599,12 @@ async def async_setup(hass, config):
                 # to the backend over the websocket. The module URL carries the
                 # installed version, so a page loaded before an update sees a
                 # different version in layout/get and offers a reload; no
-                # constant in the frontend has to be bumped per release.
+                # constant in the frontend has to be bumped per release. The
+                # version is a path segment rather than a query string so the
+                # panel's relative imports (./sextant-map.js ...) resolve to new
+                # URLs too: a still-open tab that re-imports the new panel after
+                # a restart must not mix it with the old modules already in its
+                # module map (that raised "does not provide an export named ...").
                 from homeassistant.loader import async_get_integration  # noqa: PLC0415  (the test stubs have no loader)
 
                 integration = await async_get_integration(hass, DOMAIN)
@@ -3607,7 +3612,7 @@ async def async_setup(hass, config):
                     hass,
                     frontend_url_path="sextant",
                     webcomponent_name="sextant-panel",
-                    module_url=f"/sextant/sextant-panel.js?v={integration.version}",
+                    module_url=f"/sextant/v/{integration.version}/sextant-panel.js",
                     sidebar_title="Sextant",
                     sidebar_icon="mdi:compass-rose",
                     require_admin=False,
@@ -3768,10 +3773,15 @@ class SextantFrontendView(HomeAssistantView):
     """Serve the frontend files."""
 
     url = "/sextant/{file_name}"
+    # The panel is registered under a per-release path (see the panel
+    # registration) so that every module URL changes on update; the version
+    # segment is ignored here. The unversioned path stays for the dashboard
+    # card resource users register by hand (/sextant/sextant-map-card.js).
+    extra_urls = ["/sextant/v/{version}/{file_name}"]
     name = "sextant:frontend"
     requires_auth = False
 
-    async def get(self, request, file_name):
+    async def get(self, request, file_name, version=None):
         """Serve static files from the frontend folder."""
         frontend_path = FRONTEND_PATH / file_name
 
