@@ -622,4 +622,4 @@ class SextantDevices extends LitElement {
   `];
 }
 
-customElements.define("sextant-devices", SextantDevices);
+if (!customElements.get("sextant-devices")) customElements.define("sextant-devices", SextantDevices);

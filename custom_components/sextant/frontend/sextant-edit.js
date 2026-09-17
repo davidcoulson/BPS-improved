@@ -474,4 +474,4 @@ class SextantEdit extends LitElement {
   `];
 }
 
-customElements.define("sextant-edit", SextantEdit);
+if (!customElements.get("sextant-edit")) customElements.define("sextant-edit", SextantEdit);

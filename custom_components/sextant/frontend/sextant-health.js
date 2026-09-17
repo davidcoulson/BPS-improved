@@ -529,4 +529,4 @@ class SextantHealth extends LitElement {
   `];
 }
 
-customElements.define("sextant-health", SextantHealth);
+if (!customElements.get("sextant-health")) customElements.define("sextant-health", SextantHealth);

@@ -149,8 +149,8 @@ class SextantMapCardEditor extends LitElement {
   static styles = css`.form { display: grid; gap: 8px; padding: 8px 0; } label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; } label.inline { flex-direction: row; align-items: center; } input, select { font: inherit; padding: 6px; }`;
 }
 
-customElements.define("sextant-map-card", SextantMapCard);
-customElements.define("sextant-map-card-editor", SextantMapCardEditor);
+if (!customElements.get("sextant-map-card")) customElements.define("sextant-map-card", SextantMapCard);
+if (!customElements.get("sextant-map-card-editor")) customElements.define("sextant-map-card-editor", SextantMapCardEditor);
 
 window.customCards = window.customCards || [];
 window.customCards.push({ type: "sextant-map-card", name: "Sextant Map", description: "Trackers on a Sextant floor plan, live.", preview: true, documentationURL: "https://github.com/davidcoulson/sextant" });

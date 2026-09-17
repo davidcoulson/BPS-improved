@@ -574,5 +574,5 @@ class SextantLive extends LitElement {
   `];
 }
 
-customElements.define("sextant-live", SextantLive);
-customElements.define("sextant-panel", SextantPanel);
+if (!customElements.get("sextant-live")) customElements.define("sextant-live", SextantLive);
+if (!customElements.get("sextant-panel")) customElements.define("sextant-panel", SextantPanel);
