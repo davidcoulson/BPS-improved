@@ -116,21 +116,34 @@ class SextantDevices extends LitElement {
     this._busy = false;
     if (r) {
       toast(this, add.length ? `Tracking ${add.join(", ")}. Bermuda is reloading…` : `Stopped tracking ${remove.join(", ")}.`);
-      if (add.length === 1) this._pendingTrack = { value: add[0], since: Date.now() };
-      setTimeout(() => { this._refresh(); this.dispatchEvent(new CustomEvent("layout-changed")); }, 4000);
-      setTimeout(() => { this._refresh(); }, 9000);
+      for (const ms of [4000, 9000, 15000]) setTimeout(() => { this._refresh(); this.dispatchEvent(new CustomEvent("layout-changed")); }, ms);
     }
+    return r;
   }
 
-  /** A device just sent to Bermuda shows up in the tracked list a few seconds later: open its dialog then. */
-  _openPendingTrack() {
+  /** A device just sent to Bermuda shows up in the tracked list a few seconds
+   *  later, with its slug: apply the settings chosen in the dialog to it then. */
+  async _openPendingTrack() {
     const p = this._pendingTrack;
-    if (!p || Date.now() - p.since > 60000) { this._pendingTrack = null; return; }
+    if (!p || Date.now() - p.since > 90000) { this._pendingTrack = null; return; }
     const want = String(p.value).toLowerCase();
     const hit = Object.entries(this._tracked || {}).find(([address, d]) => address.toLowerCase() === want || String(d.slug).toLowerCase() === want || String(d.config_value || "").toLowerCase() === want);
     if (!hit) return;
     this._pendingTrack = null;
-    this._openWizard(hit[1].slug, hit[0]);
+    const slug = hit[1].slug;
+    if (!p.settings) { this._openWizard(slug, hit[0]); return; }
+    let icon = p.settings.icon;
+    if (p.file) { const uploaded = await this._uploadIcon(slug, p.file); if (uploaded) icon = uploaded; }
+    const r = await this._tune(slug, { ...p.settings, icon });
+    if (r) toast(this, `${p.settings.name || trackerName(this.data, slug)} is tracked and set up`);
+  }
+
+  /** Track: the dialog first, Bermuda only after Save (so nothing changes if you change your mind). */
+  _startTrack(c) {
+    this._wizard = {
+      new: true, config_value: c.config_value, address: c.address, slug: null,
+      name: "", placeholder: c.name || c.address, tracker_class: c.kind === "tile" ? "tag" : "", height: "", ref: "", icon: "", file: null,
+    };
   }
 
   async _tune(entity, patch) {
@@ -186,16 +199,24 @@ class SextantDevices extends LitElement {
   async _saveWizard() {
     const w = this._wizard;
     if (!w) return;
-    this._busy = true;
-    let icon = w.icon || null;
-    if (w.file) { const uploaded = await this._uploadIcon(w.slug, w.file); if (uploaded) icon = uploaded; }
-    const r = await this._tune(w.slug, {
+    const settings = {
       name: w.name.trim() || null,
       tracker_class: w.tracker_class || null,
       height: w.height === "" || w.height == null ? null : fromDisplayLen(w.height, this.hass),
       ref_offset_db: w.ref === "" || w.ref == null ? null : Number(w.ref),
-      icon,
-    });
+      icon: w.icon || null,
+    };
+    if (w.new) {
+      // Nothing has touched Bermuda yet. Now it does; the settings follow once the device has a slug.
+      this._pendingTrack = { value: w.config_value, since: Date.now(), settings, file: w.file };
+      const r = await this._track([w.config_value], []);
+      if (r) this._wizard = null; else this._pendingTrack = null;
+      return;
+    }
+    this._busy = true;
+    let icon = settings.icon;
+    if (w.file) { const uploaded = await this._uploadIcon(w.slug, w.file); if (uploaded) icon = uploaded; }
+    const r = await this._tune(w.slug, { ...settings, icon });
     this._busy = false;
     if (r) { toast(this, `${w.name.trim() || w.placeholder} saved`); this._wizard = null; }
   }
@@ -206,7 +227,8 @@ class SextantDevices extends LitElement {
     const unit = lenUnit(this.hass);
     return html`<div class="modal" @click=${(e) => { if (e.target === e.currentTarget) this._wizard = null; }}>
       <div class="dialog card" role="dialog" aria-label="Tracker settings">
-        <h3>${w.placeholder} <span class="muted small">${w.address}</span></h3>
+        <h3>${w.new ? "Track " : ""}${w.placeholder} <span class="muted small">${w.address}</span></h3>
+        ${w.new ? html`<p class="small muted">Nothing is sent to Bermuda until you press Track below; Cancel leaves it untracked.</p>` : nothing}
         <div class="row">
           ${uiField({ label: "Name", value: w.name, placeholder: w.placeholder, onChange: (v) => { w.name = v; this.requestUpdate(); }, style: "flex: 1; min-width: 220px" })}
         </div>
@@ -230,7 +252,7 @@ class SextantDevices extends LitElement {
         </div>
         <div class="row end">
           ${uiButton({ label: "Cancel", kind: "text", onClick: () => { this._wizard = null; } })}
-          ${uiButton({ label: this._busy ? "Saving…" : "Save", kind: "primary", disabled: this._busy, onClick: () => this._saveWizard() })}
+          ${uiButton({ label: this._busy ? (w.new ? "Tracking…" : "Saving…") : (w.new ? "Track" : "Save"), kind: "primary", disabled: this._busy, onClick: () => this._saveWizard() })}
         </div>
       </div>
     </div>`;
@@ -385,7 +407,7 @@ class SextantDevices extends LitElement {
             <td class="num">${c.scanners}</td>
             <td class="num">${c.best_rssi ?? "—"}</td>
             <td class="small">${fmtAge(c.last_seen_age)} ago<br><span class="muted">first ${fmtAge(c.first_seen_age)}</span></td>
-            <td>${uiButton({ label: "Track", kind: "primary", disabled: this._busy, onClick: () => this._track([c.config_value], []), title: "Bermuda starts tracking it; its settings dialog opens once it appears" })}</td>
+            <td>${uiButton({ label: "Track…", kind: "primary", disabled: this._busy, onClick: () => this._startTrack(c), title: "Choose its name, class and height first; Bermuda tracks it when you confirm" })}</td>
           </tr>`)}
           ${candidates.length ? nothing : html`<tr><td colspan="6" class="muted">${this._candidates ? (this._showAll ? "No matching devices." : `Nothing heard in the last ${RECENT_SECS} s matches; switch on "Show all" for everything Bermuda remembers.`) : "Loading…"}</td></tr>`}
         </table></div>
