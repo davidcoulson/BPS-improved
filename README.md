@@ -969,6 +969,41 @@ Keys: `distance_estimator`, `median_window_secs`, `median_min_samples`,
 unknown key or an out-of-range value is refused with the allowed range;
 `reset: true` restores the defaults. Changes apply on the next cycle.
 
+## The panel (3.3.0)
+
+The panel is a native Home Assistant panel: no iframe, no couriered token,
+one websocket subscription for positions and request/response commands for
+everything else (`custom_components/sextant/ws.py`). It has four modes and a
+Legacy tab that still hosts the previous editor until the new one has
+everything you use.
+
+- **Live** — the floor plan with every tracker, its confidence ring, the
+  solver circles and the fingerprint fix on request, a trail, and a history
+  scrubber that replays a tracker's retained positions. Selecting a tracker
+  shows its zone, sub-zone, floor probabilities, estimator telemetry and the
+  receivers in its solve.
+- **Edit** — the floor-plan editor on the same map: place receivers by
+  picking a scanner Bermuda knows, drag them, draw zones, sub-zones and
+  no-go areas (vertices drag, edge midpoints add, right-click removes), set
+  the scale by measuring a known distance, name and re-parent things, run
+  the zone adjuster, add a floor from an image, delete a floor. Nothing is
+  written until Save.
+- **Devices** — Bermuda without its options flow: what is tracked (with each
+  tracker's carry height, ref-power trim and icon), everything Bermuda hears
+  but does not track with one click to track it (Tiles included), the Tiles'
+  binding and probe state, FindMy accessories (paste the exported keys), and
+  Bermuda's global options. Needs Bermuda fork-testing.15 or later.
+- **Health** — receivers (online, unmatched, last heard, correction, height),
+  naming mismatches and scanner linking detail, receiver calibration (start,
+  auto, solve, apply, reset, per-floor results), the leave-one-out self-test,
+  the room-stability KPI computed from the recorder for any window, and every
+  tuning key with live apply.
+
+The Lovelace card (`custom:sextant-map-card`, resource
+`/sextant/sextant-map-card.js`) draws with the same renderer and the same
+subscription; `custom:bps-map-card` at `/bps/bps-map-card.js` still works.
+Home Assistant's theme is used throughout, so light and dark follow it.
+
 ## Live updates over the websocket
 
 Positions and receiver health are pushed once per positioning cycle over

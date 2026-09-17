@@ -132,7 +132,7 @@ class SextantHealth extends LitElement {
     const offline = placed.filter((r) => !r.online).length;
     const unmatched = placed.filter((r) => !r.matched).length;
     const diag = this.data?.scanner_diagnostics || {};
-    return html`<section class="card">
+    return html`<section class="card receivers">
       <h3>Receivers <span class="muted">${placed.length} placed</span></h3>
       <div class="row">
         <span class="pill ${offline ? "bad" : "ok"}">${offline} offline</span>
@@ -267,6 +267,8 @@ class SextantHealth extends LitElement {
 
   static styles = [sharedStyles, css`
     :host { display: block; overflow: auto; }
+    .cols { grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); }
+    section.receivers { grid-column: 1 / -1; }
     ul.plain { list-style: none; padding: 0; margin: 6px 0; }
     ul.plain li { padding: 3px 0; }
     details { margin-top: 8px; }

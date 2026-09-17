@@ -265,6 +265,7 @@ class SextantDevices extends LitElement {
 
   static styles = [sharedStyles, css`
     :host { display: block; overflow: auto; }
+    .cols { grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); }
     img.icon { width: 22px; height: 22px; object-fit: contain; }
     details { margin-top: 8px; }
     summary { cursor: pointer; }

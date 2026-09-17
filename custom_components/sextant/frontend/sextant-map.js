@@ -12,6 +12,7 @@
  * "screen" = CSS pixels on the canvas. view = {k, tx, ty}: screen = map*k + t.
  */
 
+export const MAP_FRAME_WIDTH = 2000;
 const RECEIVER_SIZE = 9;
 const VERTEX_SIZE = 6;
 const HIT_SLOP = 8;
@@ -153,8 +154,12 @@ export class SextantMap {
     this.invalidate();
   }
 
+  // The layout's coordinate frame is NOT the image's natural pixels: the
+  // original editor drew every floor image onto a canvas normalised to
+  // MAP_FRAME_WIDTH pixels wide (height by aspect ratio) and stored
+  // coordinates in that frame, and every saved layout depends on it.
   _mapSize() {
-    if (this.image) return { w: this.image.naturalWidth, h: this.image.naturalHeight };
+    if (this.image) return { w: MAP_FRAME_WIDTH, h: MAP_FRAME_WIDTH * (this.image.naturalHeight / this.image.naturalWidth) };
     // No image yet: size to the content so an image-less floor still renders.
     let maxX = 0, maxY = 0;
     const f = this.floor || {};
@@ -368,7 +373,7 @@ export class SextantMap {
     const size = this._mapSize();
     ctx.fillStyle = this._css("--sextant-map-bg", "#ffffff");
     ctx.fillRect(0, 0, size.w, size.h);
-    if (this.image) ctx.drawImage(this.image, 0, 0);
+    if (this.image) ctx.drawImage(this.image, 0, 0, size.w, size.h);
     this._drawGrid(ctx, size);
     this._drawPolygons(ctx, f.zones || [], "zone");
     if (this.options.subzones) this._drawPolygons(ctx, f.subzones || [], "subzone");
