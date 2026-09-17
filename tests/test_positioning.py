@@ -1064,7 +1064,7 @@ def _reset_tracker_state():
 def test_full_cycle_publishes_a_stable_zone_and_the_raw_one(monkeypatch):
     _reset_tracker_state()
     hass = make_hass()
-    sensors = {f"sensor.e_sextant_{k}": _Sensor() for k in ("zone", "nearest_zone", "floor", "sub_zone")}
+    sensors = {f"sensor.e_sextant_{k}": _Sensor() for k in ("room", "nearest_room", "floor", "spot")}
     hass.data["sextant_sensors"] = sensors
     layout = _square_layout({"stationary_secs": 600.0})
     # Pin the clock so the dwell is deterministic: each cycle is 10 s.
@@ -1074,22 +1074,22 @@ def test_full_cycle_publishes_a_stable_zone_and_the_raw_one(monkeypatch):
     entry = _cycle(hass, layout, 2.0, 5.0)
     assert entry["floor"] == "F" and entry["zone"] == "Kitchen" and entry["zone_raw"] == "Kitchen"
     assert entry["zone_locked"] is False and "speed" in entry
-    assert sensors["sensor.e_sextant_zone"]._state == "Kitchen"
+    assert sensors["sensor.e_sextant_room"]._state == "Kitchen"
     assert sensors["sensor.e_sextant_floor"]._state == "F"
 
     # One cycle 1.5 m over the line: raw says Dining, published stays Kitchen.
     clock["t"] += 10
     entry = _cycle(hass, layout, 6.5, 5.0)
     assert entry["zone_raw"] == "Dining" and entry["zone"] == "Kitchen"
-    assert sensors["sensor.e_sextant_nearest_zone"]._state == "Dining"   # raw sensor still instant
+    assert sensors["sensor.e_sextant_nearest_room"]._state == "Dining"   # raw sensor still instant
 
     # Sustained on the Dining side: published follows after the dwell.
     for _ in range(6):
         clock["t"] += 10
         entry = _cycle(hass, layout, 8.0, 5.0)
     assert entry["zone"] == "Dining"
-    assert sensors["sensor.e_sextant_zone"]._state == "Dining"
-    assert sensors["sensor.e_sextant_sub_zone"]._attrs == {"parent_zone": "Dining"}
+    assert sensors["sensor.e_sextant_room"]._state == "Dining"
+    assert sensors["sensor.e_sextant_spot"]._attrs == {"room": "Dining"}
 
 
 def test_full_cycle_with_hysteresis_off_publishes_instantly(monkeypatch):
@@ -1256,7 +1256,7 @@ def test_sensors_are_created_for_a_tracker_added_after_setup(monkeypatch):
     # Without the callback (platform not set up yet) it is a no-op.
     hass.data.pop("sextant_add_entities")
     sensor_mod.ensure_sensors_for_trackers(hass, ["other"])
-    assert "sensor.other_sextant_zone" not in hass.data["sextant_sensors"]
+    assert "sensor.other_sextant_room" not in hass.data["sextant_sensors"]
 
 
 # ---------------------------------------------------------------------------

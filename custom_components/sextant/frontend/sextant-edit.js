@@ -17,7 +17,7 @@ const TOOLS = [
   ["select", "Select", "mdi:cursor-default-outline", "Select and drag proxies, rooms and vertices"],
   ["receiver", "Proxy", "mdi:access-point-plus", "Place a proxy: pick one Bermuda knows, then click the map"],
   ["zone", "Room", "mdi:vector-polygon", "Draw a room: click corners, close on the first one"],
-  ["subzone", "Sub-zone", "mdi:vector-rectangle", "Draw a sub-zone (a couch, a desk) inside a room"],
+  ["subzone", "Spot", "mdi:vector-rectangle", "Draw a spot (a couch, a desk, a bedside table) inside a room"],
   ["nogo", "No-go", "mdi:cancel", "Draw an area trackers can never be in (a void, a wall)"],
   ["measure", "Scale", "mdi:ruler", "Set the map scale from a known distance"],
 ];
@@ -25,7 +25,7 @@ const TOOLS = [
 // room layout is not nudged while proxies are being moved (and vice versa).
 const LOCKS = [
   ["zone", "Rooms", "mdi:floor-plan"],
-  ["subzone", "Sub-zones", "mdi:vector-rectangle"],
+  ["subzone", "Spots", "mdi:vector-rectangle"],
   ["receiver", "Proxies", "mdi:access-point"],
 ];
 const UNDO_DEPTH = 50;
@@ -215,7 +215,7 @@ class SextantEdit extends LitElement {
       f.subzones = f.subzones || [];
       const c = polygonCentroid(pts);
       const parent = (f.zones || []).find((z) => !z.no_go && this._inside(c, z.cords));
-      f.subzones.push({ sub_zone_id: uid("subzone"), entity_id: `Sub-zone ${f.subzones.length + 1}`, parent: parent?.zone_id || null, poly: true,
+      f.subzones.push({ sub_zone_id: uid("subzone"), entity_id: `Spot ${f.subzones.length + 1}`, parent: parent?.zone_id || null, poly: true,
         color: `hsl(${Math.floor(Math.random() * 360)}, 70%, 45%)`, cords: pts, type: "subzone" });
       this._selection = { kind: "subzone", index: f.subzones.length - 1 };
     }
@@ -249,7 +249,7 @@ class SextantEdit extends LitElement {
     if (!sel || !f) return;
     const list = sel.kind === "receiver" ? f.receivers : sel.kind === "zone" ? f.zones : f.subzones;
     const item = list[sel.index];
-    if (!confirmDialog(`Delete ${sel.kind === "receiver" ? "proxy" : sel.kind === "zone" ? "room" : "sub-zone"} "${item.entity_id}"?`)) return;
+    if (!confirmDialog(`Delete ${sel.kind === "receiver" ? "proxy" : sel.kind === "zone" ? "room" : "spot"} "${item.entity_id}"?`)) return;
     this._snapshot();
     list.splice(sel.index, 1);
     if (sel.kind === "zone") for (const s of f.subzones || []) if (s.parent === item.zone_id) s.parent = null;
@@ -385,14 +385,14 @@ class SextantEdit extends LitElement {
         ${f ? html`
           <div class="card">
             <h4>${f.name} <span class="muted small">${fmtScale(f.scale, this.hass)}</span></h4>
-            <div class="row small muted">${(f.receivers || []).length} proxies · ${(f.zones || []).filter((z) => !z.no_go).length} rooms · ${(f.zones || []).filter((z) => z.no_go).length} no-go · ${(f.subzones || []).length} sub-zones</div>
+            <div class="row small muted">${(f.receivers || []).length} proxies · ${(f.zones || []).filter((z) => !z.no_go).length} rooms · ${(f.zones || []).filter((z) => z.no_go).length} no-go · ${(f.subzones || []).length} spots</div>
             <div class="row small muted">Level: storey number, 0 = ground, -1 = basement; orders the floor picker top-down. Bias: election prior, 1.2 = a 20 % head start every cycle.</div>
             <div class="row">
               ${uiField({ label: "Scale (px per m)", type: "number", step: 0.01, value: f.scale ?? "", onChange: (v) => { this._snapshot(); f.scale = Number(v) || null; this._dirty = true; this.requestUpdate(); }, style: "width: 150px" })}
               ${uiField({ label: "Level", type: "number", step: 1, value: f.level ?? "", placeholder: "0", onChange: (v) => { if (v === "" || v == null) delete f.level; else f.level = Math.round(Number(v)); this._dirty = true; this.requestUpdate(); }, style: "width: 90px" })}
               ${uiField({ label: "Election bias", type: "number", step: 0.05, min: 0.25, max: 4, value: f.bias ?? "", placeholder: "1", onChange: (v) => { if (v === "" || v == null) delete f.bias; else f.bias = Number(v); this._dirty = true; this.requestUpdate(); }, style: "width: 120px" })}
               ${uiButton({ label: "Adjust rooms", disabled: this._busy, onClick: () => this._adjust("zones"), title: "Square up rooms and snap shared walls" })}
-              ${uiButton({ label: "Adjust sub-zones", disabled: this._busy, onClick: () => this._adjust("subzones") })}
+              ${uiButton({ label: "Adjust spots", disabled: this._busy, onClick: () => this._adjust("subzones") })}
               ${uiButton({ label: "Delete floor", kind: "danger", disabled: this._busy, onClick: () => this._removeFloor() })}
             </div>
           </div>` : html`<div class="card muted">No floor yet. Add one below.</div>`}
@@ -401,7 +401,7 @@ class SextantEdit extends LitElement {
           <ul class="plain small">${(this._proposal.report || this._proposal.changes || []).slice(0, 12).map((c) => html`<li>${typeof c === "string" ? c : `${c.name || c.zone || ""}: ${c.change || c.note || JSON.stringify(c)}`}</li>`)}</ul>
           <div class="row">${uiButton({ label: "Accept", kind: "primary", onClick: () => this._acceptProposal() })}${uiButton({ label: "Reject", kind: "text", onClick: () => { this._proposal = null; } })}</div>
         </div>` : nothing}
-        ${sel ? this._renderSelection(sel, f) : html`<div class="card muted small">Select a proxy, room or sub-zone on the map to edit it. Drag to move; drag a vertex or an edge midpoint; right-click a vertex to remove it. Locked layers (the padlocks in the toolbar) cannot be selected.</div>`}
+        ${sel ? this._renderSelection(sel, f) : html`<div class="card muted small">Select a proxy, room or spot on the map to edit it. Drag to move; drag a vertex or an edge midpoint; right-click a vertex to remove it. Locked layers (the padlocks in the toolbar) cannot be selected.</div>`}
         <div class="card">
           <h4>Add a floor</h4>
           <form @submit=${(e) => { e.preventDefault(); const fd = new FormData(e.target); this._addFloor(fd.get("name"), fd.get("file")); }}>
@@ -420,7 +420,7 @@ class SextantEdit extends LitElement {
     if (!item) return nothing;
     const zones = (f.zones || []).filter((z) => !z.no_go);
     return html`<div class="card">
-      <h4>${sel.kind === "receiver" ? "Proxy" : sel.kind === "zone" ? (item.no_go ? "No-go area" : "Room") : "Sub-zone"}</h4>
+      <h4>${sel.kind === "receiver" ? "Proxy" : sel.kind === "zone" ? (item.no_go ? "No-go area" : "Room") : "Spot"}</h4>
       <div class="row">
         ${uiField({ label: "Name", value: item.entity_id || "", onChange: (v) => this._edit("entity_id", v), style: "flex: 1" })}
       </div>

@@ -65,11 +65,12 @@ def _tuning_spec_json(spec):
     return out
 
 
-def _tracker_names(hass, entities) -> dict:
+def _tracker_names(hass, entities, layout=None) -> dict:
     """{slug: display name} for the tracked entities.
 
     Bermuda's device name first ("Fry", "David's Phone"), then whatever the
-    user renamed the device to in Home Assistant, which wins.
+    user renamed the device to in Home Assistant, then the name typed in
+    Sextant's own tracker dialog (layout "tracker_names"), which wins.
     """
     names = {}
     for info in (bermuda_source.async_get_tracked_devices(hass) or {}).values():
@@ -92,6 +93,11 @@ def _tracker_names(hass, entities) -> dict:
                     break
     except Exception:  # noqa: BLE001 - no registries (tests), Bermuda's names stand
         pass
+    overrides = layout.get("tracker_names") if isinstance(layout, dict) else None
+    if isinstance(overrides, dict):
+        for slug, name in overrides.items():
+            if isinstance(name, str) and name.strip():
+                names[slug] = name.strip()
     return names
 
 
@@ -140,7 +146,7 @@ async def ws_layout_get(hass, connection, msg):
         "entities": sorted(tracked),
         # Display names: what Bermuda calls the device, overridden by the name
         # the user gave the device in Home Assistant (device registry).
-        "names": _safe(lambda: _tracker_names(hass, tracked), {}),
+        "names": _safe(lambda: _tracker_names(hass, tracked, layout), {}),
         "scanners": {
             addr: {"slug": info.get("slug"), "name": info.get("name"), "area": info.get("area_name"),
                    "is_remote": info.get("is_remote")}
@@ -210,11 +216,14 @@ async def ws_tuning_set(hass, connection, msg):
     vol.Optional("ref_offset_db"): vol.Any(None, vol.Coerce(float)),
     vol.Optional("height"): vol.Any(None, vol.Coerce(float)),
     vol.Optional("icon"): vol.Any(None, str),
+    vol.Optional("name"): vol.Any(None, str),
+    vol.Optional("tracker_class"): vol.Any(None, str),
 })
 @websocket_api.async_response
 async def ws_tracker_tune(hass, connection, msg):
     """Per-tracker settings, each applied on its own: ref-power trim (dB),
-    carry height (m) and map icon. A null clears the field."""
+    carry height (m), map icon, display name and class (person, dog, phone...
+    the panel draws an icon per class). A null clears the field."""
     core = _core()
     entity = msg["entity"]
     changes = {}
@@ -260,6 +269,18 @@ async def ws_tracker_tune(hass, connection, msg):
                 icons.pop(entity, None)
             data["tracker_icons"] = icons
             changes["icon"] = msg["icon"] or None
+        for key, store in (("name", "tracker_names"), ("tracker_class", "tracker_classes")):
+            if key in msg:
+                values = data.get(store)
+                if not isinstance(values, dict):
+                    values = {}
+                value = (msg[key] or "").strip()
+                if value:
+                    values[entity] = value[:60]
+                else:
+                    values.pop(entity, None)
+                data[store] = values
+                changes[key] = value or None
         await save_layout(hass, data)
     connection.send_result(msg["id"], {"entity": entity, **changes})
 

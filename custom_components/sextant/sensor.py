@@ -16,11 +16,39 @@ DOMAIN = "sextant_sensors"
 
 # (entity_id suffix / unique_id prefix, display label) per tracked device.
 SENSOR_KINDS = [
-    ("sextant_zone", "Sextant Zone"),
+    ("sextant_room", "Sextant Room"),
     ("sextant_floor", "Sextant Floor"),
-    ("sextant_nearest_zone", "Sextant Nearest Zone"),
-    ("sextant_sub_zone", "Sextant Sub-Zone"),
+    ("sextant_nearest_room", "Sextant Nearest Room"),
+    ("sextant_spot", "Sextant Spot"),
 ]
+# 3.8.0 renamed zones to rooms and sub-zones to spots in the entity ids too.
+# Registry entries with the old unique_id prefixes are moved to the new ones
+# (id, name and history follow), so nothing is orphaned by the rename.
+RENAMED_KINDS = {
+    "sextant_zone": "sextant_room",
+    "sextant_nearest_zone": "sextant_nearest_room",
+    "sextant_sub_zone": "sextant_spot",
+}
+
+
+def migrate_renamed_sensor_kinds(hass):
+    """Move registry entries from the pre-3.8 unique_ids / entity_ids to the new names."""
+    entity_registry = er.async_get(hass)
+    for entry in list(entity_registry.entities.values()):
+        if entry.platform != "sextant" or not entry.unique_id:
+            continue
+        for old, new in RENAMED_KINDS.items():
+            if not entry.unique_id.startswith(old + "_"):
+                continue
+            entity = entry.unique_id[len(old) + 1:]
+            new_uid, new_eid = f"{new}_{entity}", f"sensor.{entity}_{new}"
+            _LOGGER.info("Renaming Sextant sensor %s -> %s", entry.entity_id, new_eid)
+            try:
+                entity_registry.async_update_entity(entry.entity_id, new_unique_id=new_uid, new_entity_id=new_eid)
+            except ValueError:
+                _LOGGER.info("Removing Sextant registry entity %s that blocks the rename", entry.entity_id)
+                entity_registry.async_remove(entry.entity_id)
+            break
 
 
 def find_bermuda_via_device(hass, entity):
@@ -75,7 +103,7 @@ def is_legacy_sextant_entity_id(entity_id):
     if not entity_id.startswith("sensor.") or "_sextant_" not in entity_id:
         return False
 
-    if not (entity_id.endswith("_sextant_floor") or entity_id.endswith("_sextant_zone")):
+    if not entity_id.endswith(("_sextant_floor", "_sextant_zone", "_sextant_room")):
         return False
 
     object_id = entity_id.replace("sensor.", "")
@@ -156,7 +184,7 @@ class CustomDistanceSensor(SensorEntity):
 
     @property
     def extra_state_attributes(self):
-        # Used by the sub-zone sensor to carry "parent_zone"; empty for the rest.
+        # Used by the spot sensor to carry "room"; empty for the rest.
         return self._attrs
 
 class SextantAccuracySensor(SensorEntity):
@@ -310,6 +338,7 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
         hass.data["sextant_sensors"] = {}
 
     cleanup_legacy_sextant_entities(hass)
+    migrate_renamed_sensor_kinds(hass)
 
     entities = get_filtered_entities(hass)
     _LOGGER.info(f"Creating sensors for entities: {entities}")

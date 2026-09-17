@@ -20,6 +20,38 @@ const HIT_SLOP = 8;
 const TRACKER_RADIUS = 12;
 const HUES = [205, 25, 140, 95, 320, 45, 260, 180, 0, 60];
 
+// --- Material Design Icons on the canvas ------------------------------------
+// The panel classes trackers (person, dog, phone...) and draws that class's
+// MDI icon in the dot. Canvas cannot render <ha-icon>, but Home Assistant
+// resolves an icon name to SVG path data for us: render one off-screen,
+// read the path out of its shadow DOM, and keep it. Callers get null until
+// it arrives (the map is redrawn then) and fall back to initials.
+const _iconPaths = new Map();
+export function mdiPath(name, onReady) {
+  if (!name) return null;
+  if (_iconPaths.has(name)) return _iconPaths.get(name);
+  _iconPaths.set(name, null);
+  (async () => {
+    try {
+      const el = document.createElement("ha-icon");
+      el.setAttribute("icon", name);
+      el.style.cssText = "position:absolute;left:-9999px;top:-9999px;";
+      document.body.appendChild(el);
+      await el.updateComplete;
+      for (let i = 0; i < 20; i++) {
+        const svg = el.shadowRoot?.querySelector("ha-svg-icon");
+        await svg?.updateComplete;
+        const d = svg?.shadowRoot?.querySelector("path")?.getAttribute("d");
+        if (d) { _iconPaths.set(name, new Path2D(d)); break; }
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      el.remove();
+    } catch { /* stays null: initials are drawn instead */ }
+    onReady?.();
+  })();
+  return null;
+}
+
 export function trackerHue(name) {
   let h = 0;
   for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
@@ -574,9 +606,15 @@ export class SextantMap {
       ctx.beginPath(); ctx.arc(t.cords[0], t.cords[1], r, 0, Math.PI * 2);
       ctx.fillStyle = color; ctx.fill();
       ctx.lineWidth = (selected ? 3 : 2) / k; ctx.strokeStyle = selected ? "#ffd166" : "#ffffff"; ctx.stroke();
+      const glyph = t.mdi ? mdiPath(t.mdi, () => this.invalidate()) : null;
       if (t.icon && t.icon.complete && t.icon.naturalWidth) {
         ctx.save(); ctx.beginPath(); ctx.arc(t.cords[0], t.cords[1], r * 0.85, 0, Math.PI * 2); ctx.clip();
         ctx.drawImage(t.icon, t.cords[0] - r * 0.85, t.cords[1] - r * 0.85, r * 1.7, r * 1.7); ctx.restore();
+      } else if (glyph) {
+        // MDI paths live in a 24x24 box; fit it inside the dot.
+        const s = (r * 1.4) / 24;
+        ctx.save(); ctx.translate(t.cords[0] - r * 0.7, t.cords[1] - r * 0.7); ctx.scale(s, s);
+        ctx.fillStyle = "#ffffff"; ctx.fill(glyph); ctx.restore();
       } else {
         ctx.fillStyle = "#ffffff"; ctx.font = `700 ${11 / k}px system-ui, sans-serif`;
         ctx.textAlign = "center"; ctx.textBaseline = "middle";

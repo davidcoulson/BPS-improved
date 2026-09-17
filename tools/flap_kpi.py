@@ -44,7 +44,16 @@ import urllib.request
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 
-SUFFIXES = ("_sextant_zone", "_sextant_floor")
+SUFFIXES = ("_sextant_room", "_sextant_floor")
+# History and baselines recorded under the older names are the same sensors.
+LEGACY_SUFFIXES = {"_bps_zone": "_sextant_room", "_sextant_zone": "_sextant_room", "_bps_floor": "_sextant_floor"}
+
+
+def canonical(entity_id):
+    for old, new in LEGACY_SUFFIXES.items():
+        if entity_id.endswith(old):
+            return entity_id[: -len(old)] + new
+    return entity_id
 DEAD_STATES = {"unknown", "unavailable", "", None}
 
 
@@ -129,7 +138,7 @@ def summarise(per_entity):
     """Fleet-level roll-up: totals over every entity of one kind."""
     out = {}
     for suffix in SUFFIXES:
-        members = {k: v for k, v in per_entity.items() if k.endswith(suffix)}
+        members = {canonical(k): v for k, v in per_entity.items() if canonical(k).endswith(suffix)}
         if not members:
             continue
         changes = sum(m["changes"] for m in members.values())
@@ -160,7 +169,7 @@ def _get(url, token, path, params=None):
 
 
 def discover_entities(url, token, include_nearest=False):
-    suffixes = SUFFIXES + (("_sextant_nearest_zone",) if include_nearest else ())
+    suffixes = SUFFIXES + tuple(LEGACY_SUFFIXES) + (("_sextant_nearest_room", "_sextant_nearest_zone") if include_nearest else ())
     states = _get(url, token, "/api/states")
     return sorted(s["entity_id"] for s in states if s["entity_id"].endswith(suffixes))
 
@@ -205,7 +214,11 @@ def _fmt(value, width, suffix=""):
 
 def _baseline_entry(base_entities, eid):
     """The baseline's row for this sensor, across the bps -> sextant rename."""
-    for candidate in (eid, eid.replace("_sextant_", "_bps_"), eid.replace("_bps_", "_sextant_")):
+    seen = {eid}
+    for a, b in (("_sextant_room", "_sextant_zone"), ("_sextant_", "_bps_")):
+        for c in list(seen):
+            seen.add(c.replace(a, b)); seen.add(c.replace(b, a))
+    for candidate in seen:
         if candidate in base_entities:
             return base_entities[candidate]
     return None
@@ -248,8 +261,9 @@ def print_report(per_entity, summary, baseline=None):
             f"{s['changes_per_tracker_hour']} per tracker-hour, "
             f"flip ratio {s['flip_ratio']}, median dwell {s['median_of_median_dwell_s']} s"
         )
-        if baseline and kind in (baseline.get("summary") or {}):
-            b = baseline["summary"][kind]
+        base_summary = {canonical("_" + k).lstrip("_"): v for k, v in ((baseline or {}).get("summary") or {}).items()}
+        if kind in base_summary:
+            b = base_summary[kind]
             if b.get("changes_per_tracker_hour") is not None and s["changes_per_tracker_hour"] is not None:
                 line += f"   (was {b['changes_per_tracker_hour']}/h, flip {b.get('flip_ratio')})"
         print(line)

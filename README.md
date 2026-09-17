@@ -3,9 +3,9 @@
 # Sextant — BLE indoor positioning for Home Assistant
 
 **Powered by [Bermuda](https://github.com/agittins/bermuda).** Sextant takes
-the per-receiver distances that the Bermuda BLE Trilateration integration
+the per-proxy distances that the Bermuda BLE Trilateration integration
 measures and turns them into a position on your floor plan: a room, a floor,
-a sub-zone, and a dot on a map. Bermuda is required; install it first
+a spot, and a dot on a map. Bermuda is required; install it first
 ([upstream](https://github.com/agittins/bermuda), or the
 [fork this project is developed against](https://github.com/davidcoulson/bermuda),
 which adds the APIs the Devices page and fingerprint fusion use).
@@ -20,7 +20,7 @@ numpy solver (no scipy since 3.2.0). The name changed with version 3.0.0; see
 - [**Upstream README**](https://github.com/Hogster/BPS/blob/main/README.md) — how
   BLE distances become a position, and the Bermuda dependency.
 - [**Upstream Wiki**](https://github.com/Hogster/BPS/wiki/) — the setup
-  walkthrough (placing receivers, defining zones, the Lovelace map card).
+  walkthrough (placing proxies, defining zones, the Lovelace map card).
 
 Full credit for the original integration goes to [@Hogster](https://github.com/Hogster)
 and [@maxi1134](https://github.com/maxi1134), and to
@@ -37,7 +37,7 @@ re-install rather than an update:
    (Bermuda must already be set up). On first start it copies the old layout, calibration state, position history
    and map images from where BPS kept them; nothing is deleted.
 3. Remove the old **BPS-Optimized** integration entry. Its sensors were named
-   `sensor.<device>_bps_zone`; Sextant publishes `sensor.<device>_sextant_zone`
+   `sensor.<device>_bps_zone`; Sextant publishes `sensor.<device>_sextant_room`
    (and `_floor`, `_nearest_zone`, `_sub_zone`), so update any automations.
 4. Services are now `sextant.*`, the panel is at `/sextant`, and the card type is
    `custom:sextant-map-card`. Dashboards that still say `custom:bps-map-card`
@@ -57,28 +57,28 @@ Positioning & sensors
 The setup panel
 - [Modern, dark, zoomable panel](#modern-dark-zoomable-panel) — dark theme, zoom/pan, a distance grid, a zone-grouped sidebar.
 - [Polygon zones](#polygon-zones) — any shape, not just rectangles.
-- [Sub-zones](#sub-zones) — smaller areas (a couch, a bed, a desk) inside a zone, with their own sensor.
+- [Spots](#spots) — smaller areas (a couch, a bed, a desk) inside a zone, with their own sensor.
 - [Zone colours](#zone-colours) — each zone tinted a unique colour with a matching name pill; pick or remove one per zone, or toggle all colours off.
 - [Adjust zones](#adjust-zones) — one-click clean-up: square rooms, snap neighbours together, remove overlaps.
-- [Pre-populated receiver picker](#pre-populated-receiver-picker) — pick receivers from a searchable list instead of typing names.
-- [Offline receivers](#offline-receivers) — dead proxies are flagged red in the panel, updating live.
-- [Debugging tab](#debugging-tab) — a live view of how every receiver and beacon links to Bermuda, to untangle naming mismatches and quiet nodes.
+- [Pre-populated proxy picker](#pre-populated-proxy-picker) — pick proxies from a searchable list instead of typing names.
+- [Offline proxies](#offline-proxies) — dead proxies are flagged red in the panel, updating live.
+- [Debugging tab](#debugging-tab) — a live view of how every proxy and beacon links to Bermuda, to untangle naming mismatches and quiet nodes.
 
 Accuracy
-- [Receivers identified by scanner address](#receivers-identified-by-scanner-address) — a renamed proxy can no longer unlink its placement.
+- [Proxies identified by scanner address](#proxies-identified-by-scanner-address) — a renamed proxy can no longer unlink its placement.
 - [Zone stability](#zone-stability) — the published room is elected with membership, dwell and a stationary lock instead of re-tested every cycle.
-- [Nearest-receiver cap](#nearest-receiver-cap) — far receivers no longer pull the fit.
-- [Median RSSI estimator](#median-rssi-estimator-opt-in) — an opt-in, symmetric per-receiver distance from raw samples.
+- [Nearest-proxy cap](#nearest-proxy-cap) — far proxies no longer pull the fit.
+- [Median RSSI estimator](#median-rssi-estimator-opt-in) — an opt-in, symmetric per-proxy distance from raw samples.
 - [Tuning live](#tuning-live) — every knob above set from an action, no restart.
-- [Receiver auto-calibration](#receiver-auto-calibration) — the probes calibrate each other, continuously.
+- [Proxy auto-calibration](#proxy-auto-calibration) — the probes calibrate each other, continuously.
 - [Kalman position smoothing](#kalman-position-smoothing) — a motion-aware filter replaces the fixed moving average: less lag when walking, steadier when still.
 - [Trilateration visualization](#trilateration-visualization) — see the distance circles that place each device.
 - [Trace path](#trace-path) — replay the route a tracked device took during the session, faded by age.
 - [Position history](#position-history) — scrub back through where a device has been, hours or days later, with a time slider and playback under the map.
-- [Receiver distances](#receiver-distances) — measured vs real distance between every receiver pair, colour-coded on the map to spot bad values fast.
+- [Proxy distances](#proxy-distances) — measured vs real distance between every proxy pair, colour-coded on the map to spot bad values fast.
 
 The Lovelace card
-- [Receivers on the map card](#receivers-on-the-map-card) — show your proxies, colored by online/offline status.
+- [Proxies on the map card](#proxies-on-the-map-card) — show your proxies, colored by online/offline status.
 
 ---
 
@@ -98,9 +98,9 @@ upstream docs.
 
 Positioning itself no longer needs SciPy: the trilateration solver is a
 pure-numpy Levenberg–Marquardt fit (`solver_numpy.py`), benchmarked against
-SciPy on a real 48-receiver layout at identical convergence and accuracy,
+SciPy on a real 48-proxy layout at identical convergence and accuracy,
 and the solves run off the event loop in Home Assistant's executor. SciPy
-is still required for the receiver **calibration** solver, so it stays in
+is still required for the proxy **calibration** solver, so it stays in
 the manifest until that is reworked.
 
 - Supported: 64-bit Home Assistant installs (aarch64 / ARM64 or x86_64).
@@ -115,29 +115,29 @@ Python environment.
 ## Nearest-zone sensor
 
 Each tracked device already exposes `sensor.<device>_sextant_floor` and
-`sensor.<device>_sextant_zone`. This fork adds a third:
+`sensor.<device>_sextant_room`. This fork adds a third:
 
-- **`sensor.<device>_sextant_nearest_zone`** — always the *closest* zone on the
-  device's floor. Inside a zone it matches `_sextant_zone`; it reads `unknown` when
-  the device is out of range (no receiver currently measures a distance to it),
+- **`sensor.<device>_sextant_nearest_room`** — always the *closest* zone on the
+  device's floor. Inside a zone it matches `_sextant_room`; it reads `unknown` when
+  the device is out of range (no proxy currently measures a distance to it),
   or when the elected floor has no zones.
 
 The two zone sensors differ in how they handle a device that leaves:
-`_sextant_nearest_zone` drops to `unknown` as soon as the device goes out of range
+`_sextant_nearest_room` drops to `unknown` as soon as the device goes out of range
 (within ~30 s — Bermuda's distance timeout), a clean "which room is this person
-in, or is nobody home" signal to automate on. `_sextant_zone` (and `_sextant_floor`)
+in, or is nobody home" signal to automate on. `_sextant_room` (and `_sextant_floor`)
 instead **keep their last value** through a grace period, so a brief detection
 gap doesn't blink someone out of their room — see [Away detection](#away-detection).
 
 (While the device is in range, a fix that lands between rooms is snapped back
 into the nearest zone before it's published — see [Positions stay on the
-map](#positions-stay-on-the-map) — so `_sextant_zone` no longer flickers to
+map](#positions-stay-on-the-map) — so `_sextant_room` no longer flickers to
 `unknown` from trilateration jitter.)
 
 ## Per-device grouping
 
-Every tracked device's Sextant sensors — `_sextant_zone`, `_sextant_floor`,
-`_sextant_nearest_zone`, and `_sextant_sub_zone` — are grouped under **their own Home
+Every tracked device's Sextant sensors — `_sextant_room`, `_sextant_floor`,
+`_sextant_nearest_room`, and `_sextant_spot` — are grouped under **their own Home
 Assistant device**, named `<device> (Sextant)`, instead of piling into one shared
 list. That Sextant device is **nested under the matching Bermuda tracker device**
 (via `via_device`), so a device's positioning sensors sit alongside the rest of
@@ -156,7 +156,7 @@ plan, or in the dead space between rooms. This fork constrains positioning in
 two ways:
 
 - The trilateration solver is **bounded to the floor** (the extent of its
-  receivers and zones), so a fix can never leave the map — when an
+  proxies and zones), so a fix can never leave the map — when an
   unconstrained solve would escape, the result lands on the boundary instead.
 - A fix that still sits outside every zone is **snapped to the nearest point of
   the nearest zone** before it's published.
@@ -170,12 +170,12 @@ Previously a person who left home stayed frozen on the map at their last
 position indefinitely, with the zone and floor sensors stuck at their last
 values.
 
-Now a tracker that **no receiver has detected for 5 minutes** disappears from
-the map, and its `_sextant_zone`, `_sextant_floor` and `_sextant_nearest_zone` sensors go
+Now a tracker that **no proxy has detected for 5 minutes** disappears from
+the map, and its `_sextant_room`, `_sextant_floor` and `_sextant_nearest_room` sensors go
 to `unknown`. It reappears on the first fix once it's back in range. Tune the
 grace period with a top-level `"position_timeout"` (seconds) in `bpsdata.txt`.
 
-(For a faster "out of range" signal, `_sextant_nearest_zone` already reacts within
+(For a faster "out of range" signal, `_sextant_nearest_room` already reacts within
 ~30 s — Bermuda's own distance timeout — while the map position keeps the
 5-minute grace so brief detection gaps don't blink people off the map.)
 
@@ -193,9 +193,9 @@ background tasks promptly at shutdown so restarts stay clean.
 ![The Map & Setup tab: dark theme, grouped toolbar, tracking bar, zoomable map, and the zone-grouped sidebar](img/screenshots/panel-map-tab.png)
 
 The Sextant side panel was reworked into a modern, dark-themed layout split across
-three tabs — **Map & Setup** (the floor plan, tools, and tracking), **Receiver
+three tabs — **Map & Setup** (the floor plan, tools, and tracking), **Proxy
 Calibration** (the matrix, on its own tab so it no longer crowds the setup
-page), and **[Debugging](#debugging-tab)** (the full receiver-to-Bermuda linking
+page), and **[Debugging](#debugging-tab)** (the full proxy-to-Bermuda linking
 picture). The map itself is interactive:
 
 - **Zoom** with the mouse wheel (cursor-centered, 1×–8×) and **pan** by
@@ -204,46 +204,46 @@ picture). The map itself is interactive:
 - **Distance grid** overlay (toggle in the toolbar), spaced from the floor's
   calibration scale, in **meters or feet**. Grid labels stay pinned to the
   visible edges and readable at any zoom.
-- **Zones & Receivers sidebar** replaces the old floating list: one section per
-  zone, with the receivers that physically sit inside each zone listed under it,
+- **Zones & Proxies sidebar** replaces the old floating list: one section per
+  zone, with the proxies that physically sit inside each zone listed under it,
   plus a delete button on every row.
 - If you have a **single floor**, the panel opens straight onto it. The **Select
   existing** floor dropdown lists floors by their **name**, not the image
   filename.
-- **Zone names** are centered in their room. **Receiver names are hidden by
-  default** so they can't pile up on top of one another — hover a receiver's icon
-  (or its row in the Zones & Receivers sidebar), or focus it, to reveal its full
+- **Zone names** are centered in their room. **Proxy names are hidden by
+  default** so they can't pile up on top of one another — hover a proxy's icon
+  (or its row in the Zones & Proxies sidebar), or focus it, to reveal its full
   name.
 
-![The panel with receiver names decluttered: only the hovered receiver (bermuda_workshop_wall_probe) shows its name, while every other beacon icon stays label-free](img/screenshots/declutered_view_example.png)
+![The panel with proxy names decluttered: only the hovered proxy (bermuda_workshop_wall_probe) shows its name, while every other beacon icon stays label-free](img/screenshots/declutered_view_example.png)
 
-### Moving and focusing receivers
+### Moving and focusing proxies
 
-- A **Move receivers** toggle (off by default) controls dragging. With it on,
-  drag a receiver to reposition it, then **Save Floor Plan**. With it off,
+- A **Move proxies** toggle (off by default) controls dragging. With it on,
+  drag a proxy to reposition it, then **Save Floor Plan**. With it off,
   dragging pans the map.
-- With Move off, **clicking a receiver focuses it** — only that receiver, its
+- With Move off, **clicking a proxy focuses it** — only that proxy, its
   distance circle, and the tracked device stay on the map, so you can study one
-  receiver's contribution. Click it again, or click empty space, to show
+  proxy's contribution. Click it again, or click empty space, to show
   everything.
-- You can also **click a receiver's row in the Zones & Receivers sidebar** to
+- You can also **click a proxy's row in the Zones & Proxies sidebar** to
   focus it — the same effect as clicking its icon. The focused row is
   highlighted, and clicking it again clears the focus.
 
-![Zoomed and panned in with one receiver focused — only its distance circle is drawn](img/screenshots/receiver-focus.png)
+![Zoomed and panned in with one proxy focused — only its distance circle is drawn](img/screenshots/proxy-focus.png)
 
-### Offline receivers
+### Offline proxies
 
-A receiver the system can't currently reach is flagged **in red** in the panel:
-its **Zones & Receivers row** and its **map label** read `(Offline) <name>`, and
+A proxy the system can't currently reach is flagged **in red** in the panel:
+its **Zones & Proxies row** and its **map label** read `(Offline) <name>`, and
 — when distance circles are off — the **beacon icon itself turns red**. The
 markers refresh live, without reloading the panel.
 
-![Two offline receivers on the panel map: red (Offline) labels and red beacon icons, while the working receivers stay black](img/screenshots/offline-receivers.png)
+![Two offline proxies on the panel map: red (Offline) labels and red beacon icons, while the working proxies stay black](img/screenshots/offline-proxies.png)
 
 "Offline" here means the proxy is actually down, not merely that no tracked
 device is near it: the panel uses the same automatic tiers as the
-[map card](#receivers-on-the-map-card) — Bermuda scanner liveness, then a
+[map card](#proxies-on-the-map-card) — Bermuda scanner liveness, then a
 `connectivity` status sensor, then the proxy's Home Assistant device
 availability — so a probe that drops off the map only because everyone left the
 house is *not* flagged.
@@ -261,7 +261,7 @@ matrix — between dark and light. Your choice is remembered across reloads.
 The panel uses the full width of the window at every resolution. On a very wide
 screen (32:9 and similar) it goes a step further and reflows into three
 columns — the Floor, Tools, and Tracking cards stacked on the left, the map
-enlarged in the center, and the Zones & Receivers list on the right — so nothing
+enlarged in the center, and the Zones & Proxies list on the right — so nothing
 is cramped and the map gets the space it deserves.
 
 ![The panel on a 32:9 ultrawide display: setup stacked on the left, an enlarged map in the center, and the zones sidebar on the right](img/screenshots/ultrawide-demo.png)
@@ -282,27 +282,27 @@ Zones are no longer limited to rectangles. When drawing a zone:
 Zones drawn with the old rectangle tool keep working unchanged.
 
 **Editing a saved zone:** click the ✎ pencil next to a zone in the **Zones &
-Receivers** sidebar to reopen it in the editor — drag its corners, drag the whole
+Proxies** sidebar to reopen it in the editor — drag its corners, drag the whole
 shape, add or right-click-delete corners, then **Save Zone**.
 
-## Sub-zones
+## Spots
 
-Sub-zones are smaller polygons drawn **inside** a zone — a couch, a bed, a desk,
+Spots are smaller polygons drawn **inside** a zone — a couch, a bed, a desk,
 a reading nook — for when "which room" isn't precise enough.
 
-![Sub-zones drawn inside zones — a Bed in the Bedroom, plus Desktop and Television areas — each in its own color](img/screenshots/sub-zones.png)
+![Spots drawn inside zones — a Bed in the Bedroom, plus Desktop and Television areas — each in its own color](img/screenshots/spots.png)
 
-- Click **Draw Sub-Zone**, then click inside the zone you want it in (that becomes
+- Click **Draw Spot**, then click inside the zone you want it in (that becomes
   its **parent**) and place corners just like a zone. Every corner is **kept inside
-  the parent zone**, and each sub-zone is drawn in its own shade of the parent's
-  colour (see [Zone colours](#zone-colours)). Sub-zones are editable the same way
+  the parent zone**, and each spot is drawn in its own shade of the parent's
+  colour (see [Zone colours](#zone-colours)). Spots are editable the same way
   zones are (✎ pencil in the sidebar).
-- Sub-zones are listed under their parent in the sidebar, each with edit and delete
-  buttons; deleting a zone removes its sub-zones with it.
-- Each tracked device gets a **`sensor.<device>_sextant_sub_zone`** entity whose state
-  is the sub-zone it is currently in (`unknown` when in none), with a
+- Spots are listed under their parent in the sidebar, each with edit and delete
+  buttons; deleting a zone removes its spots with it.
+- Each tracked device gets a **`sensor.<device>_sextant_spot`** entity whose state
+  is the spot it is currently in (`unknown` when in none), with a
   **`parent_zone`** attribute naming the enclosing zone.
-- The Lovelace map card can draw sub-zones too — enable **Show sub-zones**
+- The Lovelace map card can draw spots too — enable **Show spots**
   (`show_sub_zones: true`) in the card config.
 
 ## Zone colours
@@ -312,13 +312,13 @@ with a solid **black outline** — and the room name sits in a **colour pill** (
 zone's colour at full opacity, black text) so it stays legible over any fill.
 Colours are assigned automatically, so no two zones look alike.
 
-![A floor plan with every zone in a distinct translucent colour, room names in matching colour pills, and sub-zones (Bed, Desktop, Television) drawn as darker shades of their parent zone](img/screenshots/colored_zone_demo.png)
+![A floor plan with every zone in a distinct translucent colour, room names in matching colour pills, and spots (Bed, Desktop, Television) drawn as darker shades of their parent zone](img/screenshots/colored_zone_demo.png)
 
-- **Sub-zones** are drawn in **shades of their parent zone's colour**, each sibling
+- **Spots** are drawn in **shades of their parent zone's colour**, each sibling
   a distinct shade, so you can tell them apart while still reading them as "part of
   that room."
 - **Pick a colour** for any zone from the swatch beside it in the **Zones &
-  Receivers** sidebar, or **remove** a zone's colour to leave it plain.
+  Proxies** sidebar, or **remove** a zone's colour to leave it plain.
 - The sidebar's zone headers are tinted to match the map.
 - A **`Colours: on` / `Colours: off`** button in the sidebar header hides or
   restores every zone colour at once, for when you want a plain map.
@@ -329,7 +329,7 @@ Colouring is purely cosmetic — it never changes zone geometry or any sensor.
 
 Hand-drawn rooms rarely line up: walls overlap a little, corners miss by a few
 centimetres, and rooms meant to be square aren't quite. Two buttons clean this
-up — **Adjust Zones** for the main rooms and **Adjust Sub-zones** for the areas
+up — **Adjust Zones** for the main rooms and **Adjust Spots** for the areas
 inside them — each with its own preview, so the two are never actuated at once.
 
 **Adjust Zones** squares rooms that are already nearly rectangular, snaps
@@ -356,33 +356,33 @@ be drawing slop are closed (a real gap — say, to a closet — is kept), and it
 never invents area. Contested overlaps go to the larger room. If a result isn't
 what you want, **Cancel** and lower the Snap tolerance.
 
-**Adjust Sub-zones** does the same for the smaller areas, one parent room at a
-time: it squares each sub-zone, snaps it to its parent's walls and to its
+**Adjust Spots** does the same for the smaller areas, one parent room at a
+time: it squares each spot, snaps it to its parent's walls and to its
 siblings, removes overlaps between siblings, and clamps each one inside its
-parent. Run it after adjusting zones if a room moved and left a sub-zone poking
+parent. Run it after adjusting zones if a room moved and left a spot poking
 out.
 
-## Pre-populated receiver picker
+## Pre-populated proxy picker
 
-Placing a receiver no longer means typing its Bermuda scanner name from memory.
-You now pick it from a **searchable dropdown of every receiver Bermuda currently
+Placing a proxy no longer means typing its Bermuda scanner name from memory.
+You now pick it from a **searchable dropdown of every proxy Bermuda currently
 reports** (derived from the `sensor.*_distance_to_*` entities) — type to filter
-the list — with a "Custom name…" option for receivers Bermuda hasn't seen yet.
+the list — with a "Custom name…" option for proxies Bermuda hasn't seen yet.
 
-Receivers already placed on **any** floor are hidden from the list — a receiver
+Proxies already placed on **any** floor are hidden from the list — a proxy
 belongs to exactly one floor, and placing the same one on several floors would
 make those floors compete for the tracker.
 
-![Placing a receiver: pick its name from the list of receivers Bermuda reports](img/screenshots/receiver-picker.png)
+![Placing a proxy: pick its name from the list of proxies Bermuda reports](img/screenshots/proxy-picker.png)
 
 ## Debugging tab
 
 A third panel tab, **Debugging**, shows the full picture of how Sextant is wired to
-Bermuda right now — the tool to reach for when a device won't place or a receiver
+Bermuda right now — the tool to reach for when a device won't place or a proxy
 seems ignored. It's a live snapshot; press **Refresh** to re-check. It has two
 sub-tabs, both laid out as tables.
 
-**Receivers** lists every placed receiver with its floor, a status chip
+**Proxies** lists every placed proxy with its floor, a status chip
 (**Live** / **No reading** / **Unmatched**), its hardware token, and the per-device
 Bermuda distance sensors feeding it. Each sensor is a pill showing the device and
 its current reading, coloured by state:
@@ -394,33 +394,33 @@ its current reading, coloured by state:
 A summary counts Live / No reading / Unmatched, and a second table lists scanners
 that carry distance sensors but aren't placed on any floor. Together this makes it
 easy to tell a real naming mismatch (**Unmatched** — no distance sensor carries
-that name) apart from a receiver that's linked correctly but simply quiet
+that name) apart from a proxy that's linked correctly but simply quiet
 (**No reading**).
 
-![The Debugging tab's Receivers view: a table of placed receivers with Live/No reading status chips and per-device distance pills — green for live readings, amber for unknown, bright orange-red for unavailable](img/screenshots/receivers_debug.png)
+![The Debugging tab's Proxies view: a table of placed proxies with Live/No reading status chips and per-device distance pills — green for live readings, amber for unknown, bright orange-red for unavailable](img/screenshots/receivers_debug.png)
 
 **Beacons** is the inverse view: one row per tracked device (beacon), with the
-receivers currently detecting it listed **closest first** as distance pills.
+proxies currently detecting it listed **closest first** as distance pills.
 Beacons that nothing detects sort to the top with a **None** status, so a device
 that's dropped off the system stands out at a glance.
 
-![The Debugging tab's Beacons view: one row per tracked device with a Detected/None status, a receiver count, and the detecting receivers as distance pills ordered closest first](img/screenshots/beacons_debuging.png)
+![The Debugging tab's Beacons view: one row per tracked device with a Detected/None status, a proxy count, and the detecting proxies as distance pills ordered closest first](img/screenshots/beacons_debuging.png)
 
-(The Map & Setup tab keeps a compact heads-up of any receivers that are linked but
+(The Map & Setup tab keeps a compact heads-up of any proxies that are linked but
 not reporting right now; the Debugging tab is where the full per-entity detail
 lives.)
 
 ---
 
-## Receiver auto-calibration
+## Proxy auto-calibration
 
-BLE distance estimates vary per receiver (antenna, enclosure, mounting, TX
+BLE distance estimates vary per proxy (antenna, enclosure, mounting, TX
 power). This fork can measure and correct that automatically — the same idea as
 ESPresense-companion's node calibration, but with zero manual configuration.
 
-The receivers calibrate **each other**: every probe advertises an iBeacon, so
+The proxies calibrate **each other**: every probe advertises an iBeacon, so
 its siblings range it, and comparing those probe-to-probe distances against the
-receivers' placed positions reveals each receiver's error.
+proxies' placed positions reveals each proxy's error.
 
 ### Prerequisite: make each probe advertise
 
@@ -443,19 +443,19 @@ measurements through the `bermuda.dump_devices` service.
 
 ### Running it
 
-In the panel's **Receiver Calibration** section, select a floor and start a run
+In the panel's **Proxy Calibration** section, select a floor and start a run
 (10 minutes is a good default). The result is a matrix: rows transmit, columns
 receive; **blue cells measure short, red cells measure long**. Through-wall
 pairs showing red is expected — walls only lengthen BLE estimates, and the fit
-accounts for that by trusting each receiver's cleanest paths and the wall-free
-difference between the two directions of every pair. Receivers flagged ⚠ got an
+accounts for that by trusting each proxy's cleanest paths and the wall-free
+difference between the two directions of every pair. Proxies flagged ⚠ got an
 aggressive correction or had too few usable pairs (typically no line of sight to
 any sibling) — verify their placement before applying.
 
-![The Receiver Calibration tab: the auto-calibration switch and the full matrix — rows transmit, columns receive; blue measures short, red measures long](img/screenshots/panel-calibration-tab.png)
+![The Proxy Calibration tab: the auto-calibration switch and the full matrix — rows transmit, columns receive; blue measures short, red measures long](img/screenshots/panel-calibration-tab.png)
 
-**Apply corrections** stores a per-receiver factor in `bpsdata.txt`, and the
-backend multiplies every distance that receiver reports from then on. Because
+**Apply corrections** stores a per-proxy factor in `bpsdata.txt`, and the
+backend multiplies every distance that proxy reports from then on. Because
 Bermuda's path-loss model is exponential, this is exactly equivalent to a
 per-scanner RSSI offset — and the result lists the equivalent Bermuda
 "Calibration 2" `rssi_offset` per scanner if you'd rather calibrate at the
@@ -477,7 +477,7 @@ zero.
 
 ### Writing corrections into Bermuda
 
-By default a solved correction is stored in this layout as a per-receiver
+By default a solved correction is stored in this layout as a per-proxy
 distance multiplier, so it only helps Sextant. A multiplier `c` is exactly an
 rssi offset of `-10 × attenuation × log10(c)` dB on the receiving scanner in
 Bermuda's path-loss model, and Bermuda already keeps a per-scanner offset
@@ -510,28 +510,28 @@ level, since Bermuda already smooths the distances Sextant reads):
 - The state resets whenever the tracker changes floors, goes out of range, or
   is pruned — no ghost velocity carrying over from before an absence.
 
-The spike gate feeding the solver got smarter too: a receiver whose distance
+The spike gate feeding the solver got smarter too: a proxy whose distance
 jumped since the last update used to be **discarded outright** (a hard 50%
-cut-off), which could starve the solver below the three receivers it needs —
+cut-off), which could starve the solver below the three proxies it needs —
 precisely while you were walking, when every distance legitimately changes.
 Spiky readings are now **down-weighted instead of dropped**: the solver keeps
-every receiver, trusting sudden jumps proportionally less.
+every proxy, trusting sudden jumps proportionally less.
 
 ## Trilateration visualization
 
-During tracking, a **Distance circles** toggle draws each receiver's measured
+During tracking, a **Distance circles** toggle draws each proxy's measured
 distance as a circle around it — the tracked device sits where the circles
-intersect, which makes the trilateration (and any mis-calibrated receiver)
+intersect, which makes the trilateration (and any mis-calibrated proxy)
 visible at a glance.
 
-- Each receiver's **icon takes the color of its circle**, so you can tell which
-  circle belongs to which receiver even when they overlap.
-- Each receiver carries a **pill showing the measured distance** (in the grid's
+- Each proxy's **icon takes the color of its circle**, so you can tell which
+  circle belongs to which proxy even when they overlap.
+- Each proxy carries a **pill showing the measured distance** (in the grid's
   unit — meters or feet).
 - The circles and distances are the **exact radii the solver used**, including
   any calibration corrections — not a separate estimate.
 
-![Distance circles during tracking: each receiver's circle and distance pill in its own color](img/screenshots/distance-circles.png)
+![Distance circles during tracking: each proxy's circle and distance pill in its own color](img/screenshots/distance-circles.png)
 
 ## Trace path
 
@@ -558,7 +558,7 @@ beacon** tracked at once on Bermuda's **unfiltered** vs **filtered** distance:
 the unfiltered feed (`…_unfiltered`, centre) smears into a jittering tangle
 that never settles, while the filtered feed (lower-right) holds a stable,
 accurate fix — a stark reminder to track the filtered distance, and to keep
-receivers well calibrated (see [Receiver distances](#receiver-distances)).
+proxies well calibrated (see [Proxy distances](#proxy-distances)).
 
 ![The same ankle beacon tracked on unfiltered vs filtered Bermuda distance: the unfiltered trace is a chaotic tangle in the centre of the floor while the filtered position is a single stable fix at lower-right](img/screenshots/filtered_unfiltered_difference.png)
 
@@ -613,40 +613,40 @@ Some deliberate choices worth knowing:
   went missing for a while starts a new line instead of drawing a straight
   segment across the gap.
 
-## Receiver distances
+## Proxy distances
 
-A **Receiver distances** toggle in the Tracking column draws a line between
-every pair of receivers that measure each other, straight on the floor plan.
-**Hover a line (or a receiver)** to read a pill with **`measured (real)`** — the
-distance the receivers measure between themselves (after calibration
+A **Proxy distances** toggle in the Tracking column draws a line between
+every pair of proxies that measure each other, straight on the floor plan.
+**Hover a line (or a proxy)** to read a pill with **`measured (real)`** — the
+distance the proxies measure between themselves (after calibration
 corrections) next to the true map distance between their placed positions. The
 pills stay hidden until you hover so a dense floor's colour map stays readable;
 the lines themselves are the at-a-glance signal. While you hover, every **other**
-line dims to 10% so the one path (a hovered line, or all of a hovered receiver's
+line dims to 10% so the one path (a hovered line, or all of a hovered proxy's
 links) stands out of the mesh.
 
 - Lines take the **calibration table's colour code**: green measures
-  accurately, red measures long, blue measures short — a mis-behaving receiver
+  accurately, red measures long, blue measures short — a mis-behaving proxy
   stands out at a glance. A two-way link is coloured by its **worse
-  direction**, so a receiver that only transmits badly can't average itself
+  direction**, so a proxy that only transmits badly can't average itself
   green. A **legend** overlaid on the map's top-left spells the gradient out.
-- A **grey dashed line** means one of its receivers was moved after the last
+- A **grey dashed line** means one of its proxies was moved after the last
   solve: the old judgement would be meaningless over the new geometry, so the
   pill switches to the live map distance and asks for a recalibration instead.
 - A **Closest selector** next to the toggle limits how many lines each
-  receiver contributes (its 1–5 nearest neighbours by map distance, or all
+  proxy contributes (its 1–5 nearest neighbours by map distance, or all
   links) — on a dense floor the full mesh is a lot of lines.
 - A **colour selector** filters by calibration result: show only the accurate
   (green), too-short (blue), or too-long (red) links, or every off-colour one
-  (red **and** blue together) to see just the receivers that need attention.
+  (red **and** blue together) to see just the proxies that need attention.
 - A **distance selector** switches the detected distance between **Calibrated**
-  (after the per-receiver correction — the residual error) and **Raw** (the
+  (after the per-proxy correction — the residual error) and **Raw** (the
   uncorrected reading — the sensor's own error). It drives both the pill value
   and the line colour, so flipping it shows exactly what calibration is doing:
   a link that's red raw and green calibrated is one the correction fixed.
-- **Click a receiver** to declutter: only that receiver and the lines to the
-  receivers it exchanges measurements with stay visible. Click a neighbour to
-  move the focus there; click the focused receiver again (or empty space) to
+- **Click a proxy** to declutter: only that proxy and the lines to the
+  proxies it exchanges measurements with stay visible. Click a neighbour to
+  move the focus there; click the focused proxy again (or empty space) to
   show everything.
 - **Click a line or its distance pill** to isolate that single link — it's
   drawn highlighted and every other line is hidden, so you can read one pair
@@ -658,37 +658,37 @@ links) stands out of the mesh.
 - Unlike the two toggles above it needs **no active tracking session**; it is
   off by default and remembers its state.
 
-## Receiver mount heights
+## Proxy mount heights
 
 BLE distances are **slant ranges** — the straight line through the air — but
 the map is flat. That mismatch costs accuracy twice:
 
-- **In calibration:** two receivers 3 m apart on the map, one on a shelf at
+- **In calibration:** two proxies 3 m apart on the map, one on a shelf at
   0.3 m and one on the ceiling at 2.2 m, are really **3.55 m** apart. Judged
   against the flat 3 m, that pair reads "18% long" and the fit bakes the
-  phantom error into the receivers' corrections — shrinking **all** their
+  phantom error into the proxies' corrections — shrinking **all** their
   distances during tracking.
 - **In tracking:** a ceiling probe at 2.5 m reading 1.6 m to the person right
   below it is really ~0.6 m away horizontally (with the beacon carried at
   ~1 m). The inflated circle drags the fix toward nowhere — and it's worst on
-  the **nearest** receivers, exactly the ones the solver trusts most.
+  the **nearest** proxies, exactly the ones the solver trusts most.
 
-Setting a receiver's **mount height** fixes both. Enter it when placing the
-receiver, or later via the **ruler button on its sidebar row** (the current
+Setting a proxy's **mount height** fixes both. Enter it when placing the
+proxy, or later via the **ruler button on its sidebar row** (the current
 value shows as a badge; leave it empty to keep the old flat behaviour):
 
 - Calibration judges each pair against the **true 3D distance** — heights
-  apply when **both** receivers in a pair have one. The Receiver-distances
+  apply when **both** proxies in a pair have one. The Proxy-distances
   overlay uses the same 3D truth, so changing a height flags its links to
-  other height-set receivers grey ("recalibrate") just like moving the
-  receiver would.
+  other height-set proxies grey ("recalibrate") just like moving the
+  proxy would.
 - During tracking the vertical leg is removed from every reading
   (`horizontal = √(slant² − Δz²)`) before trilateration, assuming trackers are
   carried ~1 m above the floor (override with a top-level `"tracker_height"`
   in `bpsdata.txt`, 0–5 m — e.g. `0.3` if you mostly track a pet; values
   outside that range fall back to the 1 m default).
 - The **floor election is untouched** — it still compares the calibrated
-  slant ranges, because "which receiver is nearest" must be judged before any
+  slant ranges, because "which proxy is nearest" must be judged before any
   floor-specific geometry can be assumed.
 - Alongside this, the solver's inverse-square distance weighting now caps the
   influence of readings **under 0.5 m** (they are all equally "right here"):
@@ -703,41 +703,41 @@ are pending.)
 ## Floor election by hypothesis competition
 
 Which floor a tracker is on used to be decided by **one number**: the floor
-of the single receiver reporting the smallest distance. BLE passes straight
+of the single proxy reporting the smallest distance. BLE passes straight
 through ceilings, so one noisy reading from the floor above could steal the
 tracker for a cycle — the kitchen ↔ bedroom flapping of
 [#94](https://github.com/davidcoulson/sextant/issues/94).
 
 The election is now a **competition between floors**, each judged on how
-well it explains *all* of its receivers (the way ESPresense scores its
+well it explains *all* of its proxies (the way ESPresense scores its
 per-floor scenarios) instead of on a single loudest reading:
 
-- Each cycle, the nearest floors that have **at least three receivers
+- Each cycle, the nearest floors that have **at least three proxies
   hearing the tracker** are each solved (the incumbent floor always defends
   its title when it can solve), and each fit is scored by how well the
-  position agrees with **every reporting receiver on that floor** (weighted
-  residual, in metres, corrected for receiver count) plus how many receivers
-  corroborate it. A through-ceiling reading fits one receiver and
+  position agrees with **every reporting proxy on that floor** (weighted
+  residual, in metres, corrected for proxy count) plus how many proxies
+  corroborate it. A through-ceiling reading fits one proxy and
   contradicts the rest — it scores poorly.
 - Scores feed **smoothed per-floor probabilities**. A challenger must lead
   the incumbent continuously for **`floor_switch_secs` of wall-clock time**
   (60 s by default; see [Tuning](#tuning-live)) before the floor switches,
   and the lead it needs grows a little with how long the incumbent has held
   the floor (`floor_tenure_bonus`). A cycle where the incumbent floor
-  briefly drops below three receivers simply **holds the last position**
+  briefly drops below three proxies simply **holds the last position**
   instead of handing the tracker to whoever else was solvable that
   instant. A single blip no longer flaps the floor, the published zone, or
   the position filter.
 - Fit quality alone cannot separate floors joined by an open space: a
   phone in the office below the catwalk is explained about as well by the
-  upstairs receivers around the void as by the office ones. Each floor's
-  confidence is therefore scaled by **receiver proximity** — the nearest
+  upstairs proxies around the void as by the office ones. Each floor's
+  confidence is therefore scaled by **proxy proximity** — the nearest
   measured distance on any competing floor divided by this floor's own
   nearest — weighted by `floor_proximity_weight` (0.5 by default, 0 for a
   pure fit-quality election). Since 3.5.0 "nearest" is the **mean of the
-  `floor_proximity_k` nearest receivers** (3 by default): one receiver
-  straight through a wood floor can read nearer than the receivers in the
-  room (a dog on the sun-room floor read a basement receiver at 1.7 m and
+  `floor_proximity_k` nearest proxies** (3 by default): one proxy
+  straight through a wood floor can read nearer than the proxies in the
+  room (a dog on the sun-room floor read a basement proxy at 1.7 m and
   the nearest ground-floor one at 1.9 m), but the three nearest cannot
   (3.1 m vs 4.9 m). `floor_proximity_k: 1` is the old behaviour.
 - Each floor can carry an **election bias** (Edit mode, floor card; stored
@@ -749,20 +749,20 @@ per-floor scenarios) instead of on a single loudest reading:
   orders the floor pickers top-down the way the house is stacked.
 - The probabilities are published per tracker (`floors` in
   `/api/sextant/cords`), so "why did it pick this floor" is now inspectable.
-- Bonus: a tracker heard by too few receivers on the nearest floor but by
+- Bonus: a tracker heard by too few proxies on the nearest floor but by
   three or more on another now gets a position instead of none.
 
 ## No-go zones
 
 Some spots on an upper floor are physically impossible: the upper footprint
 of a **double-height foyer or great room open to the floor below**. Nothing
-can stand there — but the downstairs receivers hear a beacon in that shared
+can stand there — but the downstairs proxies hear a beacon in that shared
 air just fine, so the upper floor sometimes "wins" it and the tracker hovers
 in mid-air over the void
 ([#60](https://github.com/davidcoulson/sextant/issues/60)).
 
 Mark such a zone **no-go** with the no-entry button on its row in the Zones &
-Receivers sidebar. It draws as **grey hatched dead space** on the map, and in
+Proxies sidebar. It draws as **grey hatched dead space** on the map, and in
 tracking it:
 
 - **Down-weights the floor whose fit lands in it.** Because the floor
@@ -779,9 +779,9 @@ Marking a zone no-go changes only tracking; it doesn't need a recalibration.
 
 ---
 
-## Receivers on the map card
+## Proxies on the map card
 
-The Lovelace map card can now draw your receivers (bluetooth proxies), colored
+The Lovelace map card can now draw your proxies (bluetooth proxies), colored
 by whether they're working:
 
 ```yaml
@@ -799,33 +799,33 @@ receiver_status:             # optional: explicit status entity per receiver
 
 ![The map card with show_receivers: each proxy drawn as a beacon icon — black where it's working, red where it's offline — alongside the tracked devices](img/screenshots/lovelace-card.png)
 
-The beacon icon is drawn **black when the receiver is working** and **red when
-it is offline/unavailable**. The decision is made per receiver, first match
+The beacon icon is drawn **black when the proxy is working** and **red when
+it is offline/unavailable**. The decision is made per proxy, first match
 wins:
 
 1. **`receiver_status` mapping** (if given): the mapped entity decides — an
    offline-like state (`off`, `unavailable`, `unknown`, `none`, `false`,
    `not_home`, `offline`, `disconnected`, or empty) shows red, anything else
-   black. Any entity of the device works (e.g. an uptime sensor). Map a receiver
+   black. Any entity of the device works (e.g. an uptime sensor). Map a proxy
    to `false` (or `heuristic`) to skip tiers 2–4 and force the distance
    heuristic.
 2. **Bermuda scanner liveness** (automatic): the card asks Bermuda
-   (`bermuda.dump_devices`) and matches scanners to receivers by name. A
-   receiver is working while its scanner heard *any* advertisement within
+   (`bermuda.dump_devices`) and matches scanners to proxies by name. A
+   proxy is working while its scanner heard *any* advertisement within
    `receiver_timeout` seconds (default 30, min 10). This is the strongest tier —
    it catches a proxy whose BLE scanning died while its network stayed up.
 3. **`binary_sensor.<receiver>_status`** with device class `connectivity` — the
    conventional ESPHome `status` sensor.
 4. **Device availability** (automatic): the HA device whose name matches the
-   receiver is online while any of its entities isn't `unavailable`. A
+   proxy is online while any of its entities isn't `unavailable`. A
    connectivity-class entity of that device is authoritative.
 5. **Bermuda distance sensors** (fallback): working while at least one
    `sensor.*_distance_to_<receiver>` reports a distance (Bermuda holds the last
    reading ~30 s), so a dead — or unreachable — proxy turns red after about half
    a minute.
 
-Tiers 2–4 need no configuration and match by the receiver name you used in the
-panel (normally the proxy's HA device name). If a receiver shows red while the
+Tiers 2–4 need no configuration and match by the proxy name you used in the
+panel (normally the proxy's HA device name). If a proxy shows red while the
 device is online, map it explicitly in `receiver_status`.
 
 The full card guide (all options, per-floor behavior, labels/icons/zones,
@@ -833,9 +833,9 @@ troubleshooting) is in the [upstream wiki](https://github.com/Hogster/BPS/wiki/L
 
 ---
 
-## Receivers identified by scanner address
+## Proxies identified by scanner address
 
-A placed receiver used to be identified by its Bermuda slug alone, which is
+A placed proxy used to be identified by its Bermuda slug alone, which is
 a slugified *device name*: rename the device, or let Bermuda append a MAC to
 disambiguate it, and the placement silently unlinked while the linking and
 calibration views guessed the match back. Each placement now also carries
@@ -858,7 +858,7 @@ install that was **30 zone changes per tracker-hour, 56 % of them A → B → A
 flips, at a median dwell of 21 s** — for trackers that were mostly not
 moving.
 
-The `*_sextant_zone` sensor is now elected the way the floor is:
+The `*_sextant_room` sensor is now elected the way the floor is:
 
 - **Membership, not a point test.** Samples on the position filter's error
   ellipse are attributed to zones, giving each zone a share; the shares are
@@ -874,23 +874,42 @@ The `*_sextant_zone` sensor is now elected the way the floor is:
   toward the dwell, so the switch follows at once — or when the tracker is
   clearly moving again.
 
-`*_sextant_nearest_zone` stays instantaneous for automations that want the raw
+`*_sextant_nearest_room` stays instantaneous for automations that want the raw
 answer, and `/api/sextant/cords` carries `zone_raw` (the point's own zone),
-`zone_locked` and `speed` per tracker. Sub-zones get the same dwell
+`zone_locked` and `speed` per tracker. Spots get the same dwell
 (`subzone_switch_secs`) and can only be published against their own parent
 zone; their smoothed membership shares are published as `sub_zones` (name
-to share, `unknown` for "in none of them") and shown next to the sub-zone
+to share, `unknown` for "in none of them") and shown next to the spot
 in the Live drawer, like the floor probabilities. Set `zone_hysteresis` to
 false to publish the raw zone as before.
+
+## Rooms, spots and proxies (3.8.0)
+
+Three words changed, everywhere a person reads them:
+
+- a **room** is what the polygons on the floor plan are (the code and the
+  layout file still say `zones`, and the tuning keys keep their `zone_`
+  names);
+- a **spot** is the small area inside a room where something rests - a
+  couch, a desk, a bedside table, the hook the keys hang on (`subzones` in
+  the layout);
+- a **proxy** is a Bluetooth proxy on the wall (`receivers` in the layout).
+
+The sensors were renamed with them: `sensor.<device>_sextant_room`,
+`_sextant_nearest_room` and `_sextant_spot` (whose attribute `room` names
+the enclosing room). Registry entries from before 3.8.0 are moved to the
+new ids on the first start, history and all; saved KPI baselines and
+`tools/flap_kpi.py` read the old ids as the same sensors. Automations and
+template helpers that name the old ids need editing by hand.
 
 ## The panel after the first walkthrough (3.7.0)
 
 What changed from David's first pass through the rebuilt panel:
 
-- **Proxies, not receivers.** The things on the wall are Bermuda proxies
+- **Proxies, not proxies.** The things on the wall are Bermuda proxies
   and the panel now calls them that everywhere (the layout keys and the
   websocket commands keep their old names). Rooms are "rooms" in the editor
-  and the tuning groups; the sensors are still `*_sextant_zone`.
+  and the tuning groups; the sensors are still `*_sextant_room`.
 - **Seven pages** instead of four: Live, Edit, Trackers (what Bermuda
   tracks and what it hears), Bermuda (its global options, FindMy, Tiles),
   Proxies (health grouped by floor and room with a count of green / quiet /
@@ -910,7 +929,7 @@ What changed from David's first pass through the rebuilt panel:
   panel follows. Proxies show their Bermuda name on the map and in every
   table instead of the slug.
 - **Editor.** Undo (fifty steps) next to Save. Three padlocks lock rooms,
-  sub-zones and proxies against selection and dragging; rooms start locked,
+  spots and proxies against selection and dragging; rooms start locked,
   drawing a new one unlocks them. Proxies are bigger targets and grow under
   the pointer; no-go areas are grey.
 - **Trackers page.** Tracked rows show the icon left of the name, height and
@@ -925,7 +944,7 @@ What changed from David's first pass through the rebuilt panel:
   (0.8 m) with every other proxy at least `anchor_ratio` (2) times farther,
   for `anchor_secs` (20 s), is placed on that proxy - a watch on the bedside
   table next to its proxy sat 1.7 m away before, where the farther proxies'
-  errors pulled the fit, and the bedside-table sub-zone never won. The anchor
+  errors pulled the fit, and the bedside-table spot never won. The anchor
   holds until the reading opens past `anchor_release_m` (1.5 m) for the
   dwell, or another proxy earns it; `anchor` in the cords payload and the
   Live drawer say which proxy holds it. `anchor_max_m: 0` switches it off.
@@ -935,7 +954,7 @@ What changed from David's first pass through the rebuilt panel:
 Tiles rotate their Bluetooth address, and (it turns out) change it again
 right after every connection, so an address is never a durable name for
 one. Bermuda reads each Tile's ID over Bluetooth; the Devices page lists
-every ID heard with the area and loudest receiver it was last seen at, and a
+every ID heard with the area and loudest proxy it was last seen at, and a
 **Bind** control per row declares which configured Tile that ID is - the one
 thing only you know. From then on every rotation is resolved by identity
 (`sextant/bermuda/tile_identities`, `sextant/bermuda/tile/bind`, or the
@@ -956,11 +975,11 @@ restarts and can be deleted from the same card. The websocket commands are
 `tools/flap_kpi.py --baseline` does the same from a shell against a JSON
 export.
 
-## Nearest-receiver cap
+## Nearest-proxy cap
 
-With thirty receivers on a floor, the ones 8 m and further away contribute
+With thirty proxies on a floor, the ones 8 m and further away contribute
 mostly noise, and the solver's 1/r² weight does not zero them out. Each
-floor's solve now uses every receiver within `solver_near_always` metres
+floor's solve now uses every proxy within `solver_near_always` metres
 (3 m) plus the nearest `solver_max_receivers` (8), and drops readings beyond
 `solver_max_range` (12 m) once three points are kept, so a floor is never
 starved below the solver's minimum by the cap alone. Set
@@ -969,9 +988,9 @@ starved below the solver's minimum by the cap alone. Set
 ## Median RSSI estimator (opt-in)
 
 Bermuda's smoothed distance is a running-minimum-biased average built for
-"which scanner is nearest": it lags on the way out and reads far receivers
-short, and a short far receiver drags a least-squares fit toward it. With
-`distance_estimator` set to `median`, each receiver's distance is instead
+"which scanner is nearest": it lags on the way out and reads far proxies
+short, and a short far proxy drags a least-squares fit toward it. With
+`distance_estimator` set to `median`, each proxy's distance is instead
 the **median of its recent raw RSSI samples** (those newer than
 `median_window_secs`, at least `median_min_samples` of them), converted with
 exactly the path-loss parameters Bermuda would have used, so it lands on the
@@ -982,33 +1001,33 @@ exposes RSSI history (the `rssi_history` feature; this fork's
 Bermuda's own distance. It is off by default so it can be A/B'd against the
 [stability KPI](#measuring-room-stability) on a live install.
 
-## Sub-zone election
+## Spot election
 
-Sub-zones are a couch, a desk, a key hook: a metre or two across, the size of
+Spots are a couch, a desk, a key hook: a metre or two across, the size of
 the positioning error itself, so the old strict point-in-polygon test
-flickered between the sub-zone and "unknown". Sub-zones now get the zone
+flickered between the spot and "unknown". Spots now get the zone
 election scaled down: the fix's 1-sigma error ellipse is sampled and the
-share inside each sub-zone smoothed over cycles (`zone_prob_smoothing`);
+share inside each spot smoothed over cycles (`zone_prob_smoothing`);
 entering needs a smoothed share of `subzone_enter_prob` (default 0.5), and a
-sample in no sub-zone counts as evidence of none. An occupied sub-zone is only
+sample in no spot counts as evidence of none. An occupied spot is only
 left once the fix sits more than `subzone_unlock_margin` metres (default 1.0)
-outside its polygon, or another sub-zone of the same zone clearly wins. Every
+outside its polygon, or another spot of the same zone clearly wins. Every
 change still waits `subzone_switch_secs`, and a tracker the zone election
-holds still (the phone on the table) keeps its sub-zone for as long as the
-zone lock holds. Only the elected zone's own sub-zones are eligible, and
+holds still (the phone on the table) keeps its spot for as long as the
+zone lock holds. Only the elected zone's own spots are eligible, and
 `parent_zone` always names that zone.
 
 ## Fingerprint fusion (opt-in)
 
-Every receiver that advertises (the ESPHome probes' iBeacon, a Shelly) is
-heard by every other receiver, so Bermuda continuously measures a labelled
+Every proxy that advertises (the ESPHome probes' iBeacon, a Shelly) is
+heard by every other proxy, so Bermuda continuously measures a labelled
 vector of ranges at a known position: one reference fingerprint per placed
-receiver, refreshed for free. With `position_estimator` set to `fused` or
+proxy, refreshed for free. With `position_estimator` set to `fused` or
 `fingerprint`, Sextant matches each tracker's vector of ranges against those
-references (weighted RMS of the log-ratio per receiver, "not heard" counted
+references (weighted RMS of the log-ratio per proxy, "not heard" counted
 as `fingerprint_missing_m`) and places it at the inverse-score-weighted mean
-of the `fingerprint_k` best-matching receivers. No path-loss model turns a
-range into geometry here: a wall that makes a receiver read the tracker long
+of the `fingerprint_k` best-matching proxies. No path-loss model turns a
+range into geometry here: a wall that makes a proxy read the tracker long
 makes it read the references behind that wall long too, and the comparison
 cancels it.
 
@@ -1018,13 +1037,13 @@ cancels it.
   `fingerprint_floor_weight`.
 - `fingerprint`: the match replaces the fit; trilateration is only the fallback
   where no reference matched.
-- Either mode lets a floor that only one or two receivers hear compete on its
+- Either mode lets a floor that only one or two proxies hear compete on its
   fingerprint, where trilateration alone needs three.
 - `fingerprint_ref_gain` scales the reference ranges for probe beacons that
   transmit hotter (`< 1`) or cooler (`> 1`) than the trackers do. With
   `fingerprint_auto_gain` (on by default) the rest of that factor is
   **learned from the trackers**: every match also yields the median ratio
-  between the tracker's ranges and its best reference's over the receivers
+  between the tracker's ranges and its best reference's over the proxies
   that heard both, and the learned factor moves by `ratio ^ (0.02 x
   confidence)` per match — a factor-of-two error is walked off in a few
   minutes of normal traffic and then hovers, clamped to 0.25–4. The gain in
@@ -1035,7 +1054,7 @@ v0.8.7-fork-testing.14 or later); otherwise a warning is logged once and the
 geometric estimator runs. The reference database is sampled every 20 s and
 medianed over 12 samples, so it is useful about a minute after a restart. The
 `/api/sextant/cords` payload carries `estimator` and, per tracker, `fp` with
-the fingerprint's own fix, confidence, score and the reference receivers it
+the fingerprint's own fix, confidence, score and the reference proxies it
 averaged, so the two estimators can be compared before trusting the blend:
 
 ```yaml
@@ -1077,16 +1096,16 @@ one websocket subscription for positions and request/response commands for
 everything else (`custom_components/sextant/ws.py`). It has four modes, built
 with Home Assistant's own form elements so it looks and behaves like
 Settings. The previous editor was removed in 3.4.0; the sections further
-down that describe panel features (zones, sub-zones, calibration, history,
+down that describe panel features (zones, spots, calibration, history,
 debugging) refer to where they now live in these modes.
 
 - **Live** — the floor plan with every tracker, its confidence ring, the
   solver circles and the fingerprint fix on request, a trail, and a history
   scrubber that replays a tracker's retained positions. Selecting a tracker
-  shows its zone, sub-zone, floor probabilities, estimator telemetry and every
-  receiver currently hearing it with its distance.
-- **Edit** — the floor-plan editor on the same map: place receivers by
-  picking a scanner Bermuda knows, drag them, draw zones, sub-zones and
+  shows its zone, spot, floor probabilities, estimator telemetry and every
+  proxy currently hearing it with its distance.
+- **Edit** — the floor-plan editor on the same map: place proxies by
+  picking a scanner Bermuda knows, drag them, draw zones, spots and
   no-go areas (vertices drag, edge midpoints add, right-click removes), set
   the scale by measuring a known distance, name and re-parent things, run
   the zone adjuster, add a floor from an image, delete a floor. Nothing is
@@ -1096,8 +1115,8 @@ debugging) refer to where they now live in these modes.
   but does not track with one click to track it (Tiles included), the Tiles'
   binding and probe state, FindMy accessories (paste the exported keys), and
   Bermuda's global options. Needs Bermuda fork-testing.15 or later.
-- **Health** — receivers (online, unmatched, last heard, correction, height),
-  naming mismatches and scanner linking detail, receiver calibration (start,
+- **Health** — proxies (online, unmatched, last heard, correction, height),
+  naming mismatches and scanner linking detail, proxy calibration (start,
   auto, solve, apply, reset, per-floor results), the leave-one-out self-test,
   the room-stability KPI computed from the recorder for any window, every
   tuning key with live apply, and clearing the position history.
@@ -1109,7 +1128,7 @@ Home Assistant's theme is used throughout, so light and dark follow it.
 
 ## Live updates over the websocket
 
-Positions and receiver health are pushed once per positioning cycle over
+Positions and proxy health are pushed once per positioning cycle over
 Home Assistant's websocket, so a client can subscribe once instead of
 polling `/api/sextant/cords`:
 
@@ -1129,7 +1148,7 @@ panel and the map card still poll today; the rebuilt UI subscribes.
 Positional error is hard to measure on a live install, but the thing
 automations actually suffer from is easy to measure: a tracker that is not
 moving must not change room. `tools/flap_kpi.py` reads the recorder history
-for every `*_sextant_zone` and `*_sextant_floor` sensor and reports, per sensor, the
+for every `*_sextant_room` and `*_sextant_floor` sensor and reports, per sensor, the
 change rate per tracker-hour, the share of changes that are an A → B → A
 round trip (boundary flapping), the median dwell time, and how often the
 sensor went `unknown`.

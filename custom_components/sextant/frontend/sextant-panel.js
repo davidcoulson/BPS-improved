@@ -13,7 +13,7 @@
  */
 import { LitElement, html, css, nothing } from "./lit.js";
 import { SextantMap, trackerHue } from "./sextant-map.js";
-import { sharedStyles, widgetStyles, fmtAge, toast, ensureHaComponents, uiSwitch, uiSelect, uiButton, callWS, sortFloors, trackerName, proxyName, fmtLen, fmtSpeed } from "./sextant-ui.js";
+import { sharedStyles, widgetStyles, fmtAge, toast, ensureHaComponents, uiSwitch, uiSelect, uiButton, callWS, sortFloors, trackerName, proxyName, fmtLen, fmtSpeed, classIcon } from "./sextant-ui.js";
 import "./sextant-devices.js";
 import "./sextant-health.js";
 import "./sextant-edit.js";
@@ -270,7 +270,8 @@ class SextantLive extends LitElement {
 
   _pushTrackers() {
     const rows = (this.positions?.positions || []).filter((p) => p.floor === this.floor);
-    let trackers = rows.map((p) => ({ ...p, icon: this._icon(p.ent), label: this._label(p.ent) }));
+    const classes = this.data?.layout?.tracker_classes || {};
+    let trackers = rows.map((p) => ({ ...p, icon: this._icon(p.ent), mdi: classIcon(classes[p.ent]), label: this._label(p.ent) }));
     // Scrubbing: replace the live dot of the scrubbed tracker with the past one.
     const h = this._history;
     if (h && this._scrub != null && h.ent) {
@@ -278,7 +279,7 @@ class SextantLive extends LitElement {
       const at = this._pointAt(h, this._scrub);
       trackers = trackers.filter((t) => t.ent !== h.ent);
       if (at && at.f === this.floor && f?.scale) {
-        trackers.push({ ent: h.ent, cords: [at.x * f.scale, at.y * f.scale], zone: at.z, conf: 1, label: `${this._label(h.ent)} · ${new Date(this._scrub * 1000).toLocaleTimeString()}`, icon: this._icon(h.ent) });
+        trackers.push({ ent: h.ent, cords: [at.x * f.scale, at.y * f.scale], zone: at.z, conf: 1, label: `${this._label(h.ent)} · ${new Date(this._scrub * 1000).toLocaleTimeString()}`, icon: this._icon(h.ent), mdi: classIcon(classes[h.ent]) });
       }
       this._map.clearTrails();
       if (f?.scale) {
@@ -330,7 +331,7 @@ class SextantLive extends LitElement {
       ["image", "Map image", "Show or hide the floor-plan drawing behind the rooms"],
       ["labels", "Labels", "Room and tracker names"],
       ["trails", "Trails", "Each tracker's recent path"],
-      ["subzones", "Sub-zones", "Draw the sub-zone polygons"],
+      ["subzones", "Spots", "Draw the spots (a couch, a desk, a bedside table)"],
       ["receiverLabels", "Proxy names", "Name every proxy on the map, not just the one under the pointer"],
       ["circles", "Range circles", "The distance each proxy measured, as a circle: the fix is where they meet"],
       ["fingerprint", "Fingerprint fix", "Where the fingerprint estimator alone would put each tracker (dashed), next to the published fix"],
@@ -370,7 +371,7 @@ class SextantLive extends LitElement {
             <h4>${this._label(sel.ent)} <span class="muted small">click the row again to unfocus</span></h4>
             <dl>
               <dt>Room</dt><dd>${sel.zone} ${sel.zone_locked ? html`<ha-icon icon="mdi:lock" title="stationary lock"></ha-icon>` : nothing}</dd>
-              <dt>Sub-zone</dt><dd>${sel.sub_zone || "—"} ${sel.sub_zones ? html`<span class="muted small">${Object.entries(sel.sub_zones).sort((a, b) => b[1] - a[1]).map(([s, p]) => `${s === "unknown" ? "none" : s} ${(p * 100).toFixed(0)}%`).join(" · ")}</span>` : nothing}</dd>
+              <dt>Spot</dt><dd>${sel.sub_zone || "—"} ${sel.sub_zones ? html`<span class="muted small">${Object.entries(sel.sub_zones).sort((a, b) => b[1] - a[1]).map(([s, p]) => `${s === "unknown" ? "none" : s} ${(p * 100).toFixed(0)}%`).join(" · ")}</span>` : nothing}</dd>
               <dt>Floor</dt><dd>${sel.floor} ${sel.floors ? html`<span class="muted small">${Object.entries(sel.floors).map(([f, p]) => `${f} ${(p * 100).toFixed(0)}%`).join(" · ")}</span>` : nothing}</dd>
               <dt>Confidence</dt><dd>${sel.conf ?? "—"} ${sel.rms_m != null ? html`<span class="muted small">rms ${fmtLen(sel.rms_m, this.hass)}</span>` : nothing}</dd>
               <dt>Estimator</dt><dd>${sel.estimator || "geometric"}${sel.fp ? html` <span class="muted small">fp ${sel.fp.conf}${sel.fp.gain != null ? ` · gain ×${sel.fp.gain}` : ""} · ${(sel.fp.refs || []).map((r) => proxyName(this.data, r[0])).slice(0, 2).join(", ")}</span>` : nothing}</dd>

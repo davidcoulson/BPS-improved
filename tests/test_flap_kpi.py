@@ -72,10 +72,10 @@ def test_summary_rolls_up_by_kind():
         "sensor.phone_sextant_floor": kpi.compute_metrics(_rows((0, "G"), (600, "S")), 1),
     }
     s = kpi.summarise(per)
-    assert s["sextant_zone"]["entities"] == 2
-    assert s["sextant_zone"]["changes"] == 2
-    assert s["sextant_zone"]["changes_per_tracker_hour"] == 1.0  # 2 changes over 2 tracker-hours
-    assert s["sextant_zone"]["flip_ratio"] == 0.5
+    assert s["sextant_room"]["entities"] == 2
+    assert s["sextant_room"]["changes"] == 2
+    assert s["sextant_room"]["changes_per_tracker_hour"] == 1.0  # 2 changes over 2 tracker-hours
+    assert s["sextant_room"]["flip_ratio"] == 0.5
     assert s["sextant_floor"]["changes"] == 1
 
 

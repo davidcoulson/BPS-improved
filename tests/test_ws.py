@@ -175,8 +175,9 @@ def test_kpi_deltas_compare_entities_and_summaries_present_on_both_sides():
     baseline = {"entities": {"sensor.a_sextant_zone": {"changes_per_hour": 10.0, "flip_ratio": 0.5, "median_dwell_s": 100.0, "dead": 1}},
                 "summary": {"sextant_zone": {"changes_per_tracker_hour": 8.0, "flip_ratio": 0.4, "median_of_median_dwell_s": 150.0}}}
     d = kpi.deltas(current, baseline)
-    assert d["entities"] == {"sensor.a_sextant_zone": {"changes_per_hour": -6.0, "flip_ratio": -0.3, "median_dwell_s": 200.0, "dead": -1}}
-    assert d["summary"] == {"sextant_zone": {"changes_per_tracker_hour": -3.0, "flip_ratio": -0.1, "median_of_median_dwell_s": 50.0}}
+    # keys come back under the current names, whatever the recording called them
+    assert d["entities"] == {"sensor.a_sextant_room": {"changes_per_hour": -6.0, "flip_ratio": -0.3, "median_dwell_s": 200.0, "dead": -1}}
+    assert d["summary"] == {"sextant_room": {"changes_per_tracker_hour": -3.0, "flip_ratio": -0.1, "median_of_median_dwell_s": 50.0}}
     assert kpi.deltas({}, None) == {"entities": {}, "summary": {}}
 
 
@@ -210,8 +211,8 @@ def test_kpi_baselines_are_saved_listed_compared_and_deleted(tmp_path, monkeypat
     run(ws.ws_kpi(hass, conn, {"id": 5, "type": "sextant/kpi", "hours": 12, "baseline": "geometric"}))
     result = conn.results[-1][1]
     assert result["baseline"]["name"] == "geometric"
-    assert result["deltas"]["entities"]["sensor.a_sextant_zone"]["changes_per_hour"] == -6.0
-    assert result["deltas"]["summary"]["sextant_zone"]["median_of_median_dwell_s"] == 200.0
+    assert result["deltas"]["entities"]["sensor.a_sextant_room"]["changes_per_hour"] == -6.0
+    assert result["deltas"]["summary"]["sextant_room"]["median_of_median_dwell_s"] == 200.0
     run(ws.ws_kpi_baseline_delete(hass, conn, {"id": 6, "type": "sextant/kpi/baseline/delete", "name": "geometric"}))
     assert conn.results[-1][1] == {"deleted": "geometric"}
     run(ws.ws_kpi_baseline_delete(hass, conn, {"id": 7, "type": "sextant/kpi/baseline/delete", "name": "geometric"}))

@@ -13,7 +13,24 @@ import statistics
 from collections import Counter
 from datetime import datetime
 
-SUFFIXES = ("_sextant_zone", "_sextant_floor")
+SUFFIXES = ("_sextant_room", "_sextant_floor")
+# Older recorder history and saved baselines use the names before the
+# BPS -> Sextant rename and before zones became rooms (3.8.0); one sensor
+# under any of these names is the same sensor.
+LEGACY_SUFFIXES = {"_bps_zone": "_sextant_room", "_sextant_zone": "_sextant_room", "_bps_floor": "_sextant_floor"}
+
+
+def canonical(entity_id):
+    """The current name of a zone/room/floor sensor whatever it was called when recorded."""
+    for old, new in LEGACY_SUFFIXES.items():
+        if entity_id.endswith(old):
+            return entity_id[: -len(old)] + new
+    return entity_id
+
+
+def canonical_group(name):
+    """Summary group name ("sextant_zone" -> "sextant_room")."""
+    return canonical("_" + name).lstrip("_")
 DEAD_STATES = {"unknown", "unavailable", "", None}
 
 
@@ -84,7 +101,7 @@ def summarise(per_entity):
     """Fleet-level roll-up: totals over every entity of one kind."""
     out = {}
     for suffix in SUFFIXES:
-        members = {k: v for k, v in per_entity.items() if k.endswith(suffix)}
+        members = {canonical(k): v for k, v in per_entity.items() if canonical(k).endswith(suffix)}
         if not members:
             continue
         changes = sum(m["changes"] for m in members.values())
@@ -134,8 +151,8 @@ def deltas(current, baseline):
     the baseline simply has no delta row.
     """
     out = {"entities": {}, "summary": {}}
-    cur_e = (current or {}).get("entities") or {}
-    base_e = (baseline or {}).get("entities") or {}
+    cur_e = {canonical(k): v for k, v in ((current or {}).get("entities") or {}).items()}
+    base_e = {canonical(k): v for k, v in ((baseline or {}).get("entities") or {}).items()}
     for eid, metrics in cur_e.items():
         base = base_e.get(eid)
         if not isinstance(base, dict) or not isinstance(metrics, dict):
@@ -147,8 +164,8 @@ def deltas(current, baseline):
                 row[key] = round(a - b, 4)
         if row:
             out["entities"][eid] = row
-    cur_s = (current or {}).get("summary") or {}
-    base_s = (baseline or {}).get("summary") or {}
+    cur_s = {canonical_group(k): v for k, v in ((current or {}).get("summary") or {}).items()}
+    base_s = {canonical_group(k): v for k, v in ((baseline or {}).get("summary") or {}).items()}
     for group, metrics in cur_s.items():
         base = base_s.get(group)
         if not isinstance(base, dict) or not isinstance(metrics, dict):

@@ -1795,7 +1795,7 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
         # No receiver reports any distance for this device: it is out of
         # range. The zone/floor sensors keep their last value (historical
         # behavior), but nearest-zone explicitly reports unknown.
-        update_sextant_sensor_state(hass, f"sensor.{entity}_sextant_nearest_zone", "unknown")
+        update_sextant_sensor_state(hass, f"sensor.{entity}_sextant_nearest_room", "unknown")
         return
 
     # Get previous r-values for this entity
@@ -2136,10 +2136,10 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
                     lowest_floor_name, scale, zone)
             except Exception as e:  # history must never break tracking
                 _LOGGER.debug("Position history record failed for %s: %s", entity, e)
-        update_sextant_sensor_state(hass, f"sensor.{entity}_sextant_zone", zone)
-        update_sextant_sensor_state(hass, f"sensor.{entity}_sextant_nearest_zone", nearest_zone)
+        update_sextant_sensor_state(hass, f"sensor.{entity}_sextant_room", zone)
+        update_sextant_sensor_state(hass, f"sensor.{entity}_sextant_nearest_room", nearest_zone)
         update_sextant_sensor_state(hass, f"sensor.{entity}_sextant_floor", lowest_floor_name)
-        update_sextant_sensor_state(hass, f"sensor.{entity}_sextant_sub_zone", sub_zone, {"parent_zone": parent_zone})
+        update_sextant_sensor_state(hass, f"sensor.{entity}_sextant_spot", sub_zone, {"room": parent_zone})
 
 def _solve_floor_jobs(jobs):
     """Run one tracker's candidate-floor solves. Pure CPU; executor-safe.
@@ -2272,10 +2272,10 @@ async def prune_stale_positions(hass):
         getattr(update_trilateration_and_zone, "last_floor", {}).pop(ent, None)
         getattr(update_trilateration_and_zone, "last_r_values", {}).pop(ent, None)
         _LOGGER.info("Tracker %s not seen for %ss; clearing its position", ent, timeout)
-        update_sextant_sensor_state(hass, f"sensor.{ent}_sextant_zone", "unknown")
+        update_sextant_sensor_state(hass, f"sensor.{ent}_sextant_room", "unknown")
         update_sextant_sensor_state(hass, f"sensor.{ent}_sextant_floor", "unknown")
-        update_sextant_sensor_state(hass, f"sensor.{ent}_sextant_nearest_zone", "unknown")
-        update_sextant_sensor_state(hass, f"sensor.{ent}_sextant_sub_zone", "unknown", {"parent_zone": "unknown"})
+        update_sextant_sensor_state(hass, f"sensor.{ent}_sextant_nearest_room", "unknown")
+        update_sextant_sensor_state(hass, f"sensor.{ent}_sextant_spot", "unknown", {"room": "unknown"})
 
 async def update_apitricords(hass, new_data):
     """Update apitricords in hass.data"""
@@ -3640,7 +3640,7 @@ async def async_unload_entry(hass: HomeAssistant, entry):
         state.entity_id
         for state in hass.states.async_all()
         if state.entity_id.startswith("sensor.")
-        and state.entity_id.endswith(("_sextant_zone", "_sextant_floor", "_sextant_nearest_zone", "_sextant_sub_zone"))
+        and state.entity_id.endswith(("_sextant_room", "_sextant_floor", "_sextant_nearest_room", "_sextant_spot"))
     ]
     for entity_id in sextant_state_ids:
         hass.states.async_remove(entity_id)

@@ -210,7 +210,7 @@ export function fmtLen(metres, hass, digits = 1) {
   if (metres == null || !isFinite(metres)) return "—";
   if (!isImperial(hass)) return `${Number(metres).toFixed(digits)} m`;
   const ft = metres * 3.28084;
-  return ft < 1 ? `${Math.round(ft * 12)} in` : `${ft.toFixed(digits)} ft`;
+  return ft < 2 ? `${Math.round(ft * 12)} in` : `${ft.toFixed(digits)} ft`;   // under two feet reads better in inches
 }
 export function fmtSpeed(mps, hass) {
   if (mps == null || !isFinite(mps)) return "—";
@@ -235,3 +235,26 @@ export function proxyName(data, slugOrAddress) {
   for (const info of Object.values(scanners)) if (info.slug === slugOrAddress && info.name) return info.name;
   return slugOrAddress;
 }
+
+/** Tracker classes: what a tracker is, drawn as that icon on the map. */
+export const TRACKER_CLASSES = [
+  ["", "No class (initials)", null],
+  ["person", "Person", "mdi:account"],
+  ["man", "Man", "mdi:face-man"],
+  ["woman", "Woman", "mdi:face-woman"],
+  ["child", "Child", "mdi:human-child"],
+  ["dog", "Dog", "mdi:dog"],
+  ["cat", "Cat", "mdi:cat"],
+  ["paw", "Paw print", "mdi:paw"],
+  ["phone", "Phone", "mdi:cellphone"],
+  ["watch", "Watch", "mdi:watch"],
+  ["tablet", "Tablet", "mdi:tablet"],
+  ["laptop", "Laptop", "mdi:laptop"],
+  ["keys", "Keys", "mdi:key-chain-variant"],
+  ["wallet", "Wallet", "mdi:wallet"],
+  ["bag", "Bag", "mdi:bag-personal"],
+  ["tag", "Tag / Tile", "mdi:tag"],
+  ["car", "Car", "mdi:car"],
+  ["bike", "Bike", "mdi:bike"],
+];
+export function classIcon(cls) { return (TRACKER_CLASSES.find(([k]) => k === cls) || [])[2] || null; }

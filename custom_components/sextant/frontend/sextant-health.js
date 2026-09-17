@@ -348,21 +348,21 @@ class SextantHealth extends LitElement {
     const k = this._kpi;
     const s = k?.summary || {};
     const d = k?.deltas;
-    const ents = Object.entries(k?.entities || {}).filter(([e]) => e.endsWith("_sextant_zone")).sort((a, b) => (b[1].changes_per_hour ?? 0) - (a[1].changes_per_hour ?? 0));
+    const ents = Object.entries(k?.entities || {}).filter(([e]) => e.endsWith("_sextant_room")).sort((a, b) => (b[1].changes_per_hour ?? 0) - (a[1].changes_per_hour ?? 0));
     // Fewer changes / flips is better (green); a longer dwell is better.
     const lessIsBetter = (v, digits = 1, scale = 1) => v == null ? "—" : html`<span class=${v < 0 ? "good" : v > 0 ? "bad" : ""}>${v > 0 ? "+" : ""}${fmtNum(v * scale, digits)}</span>`;
     const moreIsBetter = (v) => v == null ? "—" : html`<span class=${v > 0 ? "good" : v < 0 ? "bad" : ""}>${v > 0 ? "+" : "−"}${fmtAge(Math.abs(v))}</span>`;
-    const sz = d?.summary?.sextant_zone;
+    const sz = d?.summary?.sextant_room;
     const baselineOptions = [{ value: "", label: "no baseline" }, ...this._baselines.map((b) => ({ value: b.name, label: `${b.name} · ${b.hours} h · ${(b.saved_at || "").slice(0, 10)}` }))];
-    const name = (e) => trackerName(this.data, e.replace(/^sensor\./, "").replace(/_sextant_zone$/, ""));
+    const name = (e) => trackerName(this.data, e.replace(/^sensor\./, "").replace(/_sextant_room$/, ""));
     return html`<section class="card wide">
       <h3>Stability</h3>
       <div class="row">
         ${uiSelect({ label: "Window", value: this._kpiHours, options: [1, 3, 6, 12, 24, 48].map((h) => ({ value: h, label: `${h} h` })), onChange: (v) => { this._kpiHours = Number(v); }, style: "min-width: 110px" })}
         ${uiSelect({ label: "Compare with", value: this._baseline, options: baselineOptions, onChange: (v) => { this._baseline = v; }, style: "min-width: 240px" })}
         ${uiButton({ label: this._busy === "kpi" ? "Computing…" : "Compute", kind: "primary", disabled: this._busy === "kpi", onClick: () => this._runKpi() })}
-        ${s.sextant_zone ? html`<span class="pill">${s.sextant_zone.changes_per_tracker_hour} room changes / tracker-h</span>
-          <span class="pill">flip ratio ${s.sextant_zone.flip_ratio}</span><span class="pill">median dwell ${fmtAge(s.sextant_zone.median_of_median_dwell_s)}</span>` : nothing}
+        ${s.sextant_room ? html`<span class="pill">${s.sextant_room.changes_per_tracker_hour} room changes / tracker-h</span>
+          <span class="pill">flip ratio ${s.sextant_room.flip_ratio}</span><span class="pill">median dwell ${fmtAge(s.sextant_room.median_of_median_dwell_s)}</span>` : nothing}
         ${sz ? html`<span class="pill" title="this window minus the baseline">vs ${k.baseline.name}: ${lessIsBetter(sz.changes_per_tracker_hour, 2)} chg/tracker-h · ${lessIsBetter(sz.flip_ratio, 0, 100)} flip pts · ${moreIsBetter(sz.median_of_median_dwell_s)} dwell</span>` : nothing}
       </div>
       <div class="row">
@@ -383,7 +383,7 @@ class SextantHealth extends LitElement {
       ["Estimator", ["position_estimator", "fingerprint_weight", "fingerprint_floor_weight", "fingerprint_k", "fingerprint_missing_m", "fingerprint_ref_gain", "fingerprint_auto_gain", "distance_estimator", "median_window_secs", "median_min_samples"]],
       ["Solver", ["solver_max_receivers", "solver_max_range", "solver_near_always"]],
       ["Rooms", ["zone_hysteresis", "zone_prob_smoothing", "zone_switch_margin", "zone_switch_secs", "stationary_speed", "stationary_secs", "zone_unlock_margin", "zone_unlock_secs"]],
-      ["Sub-zones", ["subzone_switch_secs", "subzone_enter_prob", "subzone_unlock_margin"]],
+      ["Spots", ["subzone_switch_secs", "subzone_enter_prob", "subzone_unlock_margin"]],
       ["Near-field anchor", ["anchor_max_m", "anchor_ratio", "anchor_secs", "anchor_release_m"]],
       ["Floors", ["floor_switch_secs", "floor_tenure_bonus", "floor_tenure_full_secs", "floor_proximity_weight", "floor_proximity_k"]],
       ["Calibration", ["calibration_target"]],

@@ -8,7 +8,7 @@
  *   circles: false               # solver circles
  *   trails: true                 # recent trail per tracker
  *   labels: true
- *   subzones: true
+ *   subzones: true               # draw the spots
  *   follow: false                # switch floor to follow the first entity
  *
  * Resource: /sextant/sextant-map-card.js (module). The pre-rename name
@@ -16,7 +16,7 @@
  */
 import { LitElement, html, css, nothing } from "./lit.js";
 import { SextantMap } from "./sextant-map.js";
-import { sortFloors } from "./sextant-ui.js";
+import { sortFloors, classIcon, trackerName } from "./sextant-ui.js";
 
 function mapUrlFor(floorName, maps) {
   if (!floorName || !maps) return null;
@@ -84,7 +84,8 @@ class SextantMapCard extends LitElement {
     const rows = (this._positions?.positions || []).filter((p) => p.floor === this._floor && (!wanted || wanted.has(p.ent)));
     const icons = layout?.tracker_icons || {};
     this._icons = this._icons || new Map();
-    this._map.setTrackers(rows.map((p) => ({ ...p, icon: this._icon(icons[p.ent]), label: p.ent.replace(/^private_ble_device_/, "").replace(/^private_ble_/, "").replace(/_/g, " ") })));
+    const classes = layout?.tracker_classes || {};
+    this._map.setTrackers(rows.map((p) => ({ ...p, icon: this._icon(icons[p.ent]), mdi: classIcon(classes[p.ent]), label: trackerName(this._data, p.ent) })));
     if (this._config.trails) for (const p of rows) this._trail(p);
   }
 
