@@ -38,7 +38,6 @@ except ImportError:  # very old shapely
 from asyncio import Lock, Queue, wait_for, TimeoutError
 
 from .calibration import (
-    SextantCalibrationAPI,
     apply_corrections,
     async_cancel_calibration,
     async_restore_calibration_state,
@@ -3090,7 +3089,7 @@ async def async_apply_tuning(hass, settings, reset=False):
 def _register_calibration_services(hass) -> None:
     """Expose the calibration actions as HA services.
 
-    These mirror SextantCalibrationAPI exactly and call the same functions, so the
+    These mirror async_calibration_action exactly and call the same functions, so the
     panel and an automation cannot diverge. The point of having both is that
     the REST view needs a bearer token and a JSON body, which makes it awkward
     from an automation or a script - and unusable from the Developer Tools
@@ -3271,18 +3270,10 @@ async def async_setup(hass, config):
         if "sextant_views_registered" not in hass.data:
             hass.http.register_view(SextantFrontendView())
             hass.http.register_view(SextantSaveAPIText())
-            hass.http.register_view(SextantMapsListAPI())
-            hass.http.register_view(SextantTrackerIconsListAPI())
             hass.http.register_view(SextantUploadTrackerIconAPI())
             hass.http.register_view(SextantReadAPIText())
-            hass.http.register_view(SextantAdjustZonesAPI())
-            hass.http.register_view(SextantReceiverStatusAPI())
-            hass.http.register_view(SextantScannerLinkingAPI())
             hass.http.register_view(SextantCordsAPI(hass))
-            hass.http.register_view(SextantCalibrationAPI())
             hass.http.register_view(SextantSelfTestAPI(hass))
-            hass.http.register_view(SextantTrackerTuneAPI())
-            hass.http.register_view(SextantHistoryAPI(hass))
             hass.data["sextant_views_registered"] = True
 
         if "sextant_services_registered" not in hass.data:
@@ -3494,11 +3485,7 @@ class SextantFrontendView(HomeAssistantView):
     requires_auth = False
     # Dashboards from before the rename still load the card from /bps/.
     extra_urls = ["/bps/{file_name}"]
-    _RENAMED_FILES = {
-        "bps-map-card.js": "sextant-map-card.js",
-        "bps-panel.js": "sextant-panel.js",
-        "bpsstyle.css": "sextant.css",
-    }
+    _RENAMED_FILES = {"bps-map-card.js": "sextant-map-card.js"}
 
     async def get(self, request, file_name):
         """Serve static files from the frontend folder."""
@@ -3628,52 +3615,6 @@ class SextantSaveAPIText(HomeAssistantView):
         return None
 
 
-class SextantAdjustZonesAPI(HomeAssistantView):
-    """Propose a cleaned-up set of zones (square boxy rooms, snap shared
-    boundaries incl. T-junctions, remove overlaps, re-clamp sub-zones).
-
-    Pure-geometry PREVIEW: computes and returns a proposal plus a per-zone
-    change report; it does NOT save. The panel renders the proposal, lets the
-    user accept/reject, then persists via the existing save_text endpoint.
-    """
-
-    url = "/api/sextant/adjust_zones"
-    name = "api:sextant:adjust_zones"
-    requires_auth = True
-
-    async def post(self, request):
-        hass = request.app["hass"]
-        try:
-            body = await request.json()
-        except Exception:
-            return web.Response(status=400, text="Invalid JSON body")
-        if not isinstance(body, dict):
-            return web.Response(status=400, text="Body must be a JSON object")
-        target = "subzones" if body.get("target") == "subzones" else "zones"
-        zones = body.get("zones") or []
-        subzones = body.get("subzones") or []
-        options = body.get("options") or {}
-        if not isinstance(zones, list):
-            zones = []
-        if not isinstance(subzones, list):
-            subzones = []
-        if not isinstance(options, dict):
-            options = {}
-        if target == "subzones":
-            if not subzones:
-                return web.Response(status=400, text="No sub-zones to adjust")
-        elif not zones:
-            return web.Response(status=400, text="No zones to adjust")
-        func = adjust_subzones if target == "subzones" else adjust_zones
-        try:
-            # shapely work is synchronous; keep it off the event loop.
-            result = await hass.async_add_executor_job(func, zones, subzones, options)
-        except Exception as e:
-            _LOGGER.error(f"adjust_zones ({target}) failed: {e}")
-            return web.Response(status=500, text="Zone adjustment failed")
-        return web.json_response(result)
-
-
 class SextantReadAPIText(HomeAssistantView):
     """Return the stored Sextant layout plus the tracked-device / receiver lists."""
 
@@ -3722,105 +3663,26 @@ class SextantReadAPIText(HomeAssistantView):
             _LOGGER.error(f"Failed to read coordinates: {e}")
             return web.Response(status=500, text="Failed to read coordinates")
 
-class SextantReceiverStatusAPI(HomeAssistantView):
-    """Current offline receivers (Bermuda liveness), polled live by the panel."""
-    url = "/api/sextant/receiver_status"
-    name = "api:sextant:receiver_status"
-    requires_auth = True
-
-    async def get(self, request):
-        hass = request.app["hass"]
-        offline = hass.data.get(DOMAIN, {}).get("rl_offline", [])
-        return web.json_response({"offline": list(offline)})
+def list_map_files(maps_path):
+    """Map image file names on disk (runs in the executor)."""
+    with os.scandir(maps_path) as entries:
+        return [
+            entry.name
+            for entry in entries
+            if entry.is_file() and entry.name.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
+        ]
 
 
-class SextantScannerLinkingAPI(HomeAssistantView):
-    """On-demand debug view (issue #64): how each placed receiver links to its
-    Bermuda distance sensors and whether each is reporting right now. Fetched
-    live only when the panel's 'Scanner linking' section is expanded, so it
-    never adds cost to a normal panel load or the tracking loop."""
-    url = "/api/sextant/scanner_linking"
-    name = "api:sextant:scanner_linking"
-    requires_auth = True
-
-    async def get(self, request):
-        hass = request.app["hass"]
-        # No placements to compare against is fine; still report the sensors.
-        layout = get_layout(hass)
-        content = json.dumps(layout) if layout else ""
-        try:
-            data = _scanner_linking(hass, content)
-        except Exception as e:
-            _LOGGER.error(f"scanner_linking failed: {e}")
-            data = {"placed": [], "unplaced": []}
-        try:
-            data["beacons"] = _beacon_links(hass)
-        except Exception as e:
-            _LOGGER.error(f"beacon_links failed: {e}")
-            data["beacons"] = []
-        return web.json_response(data)
-
-
-class SextantMapsListAPI(HomeAssistantView):
-    """API to list map files in /www/sextant_maps."""
-    url = "/api/sextant/maps"
-    name = "api:sextant:maps"
-    requires_auth = True
-
-    @staticmethod
-    def _list_map_files(maps_path):
-        """List map file names from disk (runs in executor)."""
-        with os.scandir(maps_path) as entries:
-            return [
-                entry.name
-                for entry in entries
-                if entry.is_file() and entry.name.lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
-            ]
-
-    async def get(self, request):
-        """Return a list of map files as JSON."""
-        hass = request.app["hass"]
-        maps_path = hass.config.path("www/sextant_maps")
-
-        try:
-            file_names = await hass.async_add_executor_job(self._list_map_files, maps_path)
-            return web.json_response(file_names)
-        except Exception as e:
-            _LOGGER.error(f"Error listing map files: {e}")
-            return web.Response(status=500, text="Error listing map files")
-
-
-class SextantTrackerIconsListAPI(HomeAssistantView):
-    """API to list tracker icon files."""
-
-    url = "/api/sextant/tracker_icons"
-    name = "api:sextant:tracker_icons"
-    requires_auth = True
-
-    @staticmethod
-    def _list_tracker_icons(icons_path):
-        if not os.path.isdir(icons_path):
-            return []
-        with os.scandir(icons_path) as entries:
-            return [
-                {"value": f"/local/sextant_icons/{entry.name}", "label": entry.name}
-                for entry in entries
-                if entry.is_file() and entry.name.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".svg"))
-            ]
-
-    async def get(self, request):
-        hass = request.app["hass"]
-        icons_path = hass.config.path("www/sextant_icons")
-        try:
-            custom_icons = await hass.async_add_executor_job(self._list_tracker_icons, icons_path)
-            defaults = [
-                {"value": "/sextant/person.svg", "label": "Person (default)"},
-                {"value": "/sextant/beacon.svg", "label": "Beacon"},
-            ]
-            return web.json_response(defaults + custom_icons)
-        except Exception as e:
-            _LOGGER.error(f"Error listing tracker icons: {e}")
-            return web.Response(status=500, text="Error listing tracker icons")
+def list_tracker_icons(icons_path):
+    """Custom tracker icons as picker options (runs in the executor)."""
+    if not os.path.isdir(icons_path):
+        return []
+    with os.scandir(icons_path) as entries:
+        return [
+            {"value": f"/local/sextant_icons/{entry.name}", "label": entry.name}
+            for entry in entries
+            if entry.is_file() and entry.name.lower().endswith((".png", ".svg", ".jpg", ".jpeg", ".webp", ".gif"))
+        ]
 
 
 class SextantUploadTrackerIconAPI(HomeAssistantView):
@@ -4210,199 +4072,8 @@ def _selftest_summary(result):
     return attrs["cep95_m"], attrs
 
 
-class SextantTrackerTuneAPI(HomeAssistantView):
-    """Set one tracker's ref-power trim and apply it immediately (issue #92).
-
-    The panel's "Save Floor Plan" writes the WHOLE layout, so it can't be used
-    for live tuning: it would also commit whatever zone/receiver edits happen to
-    be staged. This writes just the one field under the layout lock, so the
-    tracking loop picks the new value up on its next tick (~1 s) and the map
-    updates on the panel's next poll — the real-time feedback the request asked
-    for — while the panel keeps its own copy in sync so a later full save agrees.
-    """
-
-    url = "/api/sextant/tracker_tune"
-    name = "api:sextant:tracker_tune"
-    requires_auth = True
-
-    async def post(self, request):
-        hass = request.app["hass"]
-        try:
-            body = await request.json()
-        except Exception:
-            # Not just JSONDecodeError: a bad charset raises UnicodeDecodeError,
-            # which is a sibling ValueError and would otherwise escape as a 500.
-            return web.json_response({"error": "Invalid JSON body"}, status=400)
-        if not isinstance(body, dict):
-            # A valid non-object body ([], null, 5) parses fine but has no .get.
-            return web.json_response({"error": "Body must be a JSON object"}, status=400)
-
-        entity = body.get("entity")
-        if not isinstance(entity, str) or not entity:
-            return web.json_response({"error": "entity is required"}, status=400)
-
-        raw = body.get("ref_offset_db")
-        offset = None  # None = clear the trim for this tracker
-        if raw is not None:
-            if isinstance(raw, bool) or not isinstance(raw, (int, float)):
-                return web.json_response({"error": "ref_offset_db must be a number"}, status=400)
-            try:
-                # Coerce FIRST: a JSON integer literal with hundreds of digits
-                # parses to a Python int that math.isfinite() can't convert,
-                # raising OverflowError (a 500) for what is just out of range.
-                value = float(raw)
-            except (OverflowError, ValueError):
-                return web.json_response(
-                    {"error": f"ref_offset_db must be within +/-{TRACKER_REF_OFFSET_MAX_DB} dB"},
-                    status=400,
-                )
-            if not math.isfinite(value) or abs(value) > TRACKER_REF_OFFSET_MAX_DB:
-                return web.json_response(
-                    {"error": f"ref_offset_db must be within +/-{TRACKER_REF_OFFSET_MAX_DB} dB"},
-                    status=400,
-                )
-            offset = value
-
-        async with LAYOUT_LOCK:
-            coords = get_layout_for_edit(hass)
-            if not isinstance(coords, dict):
-                return web.json_response({"error": "No layout saved yet"}, status=400)
-            offsets = coords.get("tracker_ref_offsets")
-            if not isinstance(offsets, dict):
-                offsets = {}
-            if offset is None or offset == 0.0:
-                offsets.pop(entity, None)  # unset -> back to no trim
-            else:
-                offsets[entity] = offset
-            coords["tracker_ref_offsets"] = offsets
-            await save_layout(hass, coords)
-
-        applied = 0.0 if offset is None else offset
-        return web.json_response({
-            "entity": entity,
-            "ref_offset_db": applied,
-            "distance_factor": round(10.0 ** (applied / (10.0 * PATH_LOSS_EXPONENT)), 4),
-        })
-
-
-# Points returned per history query when the caller does not ask. Enough to
-# draw a smooth trail on a floor plan; the decimation still spans the window.
 HISTORY_DEFAULT_POINTS = 3000
 HISTORY_MAX_QUERY_POINTS = 20000
-
-
-class SextantHistoryAPI(HomeAssistantView):
-    """Past positions of a tracked device, for the map's time scrubber.
-
-    GET with no ``entity`` returns the index (what is retained, for whom, plus
-    the effective settings) so the panel can populate its picker and size the
-    slider. GET with an ``entity`` returns that tracker's trail over
-    [from, to], decimated to ``max_points``.
-
-    Coordinates come back in METRES in the named floor's frame together with
-    that floor's scale, so the panel projects them with the CURRENT map scale
-    and a re-exported floor plan does not misplace the past.
-    """
-
-    url = "/api/sextant/history"
-    name = "api:sextant:history"
-    requires_auth = True
-
-    def __init__(self, hass):
-        self.hass = hass
-
-    @staticmethod
-    def _num(raw, default):
-        """A query param as a float, falling back rather than 400-ing on junk."""
-        if raw is None:
-            return default
-        try:
-            value = float(raw)
-        except (TypeError, ValueError, OverflowError):
-            return default
-        return value if math.isfinite(value) else default
-
-    async def get(self, request):
-        hass = self.hass
-        hist = get_position_history(hass)
-        hist.configure(history_mod.history_config(get_layout(hass)))
-        # Drop anything now outside the window before answering: record() only
-        # ages the tracker it touched, so a device that stopped reporting would
-        # otherwise still be served long past the configured retention.
-        hist.evict_all()
-        cfg = dict(hist.cfg)
-        now = time.time()
-
-        entity = request.query.get("entity")
-        if not entity:
-            files, size = await hass.async_add_executor_job(
-                history_mod.disk_usage, history_dir(hass))
-            return web.json_response({
-                "now": now,
-                "config": cfg,
-                "trackers": [dict(hist.retained(e) or {}, ent=e) for e in hist.entities()],
-                "disk": {"files": files, "bytes": size},
-                "pending": hist.pending_count(),
-                "dropped": hist.dropped_pending,
-            })
-
-        to = self._num(request.query.get("to"), now)
-        # Default window = the whole retained span, so the slider opens showing
-        # everything there is rather than an arbitrary slice.
-        frm = self._num(request.query.get("from"), to - cfg["max_age"])
-        if frm > to:
-            frm, to = to, frm
-        max_points = int(min(max(2.0, self._num(request.query.get("max_points"),
-                                                HISTORY_DEFAULT_POINTS)),
-                             HISTORY_MAX_QUERY_POINTS))
-
-        data = hist.query(entity, frm, to, max_points)
-        data["now"] = now
-        data["from"] = frm
-        data["to"] = to
-        data["retained"] = hist.retained(entity)
-        data["config"] = cfg
-        return web.json_response(data)
-
-    async def post(self, request):
-        """Clear the record — for one tracker, or all of it.
-
-        Settings live in the layout (``history_*``) and are written by the
-        normal floor-plan save; the only stateful action worth its own endpoint
-        is forgetting, which nothing else can do.
-        """
-        try:
-            body = await request.json()
-        except Exception:
-            return web.json_response({"error": "Invalid JSON body"}, status=400)
-        if not isinstance(body, dict):
-            return web.json_response({"error": "Body must be a JSON object"}, status=400)
-        if body.get("action") != "clear":
-            return web.json_response({"error": "Unsupported action"}, status=400)
-
-        hass = self.hass
-        hist = get_position_history(hass)
-        entity = body.get("entity")
-        if entity is not None and not isinstance(entity, str):
-            return web.json_response({"error": "entity must be a string"}, status=400)
-
-        dirpath = history_dir(hass)
-        # Under the flush lock from end to end: otherwise a flush that has
-        # already drained its rows lands after the delete and puts the
-        # forgotten positions straight back on disk.
-        async with _history_lock(hass):
-            # Forget in memory FIRST - this also drops that tracker's queued
-            # rows, so the next flush cannot write back what we just erased.
-            hist.forget(entity or None)
-            if entity:
-                # Segments are shared by every tracker, so a per-tracker clear
-                # cannot just delete files: rewrite them without its rows.
-                removed = await hass.async_add_executor_job(
-                    history_mod.drop_entity, dirpath, entity)
-            else:
-                removed = await hass.async_add_executor_job(
-                    history_mod.clear_segments, dirpath)
-        return web.json_response({"cleared": entity or "*", "removed": removed})
 
 
 class SextantSelfTestAPI(HomeAssistantView):

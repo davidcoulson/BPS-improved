@@ -7,15 +7,13 @@
  *   edit     the floor-plan editor
  *   devices  Bermuda trackers, candidates, Tiles and FindMy accessories
  *   health   receivers, calibration, self-test, KPI, tuning
- *   legacy   the previous editor, until the new one reaches parity
  */
 import { LitElement, html, css, nothing } from "./lit.js";
 import { SextantMap, trackerHue } from "./sextant-map.js";
-import { sharedStyles, fmtAge, toast } from "./sextant-ui.js";
+import { sharedStyles, widgetStyles, fmtAge, toast, ensureHaComponents, uiSwitch, uiSelect, uiButton, callWS, slugLabel } from "./sextant-ui.js";
 import "./sextant-devices.js";
 import "./sextant-health.js";
 import "./sextant-edit.js";
-import "./sextant-legacy.js";
 
 const MODES = [
   ["live", "Live", "mdi:map-marker-radius"],
@@ -57,6 +55,9 @@ class SextantPanel extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
+    // HA's form elements are loaded by HA itself; make sure they exist before
+    // the first render so the modes pick them instead of the plain fallbacks.
+    ensureHaComponents().then(() => this.requestUpdate());
     this._load();
     this._subscribe();
   }
@@ -117,12 +118,9 @@ class SextantPanel extends LitElement {
                     @click=${() => this._setMode(id)} title=${label}>
               <ha-icon icon=${icon}></ha-icon><span class="mode-label">${label}</span>
             </button>`)}
-          <button role="tab" class=${this._mode === "legacy" ? "active" : ""} @click=${() => this._setMode("legacy")} title="Legacy editor">
-            <ha-icon icon="mdi:history"></ha-icon><span class="mode-label">Legacy</span>
-          </button>
         </nav>
         <div class="spacer"></div>
-        ${floors.length && this._mode !== "legacy" && this._mode !== "devices" ? html`
+        ${floors.length && this._mode !== "devices" ? html`
           <label class="floor-pick">
             <span class="sr">Floor</span>
             <select @change=${(e) => { this._floor = e.target.value; }}>
@@ -148,8 +146,6 @@ class SextantPanel extends LitElement {
       case "health":
         return html`<sextant-health .hass=${this.hass} .data=${this._data} .positions=${this._positions} .floor=${this._floor}
                                     @layout-changed=${() => this._onLayoutChanged()}></sextant-health>`;
-      case "legacy":
-        return html`<sextant-legacy-panel .hass=${this.hass} .narrow=${this.narrow}></sextant-legacy-panel>`;
       default:
         return html`<sextant-live .hass=${this.hass} .data=${this._data} .positions=${this._positions} .floor=${this._floor}
                                   @floor-changed=${(e) => { this._floor = e.detail; }}></sextant-live>`;
@@ -189,11 +185,13 @@ class SextantLive extends LitElement {
     _options: { state: true },
     _history: { state: true },
     _scrub: { state: true },
+    _links: { state: true },
   };
 
   constructor() {
     super();
     this._selected = null;
+    this._links = null;
     this._options = { circles: false, fingerprint: false, trails: true, grid: "off", labels: true, subzones: true, receiverLabels: false };
     try { Object.assign(this._options, JSON.parse(localStorage.getItem("sextant.live.options") || "{}")); } catch { /* ignore */ }
     this._history = null; // {ent, from, to, points:[{t,x,y,f}] }
@@ -203,13 +201,24 @@ class SextantLive extends LitElement {
 
   firstUpdated() {
     this._map = new SextantMap(this.renderRoot.querySelector("canvas"), {
-      onSelect: (hit) => { this._selected = hit?.kind === "tracker" ? hit.ent : null; },
+      onSelect: (hit) => { this._select(hit?.kind === "tracker" ? hit.ent : null); },
     });
+    this._linksTimer = setInterval(() => { if (this._selected) this._loadLinks(); }, 10000);
     this._pushFloor();
     this._pushTrackers();
   }
 
-  disconnectedCallback() { super.disconnectedCallback(); this._map?.destroy(); }
+  disconnectedCallback() { super.disconnectedCallback(); this._map?.destroy(); clearInterval(this._linksTimer); }
+
+  _select(ent) {
+    this._selected = ent;
+    if (ent) this._loadLinks(); else this._links = null;
+  }
+
+  async _loadLinks() {
+    const r = await this.hass.callWS({ type: "sextant/beacon_links" }).catch(() => null);
+    if (r) this._links = r.beacons || [];
+  }
 
   updated(changed) {
     if (!this._map) return;
@@ -296,11 +305,10 @@ class SextantLive extends LitElement {
     return html`
       <div class="stage"><canvas></canvas>
         <div class="overlay">
-          ${[["circles", "Circles"], ["fingerprint", "Fingerprint"], ["trails", "Trails"], ["labels", "Labels"], ["subzones", "Sub-zones"], ["receiverLabels", "Receiver names"]].map(([k, l]) => html`
-            <label><input type="checkbox" .checked=${!!this._options[k]} @change=${(e) => this._setOption(k, e.target.checked)}> ${l}</label>`)}
-          <label>Grid <select @change=${(e) => this._setOption("grid", e.target.value)}>
-            ${["off", "m", "ft"].map((u) => html`<option value=${u} ?selected=${this._options.grid === u}>${u}</option>`)}</select></label>
-          <button class="ghost" @click=${() => this._map.fit()} title="Fit map">Fit</button>
+          ${[["circles", "Circles"], ["fingerprint", "Fingerprint"], ["trails", "Trails"], ["labels", "Labels"], ["subzones", "Sub-zones"], ["receiverLabels", "Receiver names"]].map(([k, l]) =>
+            uiSwitch({ label: l, checked: !!this._options[k], onChange: (v) => this._setOption(k, v) }))}
+          ${uiSelect({ label: "Grid", value: this._options.grid, options: [{ value: "off", label: "No grid" }, { value: "m", label: "Metres" }, { value: "ft", label: "Feet" }], onChange: (v) => this._setOption("grid", v), style: "min-width: 120px" })}
+          ${uiButton({ label: "Fit map", kind: "text", icon: "mdi:fit-to-screen", onClick: () => this._map.fit() })}
         </div>
         ${h ? html`
           <div class="scrub">
@@ -308,14 +316,14 @@ class SextantLive extends LitElement {
             <input type="range" min=${h.from} max=${h.to} step="1" .value=${String(this._scrub ?? h.to)}
                    @input=${(e) => { this._scrub = Number(e.target.value); }}>
             <span>${new Date(h.to * 1000).toLocaleTimeString()}</span>
-            <button class="ghost" @click=${() => this._loadHistory(null)}>Live</button>
+            ${uiButton({ label: "Back to live", kind: "text", onClick: () => this._loadHistory(null) })}
           </div>` : nothing}
       </div>
       <aside class="side">
         <h3>Trackers <span class="muted">${rows.length}</span></h3>
         <ul class="list">
           ${rows.map((p) => html`
-            <li class=${p.ent === this._selected ? "selected" : ""} @click=${() => { this._selected = p.ent; if (p.floor && p.floor !== this.floor) this.dispatchEvent(new CustomEvent("floor-changed", { detail: p.floor })); }}>
+            <li class=${p.ent === this._selected ? "selected" : ""} @click=${() => { this._select(p.ent); if (p.floor && p.floor !== this.floor) this.dispatchEvent(new CustomEvent("floor-changed", { detail: p.floor })); }}>
               <span class="dot" style="background: hsl(${trackerHue(p.ent)}, 70%, 45%)"></span>
               <span class="name">${this._label(p.ent)}</span>
               <span class="where">${p.zone}${p.sub_zone && p.sub_zone !== "unknown" ? ` · ${p.sub_zone}` : ""}</span>
@@ -337,19 +345,34 @@ class SextantLive extends LitElement {
               <dt>Updated</dt><dd>${fmtAge(Date.now() / 1000 - sel.updated)} ago</dd>
             </dl>
             <div class="row">
-              <button @click=${() => this._loadHistory(sel.ent)} ?disabled=${h?.ent === sel.ent}>Scrub history</button>
+              ${uiButton({ label: "Scrub history", icon: "mdi:history", disabled: h?.ent === sel.ent, onClick: () => this._loadHistory(sel.ent) })}
             </div>
+            ${this._renderLinks(sel.ent)}
           </div>` : nothing}
       </aside>
     `;
   }
 
-  static styles = [sharedStyles, css`
+  _renderLinks(ent) {
+    const row = (this._links || []).find((b) => b.device === ent);
+    if (!row) return html`<div class="muted small">Loading receivers…</div>`;
+    const recs = row.receivers || [];
+    return html`<details open class="links">
+      <summary>Heard by ${recs.length} receiver${recs.length === 1 ? "" : "s"}</summary>
+      <table class="small"><tr><th>Receiver</th><th class="num">Distance</th></tr>
+        ${recs.slice(0, 16).map((r) => html`<tr><td>${r.scanner}</td><td class="num">${r.distance} ${r.unit}</td></tr>`)}
+        ${recs.length > 16 ? html`<tr><td class="muted" colspan="2">and ${recs.length - 16} more</td></tr>` : nothing}
+      </table>
+    </details>`;
+  }
+
+  static styles = [sharedStyles, widgetStyles, css`
     :host { display: grid; grid-template-columns: 1fr 300px; min-height: 0; }
     .stage { position: relative; min-width: 0; }
     canvas { width: 100%; height: 100%; display: block; --sextant-map-bg: var(--card-background-color, #fff); }
     .overlay { position: absolute; left: 10px; top: 10px; display: flex; flex-wrap: wrap; gap: 8px 12px; padding: 6px 10px; border-radius: 8px; background: var(--card-background-color); box-shadow: var(--ha-card-box-shadow, 0 1px 4px rgba(0,0,0,0.2)); font-size: 12px; align-items: center; max-width: calc(100% - 20px); }
-    .overlay label { display: inline-flex; align-items: center; gap: 4px; }
+    .overlay ha-formfield { --mdc-typography-body2-font-size: 12px; }
+    .links table { margin-top: 6px; }
     .scrub { position: absolute; left: 10px; right: 10px; bottom: 10px; display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 8px; background: var(--card-background-color); box-shadow: var(--ha-card-box-shadow, 0 1px 4px rgba(0,0,0,0.2)); font-size: 12px; font-variant-numeric: tabular-nums; }
     .scrub input { flex: 1; }
     .side { border-left: 1px solid var(--divider-color); overflow: auto; padding: 12px; }

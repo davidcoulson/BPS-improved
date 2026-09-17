@@ -74,11 +74,11 @@ async def ws_layout_get(hass, connection, msg):
     maps_path = hass.config.path("www/sextant_maps")
     icons_path = hass.config.path("www/sextant_icons")
     try:
-        maps = await hass.async_add_executor_job(core.SextantMapsListAPI._list_map_files, maps_path)
+        maps = await hass.async_add_executor_job(core.list_map_files, maps_path)
     except Exception:  # noqa: BLE001 - a missing folder is an empty list
         maps = []
     try:
-        icons = await hass.async_add_executor_job(core.SextantTrackerIconsListAPI._list_tracker_icons, icons_path)
+        icons = await hass.async_add_executor_job(core.list_tracker_icons, icons_path)
     except Exception:  # noqa: BLE001
         icons = []
     tracked = bermuda_source.async_get_tracked_device_prefixes(hass)
@@ -331,6 +331,14 @@ async def ws_scanner_linking(hass, connection, msg):
     connection.send_result(msg["id"], core._scanner_linking(hass, json.dumps(layout) if layout else ""))
 
 
+@websocket_api.websocket_command({vol.Required("type"): "sextant/beacon_links"})
+@websocket_api.async_response
+async def ws_beacon_links(hass, connection, msg):
+    """For every tracked device, the receivers currently hearing it, nearest first."""
+    core = _core()
+    connection.send_result(msg["id"], {"beacons": _safe(lambda: core._beacon_links(hass), [])})
+
+
 @websocket_api.websocket_command({vol.Required("type"): "sextant/receivers"})
 @websocket_api.async_response
 async def ws_receivers(hass, connection, msg):
@@ -540,7 +548,7 @@ async def ws_bermuda_tiles(hass, connection, msg):
 COMMANDS = (
     ws_layout_get, ws_layout_save, ws_tuning_set, ws_tracker_tune,
     ws_history_index, ws_history_get, ws_history_clear,
-    ws_calibration_status, ws_calibration_action, ws_selftest, ws_scanner_linking, ws_receivers,
+    ws_calibration_status, ws_calibration_action, ws_selftest, ws_scanner_linking, ws_receivers, ws_beacon_links,
     ws_adjust_zones, ws_kpi,
     ws_bermuda_candidates, ws_bermuda_tracked, ws_bermuda_track, ws_bermuda_findmy, ws_bermuda_findmy_add,
     ws_bermuda_findmy_remove, ws_bermuda_options, ws_bermuda_options_set, ws_bermuda_scanners, ws_bermuda_tiles,

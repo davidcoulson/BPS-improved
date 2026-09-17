@@ -2,7 +2,7 @@
  * Health mode: receivers, calibration, self-test, stability KPI and tuning.
  */
 import { LitElement, html, css, nothing } from "./lit.js";
-import { sharedStyles, fmtAge, fmtNum, toast, callWS, confirmDialog } from "./sextant-ui.js";
+import { sharedStyles, widgetStyles, fmtAge, fmtNum, toast, callWS, confirmDialog, uiField, uiSelect, uiSwitch, uiButton } from "./sextant-ui.js";
 
 class SextantHealth extends LitElement {
   static properties = {
@@ -123,6 +123,7 @@ class SextantHealth extends LitElement {
       ${this._renderSelftest()}
       ${this._renderKpi()}
       ${this._renderTuning()}
+      ${this._renderHistory()}
     </div></div>`;
   }
 
@@ -139,7 +140,7 @@ class SextantHealth extends LitElement {
         <span class="pill ${unmatched ? "warn" : "ok"}">${unmatched} unmatched</span>
         <span class="pill">${(rx?.unplaced || []).length} heard but unplaced</span>
         <span class="grow"></span>
-        <button class="ghost" @click=${() => this._refresh()}>Refresh</button>
+        ${uiButton({ label: "Refresh", kind: "text", icon: "mdi:refresh", onClick: () => this._refresh() })}
       </div>
       <div class="wrap"><table>
         <tr><th>Receiver</th><th>Floor</th><th>Status</th><th class="num">Last heard</th><th class="num">Corr.</th><th class="num">Height</th></tr>
@@ -179,17 +180,16 @@ class SextantHealth extends LitElement {
           ${cal.error ? html`<span class="pill bad">${cal.error}</span>` : nothing}
         </div>
         <div class="row">
-          <label class="field">Floor<select @change=${(e) => { this._calFloor = e.target.value; }}>
-            ${floors.map((f) => html`<option value=${f.name} ?selected=${f.name === this._calFloor}>${f.name}</option>`)}</select></label>
-          <label class="field">Duration s<input type="number" min="60" max="3600" step="30" .value=${String(this._calDuration)} @change=${(e) => { this._calDuration = Number(e.target.value); }}></label>
-          <button class="primary" ?disabled=${sampling || !!this._busy} @click=${() => this._calAction("start", { floor: this._calFloor, duration: this._calDuration })}>Start run</button>
-          <button ?disabled=${!!this._busy} @click=${() => this._calAction("cancel")}>Cancel</button>
-          <label class="inline"><input type="checkbox" .checked=${cal.mode === "auto"} @change=${(e) => this._calAction("auto", { enabled: e.target.checked })}> Auto calibration</label>
+          ${uiSelect({ label: "Floor", value: this._calFloor, options: floors.map((f) => ({ value: f.name, label: f.name })), onChange: (v) => { this._calFloor = v; } })}
+          ${uiField({ label: "Duration (s)", type: "number", min: 60, max: 3600, step: 30, value: this._calDuration, onChange: (v) => { this._calDuration = Number(v); }, style: "width: 130px" })}
+          ${uiButton({ label: "Start run", kind: "primary", disabled: sampling || !!this._busy, onClick: () => this._calAction("start", { floor: this._calFloor, duration: this._calDuration }) })}
+          ${uiButton({ label: "Cancel", kind: "text", disabled: !!this._busy, onClick: () => this._calAction("cancel") })}
+          ${uiSwitch({ label: "Auto calibration", checked: cal.mode === "auto", onChange: (v) => this._calAction("auto", { enabled: v }) })}
         </div>
         <div class="row">
-          <button ?disabled=${!!this._busy} @click=${() => this._calAction("solve", { floor: this._calFloor })}>Solve now</button>
-          <button ?disabled=${!!this._busy || !results[this._calFloor]} @click=${() => this._calAction("apply", { floor: this._calFloor })}>Apply corrections</button>
-          <button class="danger" ?disabled=${!!this._busy} @click=${() => confirmDialog(`Reset corrections on ${this._calFloor}?`) && this._calAction("reset", { floor: this._calFloor })}>Reset</button>
+          ${uiButton({ label: "Solve now", disabled: !!this._busy, onClick: () => this._calAction("solve", { floor: this._calFloor }) })}
+          ${uiButton({ label: "Apply corrections", disabled: !!this._busy || !results[this._calFloor], onClick: () => this._calAction("apply", { floor: this._calFloor }) })}
+          ${uiButton({ label: "Reset", kind: "danger", disabled: !!this._busy, onClick: () => confirmDialog(`Reset corrections on ${this._calFloor}?`) && this._calAction("reset", { floor: this._calFloor }) })}
         </div>
         ${Object.entries(results).map(([floor, r]) => html`<details ?open=${floor === this._calFloor}>
           <summary>${floor}: ${r.pairs_used} pairs, error ×${fmtNum(r.error_factor_before, 2)} → ×${fmtNum(r.error_factor_after, 2)}${r.low_confidence?.length ? html` <span class="pill warn">${r.low_confidence.length} low confidence</span>` : nothing}</summary>
@@ -208,7 +208,7 @@ class SextantHealth extends LitElement {
     return html`<section class="card">
       <h3>Receiver self-test</h3>
       <p class="small muted">Leave-one-out: each receiver is located from the others' ranges to it and compared with where it is placed.</p>
-      <div class="row"><button ?disabled=${this._busy === "selftest"} @click=${() => this._runSelftest()}>${this._busy === "selftest" ? "Running…" : "Run self-test"}</button>
+      <div class="row">${uiButton({ label: this._busy === "selftest" ? "Running…" : "Run self-test", kind: "primary", disabled: this._busy === "selftest", onClick: () => this._runSelftest() })}
         ${st ? html`<span class="pill ${Number(st.state) < 2 ? "ok" : Number(st.state) < 4 ? "warn" : "bad"}">CEP95 ${st.state} m</span>` : nothing}</div>
       ${st ? html`<div class="wrap"><table><tr><th>Receiver</th><th class="num">Error m</th><th class="num">Neighbours</th></tr>
         ${Object.entries(st.result?.receivers || st.result || {}).filter(([, v]) => v && typeof v === "object").sort((a, b) => (b[1].error_m ?? -1) - (a[1].error_m ?? -1)).slice(0, 60).map(([slug, v]) => html`<tr><td>${slug}</td><td class="num">${v.error_m != null ? fmtNum(v.error_m, 2) : html`<span class="muted">unsolved</span>`}</td><td class="num">${v.neighbors ?? v.neighbours ?? "—"}</td></tr>`)}
@@ -223,9 +223,8 @@ class SextantHealth extends LitElement {
     return html`<section class="card">
       <h3>Stability</h3>
       <div class="row">
-        <label class="field">Window<select @change=${(e) => { this._kpiHours = Number(e.target.value); }}>
-          ${[1, 3, 6, 12, 24, 48].map((h) => html`<option value=${h} ?selected=${h === this._kpiHours}>${h} h</option>`)}</select></label>
-        <button ?disabled=${this._busy === "kpi"} @click=${() => this._runKpi()}>${this._busy === "kpi" ? "Computing…" : "Compute"}</button>
+        ${uiSelect({ label: "Window", value: this._kpiHours, options: [1, 3, 6, 12, 24, 48].map((h) => ({ value: h, label: `${h} h` })), onChange: (v) => { this._kpiHours = Number(v); }, style: "min-width: 110px" })}
+        ${uiButton({ label: this._busy === "kpi" ? "Computing…" : "Compute", kind: "primary", disabled: this._busy === "kpi", onClick: () => this._runKpi() })}
         ${s.sextant_zone ? html`<span class="pill">${s.sextant_zone.changes_per_tracker_hour} zone changes / tracker-h</span>
           <span class="pill">flip ratio ${s.sextant_zone.flip_ratio}</span><span class="pill">median dwell ${fmtAge(s.sextant_zone.median_of_median_dwell_s)}</span>` : nothing}
       </div>
@@ -254,18 +253,36 @@ class SextantHealth extends LitElement {
       if (!s) return nothing;
       const v = this._tuning[key];
       const set = (value) => { this._tuning = { ...this._tuning, [key]: value }; };
-      if (s.type === "bool") return html`<label class="inline"><input type="checkbox" .checked=${v == null ? !!s.default : !!v} @change=${(e) => set(e.target.checked)}> ${key}</label>`;
-      if (s.type === "str") return html`<label class="field">${key}<select @change=${(e) => set(e.target.value)}>${s.choices.map((c) => html`<option value=${c} ?selected=${(v ?? s.default) === c}>${c}</option>`)}</select></label>`;
-      return html`<label class="field" title="${s.min} to ${s.max}, default ${s.default}">${key}<input type="number" step=${s.type === "int" ? 1 : "any"} min=${s.min} max=${s.max} placeholder=${s.default} .value=${v == null ? "" : String(v)} @change=${(e) => set(e.target.value === "" ? null : Number(e.target.value))}></label>`;
+      if (s.type === "bool") return uiSwitch({ label: key, checked: v == null ? !!s.default : !!v, onChange: set });
+      if (s.type === "str") return uiSelect({ label: key, value: v ?? s.default, options: s.choices.map((c) => ({ value: c, label: c })), onChange: set, style: "min-width: 200px" });
+      return uiField({ label: key, type: "number", step: s.type === "int" ? 1 : "any", min: s.min, max: s.max, placeholder: String(s.default), value: v == null ? "" : v, onChange: (val) => set(val === "" ? null : Number(val)), style: "width: 200px" });
     };
     return html`<section class="card">
       <h3>Tuning <span class="muted small">applies live, no restart</span></h3>
       ${groups.map(([name, keys]) => html`<h4>${name}</h4><div class="row">${keys.map(field)}</div>`)}
-      <div class="row"><button class="primary" @click=${() => this._saveTuning()}>Apply</button><button class="ghost" @click=${() => this._resetTuning()}>Restore defaults</button></div>
+      <div class="row">${uiButton({ label: "Apply", kind: "primary", onClick: () => this._saveTuning() })}${uiButton({ label: "Restore defaults", kind: "text", onClick: () => this._resetTuning() })}</div>
     </section>`;
   }
 
-  static styles = [sharedStyles, css`
+  async _clearHistory(entity) {
+    if (!confirmDialog(entity ? `Forget the recorded positions of ${entity}?` : "Forget every tracker's recorded positions?")) return;
+    const r = await callWS(this, this.hass, { type: "sextant/history/clear", ...(entity ? { entity } : {}) });
+    if (r) toast(this, `History cleared (${r.removed} file${r.removed === 1 ? "" : "s"} rewritten)`);
+  }
+
+  _renderHistory() {
+    const ents = this.data?.entities || [];
+    return html`<section class="card">
+      <h3>Position history</h3>
+      <p class="small muted">Positions are kept on disk for the scrubber in Live mode (retention is set by the layout's history keys). Forgetting is the one thing nothing else can do.</p>
+      <div class="row">
+        ${uiSelect({ label: "Tracker", value: this._histEnt || "", options: [{ value: "", label: "every tracker" }, ...ents.map((e) => ({ value: e, label: e }))], onChange: (v) => { this._histEnt = v; }, style: "min-width: 220px" })}
+        ${uiButton({ label: "Clear history", kind: "danger", onClick: () => this._clearHistory(this._histEnt || null) })}
+      </div>
+    </section>`;
+  }
+
+  static styles = [sharedStyles, widgetStyles, css`
     :host { display: block; overflow: auto; }
     .cols { grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); }
     section.receivers { grid-column: 1 / -1; }

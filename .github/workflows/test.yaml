@@ -30,5 +30,5 @@ jobs:
           node-version: "20"
       - name: node --check the frontend
         run: |
-          node --check custom_components/sextant/frontend/script.js
+          for f in custom_components/sextant/frontend/sextant-*.js; do node --check "$f"; done
           node --check custom_components/sextant/frontend/sextant-map-card.js

@@ -38,7 +38,6 @@ from pathlib import Path
 import aiofiles
 import numpy as np
 from aiohttp import web
-from homeassistant.components.http import HomeAssistantView
 from homeassistant.util import slugify
 from .solver_numpy import least_squares_bounded
 
@@ -862,7 +861,7 @@ async def _stop_task(cal: dict) -> None:
 async def async_cancel_calibration(hass) -> None:
     """Stop a run, whichever mode it is in.
 
-    Mirrors the "cancel" action of SextantCalibrationAPI so the service layer does
+    Mirrors the "cancel" action of async_calibration_action so the service layer does
     not have to reach for _stop_task, and so the two entry points can never
     drift on what cancelling means: turning auto off is a different operation
     from aborting a manual run, and only auto persists its state.
@@ -1174,58 +1173,3 @@ async def async_calibration_action(hass, data: dict) -> dict:
     return _status_payload(cal)
 
 
-class SextantCalibrationAPI(HomeAssistantView):
-    """Start, watch, apply, and reset receiver calibration."""
-
-    url = "/api/sextant/calibration"
-    name = "api:sextant:calibration"
-    requires_auth = True
-
-    async def get(self, request):
-        hass = request.app["hass"]
-        return web.json_response(_status_payload(get_calibration_state(hass)))
-
-    async def post(self, request):
-        hass = request.app["hass"]
-        cal = get_calibration_state(hass)
-        try:
-            data = await request.json()
-        except json.JSONDecodeError:
-            return web.json_response({"error": "Invalid JSON body"}, status=400)
-        action = data.get("action")
-
-        try:
-            if action == "start":
-                await start_calibration(hass, data.get("floor"), data.get("duration"))
-            elif action == "auto":
-                await set_auto_calibration(hass, bool(data.get("enabled")))
-            elif action == "cancel":
-                if cal["mode"] == "auto":
-                    await set_auto_calibration(hass, False)
-                else:
-                    await _stop_task(cal)
-                    cal["state"] = "idle"
-                    cal["mode"] = "off"
-                    cal["error"] = None
-            elif action == "solve":
-                # Re-solve from the samples already collected (e.g. after an
-                # early cancel, or to inspect before the window ends).
-                floor_name = data.get("floor") or cal.get("floor")
-                result = await async_solve(hass, cal, floor_name)
-                cal["results"][result["floor"]] = result
-                cal["last_solved_at"] = result["solved_at"]
-                cal["error"] = None
-            elif action == "apply":
-                updated = await apply_corrections(hass, cal, data.get("floor") or cal.get("floor"))
-                await save_calibration_state(hass)
-                return web.json_response({"applied": updated, **_status_payload(cal)})
-            elif action == "reset":
-                removed = await reset_corrections(hass, cal, data.get("floor") or cal.get("floor"))
-                await save_calibration_state(hass)
-                return web.json_response({"reset": removed, **_status_payload(cal)})
-            else:
-                return web.json_response({"error": f"Unknown action {action!r}"}, status=400)
-        except ValueError as e:
-            return web.json_response({"error": str(e), **_status_payload(cal)}, status=400)
-
-        return web.json_response(_status_payload(cal))

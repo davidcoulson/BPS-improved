@@ -86,3 +86,90 @@ export function confirmDialog(text) {
 export function slugLabel(slug) {
   return String(slug || "").replace(/^private_ble_device_/, "").replace(/^private_ble_/, "").replace(/_/g, " ");
 }
+
+// --- Home Assistant's own widgets --------------------------------------------
+//
+// The panel renders with HA's form elements (ha-textfield, ha-select,
+// ha-switch, ha-button) so it looks like Settings. They are part of HA's
+// frontend, not ours; ensureHaComponents() pulls the editor bundle that
+// defines them, and each helper falls back to a plain element when one is
+// missing, so the panel never renders an inert unknown tag.
+import { html, nothing } from "./lit.js";
+
+let _haReady = null;
+export function ensureHaComponents() {
+  if (_haReady) return _haReady;
+  _haReady = (async () => {
+    try {
+      if (!customElements.get("ha-textfield") || !customElements.get("ha-select") || !customElements.get("ha-switch")) {
+        const helpers = await window.loadCardHelpers?.();
+        // Creating an entities-card editor loads the shared form elements.
+        const card = helpers?.createCardElement?.({ type: "entities", entities: [] });
+        await card?.constructor?.getConfigElement?.();
+      }
+      await Promise.race([
+        Promise.all(["ha-textfield", "ha-select", "ha-switch", "ha-formfield", "ha-button"].map((t) => customElements.whenDefined(t))),
+        new Promise((r) => setTimeout(r, 2500)),
+      ]);
+    } catch { /* fall back to plain elements */ }
+    return { textfield: !!customElements.get("ha-textfield"), select: !!customElements.get("ha-select") && !!customElements.get("mwc-list-item"),
+             switch: !!customElements.get("ha-switch") && !!customElements.get("ha-formfield"), button: !!customElements.get("ha-button") || !!customElements.get("mwc-button") };
+  })();
+  return _haReady;
+}
+
+const has = (tag) => !!customElements.get(tag);
+
+/** Text or number field. */
+export function uiField({ label, value, type = "text", step, min, max, placeholder, onChange, disabled = false, style = "", suffix }) {
+  const v = value == null ? "" : String(value);
+  if (has("ha-textfield")) {
+    return html`<ha-textfield .label=${label ?? ""} .value=${v} .type=${type} .step=${step ?? nothing} .min=${min ?? nothing} .max=${max ?? nothing}
+        .placeholder=${placeholder ?? ""} .suffix=${suffix ?? nothing} ?disabled=${disabled} style=${style}
+        @change=${(e) => onChange?.(e.target.value)}></ha-textfield>`;
+  }
+  return html`<label class="field" style=${style}>${label ?? ""}<input type=${type} step=${step ?? nothing} min=${min ?? nothing} max=${max ?? nothing}
+        placeholder=${placeholder ?? ""} .value=${v} ?disabled=${disabled} @change=${(e) => onChange?.(e.target.value)}></label>`;
+}
+
+/** Dropdown. options: [{value, label, disabled?}] */
+export function uiSelect({ label, value, options, onChange, disabled = false, style = "" }) {
+  const v = value == null ? "" : String(value);
+  if (has("ha-select") && has("mwc-list-item")) {
+    return html`<ha-select .label=${label ?? ""} .value=${v} ?disabled=${disabled} style=${style} naturalMenuWidth fixedMenuPosition
+        @selected=${(e) => { const nv = e.target.value; if (nv !== v) onChange?.(nv); }} @closed=${(e) => e.stopPropagation()}>
+      ${options.map((o) => html`<mwc-list-item .value=${String(o.value)} ?disabled=${!!o.disabled}>${o.label}</mwc-list-item>`)}
+    </ha-select>`;
+  }
+  return html`<label class="field" style=${style}>${label ?? ""}<select ?disabled=${disabled} @change=${(e) => onChange?.(e.target.value)}>
+      ${options.map((o) => html`<option value=${String(o.value)} ?selected=${String(o.value) === v} ?disabled=${!!o.disabled}>${o.label}</option>`)}</select></label>`;
+}
+
+/** On/off toggle with a label. */
+export function uiSwitch({ label, checked, onChange, disabled = false }) {
+  if (has("ha-switch") && has("ha-formfield")) {
+    return html`<ha-formfield .label=${label ?? ""}><ha-switch .checked=${!!checked} ?disabled=${disabled} @change=${(e) => onChange?.(e.target.checked)}></ha-switch></ha-formfield>`;
+  }
+  return html`<label class="inline"><input type="checkbox" .checked=${!!checked} ?disabled=${disabled} @change=${(e) => onChange?.(e.target.checked)}> ${label ?? ""}</label>`;
+}
+
+/** Button. kind: "primary" | "outline" | "text" | "danger" */
+export function uiButton({ label, onClick, kind = "outline", disabled = false, icon, title }) {
+  if (has("ha-button") || has("mwc-button")) {
+    const tag = has("ha-button") ? "ha-button" : "mwc-button";
+    const raised = kind === "primary", outlined = kind === "outline" || kind === "danger";
+    const cls = kind === "danger" ? "danger" : "";
+    return tag === "ha-button"
+      ? html`<ha-button ?raised=${raised} ?outlined=${outlined} ?disabled=${disabled} class=${cls} title=${title ?? nothing} @click=${onClick}>${icon ? html`<ha-icon slot="icon" icon=${icon}></ha-icon>` : nothing}${label}</ha-button>`
+      : html`<mwc-button ?raised=${raised} ?outlined=${outlined} ?disabled=${disabled} class=${cls} title=${title ?? nothing} @click=${onClick}>${icon ? html`<ha-icon slot="icon" icon=${icon}></ha-icon>` : nothing}${label}</mwc-button>`;
+  }
+  return html`<button class=${kind === "primary" ? "primary" : kind === "danger" ? "danger" : kind === "text" ? "ghost" : ""} ?disabled=${disabled} title=${title ?? nothing} @click=${onClick}>${label}</button>`;
+}
+
+export const widgetStyles = css`
+  ha-textfield { --mdc-text-field-fill-color: var(--card-background-color); min-width: 120px; }
+  ha-textfield.narrow { width: 110px; }
+  ha-select { min-width: 160px; }
+  ha-button.danger, mwc-button.danger { --mdc-theme-primary: var(--error-color, #b00020); }
+  ha-formfield { --mdc-typography-body2-font-size: 13px; }
+`;

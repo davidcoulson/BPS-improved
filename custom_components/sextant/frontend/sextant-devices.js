@@ -6,7 +6,7 @@
  * accessories, and Bermuda's global options.
  */
 import { LitElement, html, css, nothing } from "./lit.js";
-import { sharedStyles, fmtAge, fmtNum, toast, callWS, confirmDialog, slugLabel } from "./sextant-ui.js";
+import { sharedStyles, widgetStyles, fmtAge, fmtNum, toast, callWS, confirmDialog, slugLabel, uiField, uiSelect, uiSwitch, uiButton } from "./sextant-ui.js";
 
 const KIND_LABEL = { tile: "Tile", ibeacon: "iBeacon", device: "Device" };
 
@@ -119,14 +119,9 @@ class SextantDevices extends LitElement {
     if (r) { toast(this, "Removed"); this._refresh(); }
   }
 
-  async _saveOptions(form) {
+  async _saveOptions() {
     const options = {};
-    for (const el of form.querySelectorAll("[data-key]")) {
-      const key = el.dataset.key;
-      if (el.type === "checkbox") options[key] = el.checked;
-      else if (el.type === "number") { if (el.value !== "") options[key] = Number(el.value); }
-      else options[key] = el.value;
-    }
+    for (const [key, value] of Object.entries(this._options || {})) if (value !== null && value !== undefined) options[key] = value;
     const r = await callWS(this, this.hass, { type: "sextant/bermuda/options/set", options });
     if (r) { toast(this, "Bermuda options saved; Bermuda is reloading…"); this._options = r.options; }
   }
@@ -153,21 +148,16 @@ class SextantDevices extends LitElement {
                 return html`<tr>
                   <td><b>${d.name}</b><br><span class="muted small">${address}</span></td>
                   <td>${p ? html`${p.zone}<br><span class="muted small">${p.floor}</span>` : html`<span class="muted">—</span>`}</td>
-                  <td class="num"><input type="number" step="0.05" min="0" max="5" .value=${heights[slug] ?? ""} placeholder="1.0"
-                        @change=${(e) => this._tune(slug, { height: e.target.value === "" ? null : Number(e.target.value) })}></td>
-                  <td class="num"><input type="number" step="0.5" min="-20" max="20" .value=${offsets[slug] ?? ""} placeholder="0"
-                        @change=${(e) => this._tune(slug, { ref_offset_db: e.target.value === "" ? null : Number(e.target.value) })}></td>
+                  <td class="num">${uiField({ type: "number", step: 0.05, min: 0, max: 5, value: heights[slug] ?? "", placeholder: "1.0", style: "width: 96px", onChange: (v) => this._tune(slug, { height: v === "" ? null : Number(v) }) })}</td>
+                  <td class="num">${uiField({ type: "number", step: 0.5, min: -20, max: 20, value: offsets[slug] ?? "", placeholder: "0", style: "width: 96px", onChange: (v) => this._tune(slug, { ref_offset_db: v === "" ? null : Number(v) }) })}</td>
                   <td>
                     <div class="row">
                       ${icons[slug] ? html`<img class="icon" src=${icons[slug]} alt="">` : nothing}
-                      <select @change=${(e) => this._tune(slug, { icon: e.target.value || null })}>
-                        <option value="" ?selected=${!icons[slug]}>default</option>
-                        ${(this.data?.icons || []).map((i) => html`<option value=${i.value} ?selected=${icons[slug] === i.value}>${i.label}</option>`)}
-                      </select>
+                      ${uiSelect({ value: icons[slug] || "", options: [{ value: "", label: "default" }, ...(this.data?.icons || []).map((i) => ({ value: i.value, label: i.label }))], onChange: (v) => this._tune(slug, { icon: v || null }), style: "min-width: 130px" })}
                       <label class="btn small" title="Upload an icon">⤒<input type="file" accept="image/*" hidden @change=${(e) => this._uploadIcon(slug, e.target.files[0])}></label>
                     </div>
                   </td>
-                  <td><button class="danger" ?disabled=${this._busy} @click=${() => confirmDialog(`Stop tracking ${d.name}?`) && this._track([], [address])}>Untrack</button></td>
+                  <td>${uiButton({ label: "Untrack", kind: "danger", disabled: this._busy, onClick: () => confirmDialog(`Stop tracking ${d.name}?`) && this._track([], [address]) })}</td>
                 </tr>`;
               })}
               ${tracked.length ? nothing : html`<tr><td colspan="6" class="muted">Nothing tracked yet.</td></tr>`}
@@ -177,9 +167,9 @@ class SextantDevices extends LitElement {
           <section class="card">
             <h3>Heard, not tracked <span class="muted">${(this._candidates || []).length}</span></h3>
             <div class="row">
-              <input class="grow" type="search" placeholder="filter by name, address, maker" .value=${this._filter} @input=${(e) => { this._filter = e.target.value; }}>
-              ${Object.entries(KIND_LABEL).map(([k, l]) => html`<label class="inline small"><input type="checkbox" .checked=${this._kinds.has(k)} @change=${(e) => { const s = new Set(this._kinds); e.target.checked ? s.add(k) : s.delete(k); this._kinds = s; }}> ${l}</label>`)}
-              <button class="ghost" @click=${() => this._refreshLight()}>Refresh</button>
+              <input class="grow" type="search" placeholder="Filter by name, address or maker" .value=${this._filter} @input=${(e) => { this._filter = e.target.value; }}>
+              ${Object.entries(KIND_LABEL).map(([k, l]) => uiSwitch({ label: l, checked: this._kinds.has(k), onChange: (on) => { const s = new Set(this._kinds); on ? s.add(k) : s.delete(k); this._kinds = s; } }))}
+              ${uiButton({ label: "Refresh", kind: "text", icon: "mdi:refresh", onClick: () => this._refreshLight() })}
             </div>
             <div class="wrap"><table>
               <tr><th>Device</th><th>Kind</th><th class="num">Proxies</th><th class="num">Best</th><th>Seen</th><th></th></tr>
@@ -189,7 +179,7 @@ class SextantDevices extends LitElement {
                 <td class="num">${c.scanners}</td>
                 <td class="num">${c.best_rssi ?? "—"}</td>
                 <td class="small">${fmtAge(c.last_seen_age)} ago<br><span class="muted">first ${fmtAge(c.first_seen_age)}</span></td>
-                <td><button class="primary" ?disabled=${this._busy} @click=${() => this._track([c.config_value], [])}>Track</button></td>
+                <td>${uiButton({ label: "Track", kind: "primary", disabled: this._busy, onClick: () => this._track([c.config_value], []) })}</td>
               </tr>`)}
               ${candidates.length ? nothing : html`<tr><td colspan="6" class="muted">${this._candidates ? "No matching devices." : "Loading…"}</td></tr>`}
             </table></div>
@@ -208,7 +198,7 @@ class SextantDevices extends LitElement {
                 <td><b>${a.name}</b><br><span class="muted small">${a.address}</span></td>
                 <td>${a.model || "—"}</td>
                 <td>${a.current_source ? html`<span class="pill ok">seen as ${a.current_source}</span> <span class="muted small">${fmtAge(a.last_seen_age)} ago</span>` : a.alignment_index ? html`<span class="pill warn">aligned, not visible</span>` : html`<span class="pill">searching</span>`}</td>
-                <td><button class="danger" @click=${() => this._removeFindMy(a.address, a.name)}>Remove</button></td>
+                <td>${uiButton({ label: "Remove", kind: "danger", onClick: () => this._removeFindMy(a.address, a.name) })}</td>
               </tr>`)}
               ${(this._findmy || []).length ? nothing : html`<tr><td colspan="4" class="muted">None configured.</td></tr>`}
             </table></div>
@@ -217,8 +207,8 @@ class SextantDevices extends LitElement {
               <p class="muted small">Paste the key JSON exported with FindMy.py's <code>FindMyAccessory.to_json()</code>.</p>
               <textarea placeholder='{"master_key": "...", ...}' .value=${this._findmyJson} @input=${(e) => { this._findmyJson = e.target.value; }}></textarea>
               <div class="row">
-                <input class="grow" type="text" placeholder="Name (optional)" .value=${this._findmyName} @input=${(e) => { this._findmyName = e.target.value; }}>
-                <button class="primary" @click=${() => this._addFindMy()}>Add</button>
+                ${uiField({ label: "Name (optional)", value: this._findmyName, onChange: (v) => { this._findmyName = v; }, style: "flex: 1" })}
+                ${uiButton({ label: "Add accessory", kind: "primary", onClick: () => this._addFindMy() })}
               </div>
             </details>
           </section>
@@ -226,15 +216,15 @@ class SextantDevices extends LitElement {
           <section class="card">
             <h3>Bermuda global options</h3>
             ${this._options ? html`
-              <form @submit=${(e) => { e.preventDefault(); this._saveOptions(e.target); }}>
+              <form @submit=${(e) => { e.preventDefault(); this._saveOptions(); }}>
                 <div class="row">
-                  ${[["ref_power", "Ref power dBm at 1 m", "number", 1], ["attenuation", "Attenuation", "number", 0.1], ["max_area_radius", "Max area radius m", "number", 0.1],
-                     ["max_velocity", "Max velocity m/s", "number", 0.1], ["devtracker_nothome_timeout", "Not-home timeout s", "number", 1],
-                     ["update_interval", "Update interval s", "number", 0.1], ["smoothing_samples", "Smoothing samples", "number", 1]].map(([k, l, t, step]) => html`
-                    <label class="field">${l}<input type=${t} step=${step} data-key=${k} .value=${this._options[k] ?? ""}></label>`)}
-                  <label class="inline"><input type="checkbox" data-key="create_scanner_entities" .checked=${!!this._options.create_scanner_entities}> Create scanner entities</label>
+                  ${[["ref_power", "Ref power (dBm at 1 m)", 1], ["attenuation", "Attenuation", 0.1], ["max_area_radius", "Max area radius (m)", 0.1],
+                     ["max_velocity", "Max velocity (m/s)", 0.1], ["devtracker_nothome_timeout", "Not-home timeout (s)", 1],
+                     ["update_interval", "Update interval (s)", 0.1], ["smoothing_samples", "Smoothing samples", 1]].map(([k, l, step]) =>
+                    uiField({ label: l, type: "number", step, value: this._options[k] ?? "", style: "width: 170px", onChange: (v) => { this._options = { ...this._options, [k]: v === "" ? null : Number(v) }; } }))}
+                  ${uiSwitch({ label: "Create scanner entities", checked: !!this._options.create_scanner_entities, onChange: (v) => { this._options = { ...this._options, create_scanner_entities: v }; } })}
                 </div>
-                <div class="row"><button class="primary" type="submit">Save options</button><span class="muted small">Bermuda reloads to apply.</span></div>
+                <div class="row">${uiButton({ label: "Save options", kind: "primary", onClick: () => this._saveOptions() })}<span class="muted small">Bermuda reloads to apply.</span></div>
               </form>` : html`<div class="muted">Loading…</div>`}
           </section>
         </div>
@@ -263,7 +253,7 @@ class SextantDevices extends LitElement {
       </p>`;
   }
 
-  static styles = [sharedStyles, css`
+  static styles = [sharedStyles, widgetStyles, css`
     :host { display: block; overflow: auto; }
     .cols { grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); }
     img.icon { width: 22px; height: 22px; object-fit: contain; }

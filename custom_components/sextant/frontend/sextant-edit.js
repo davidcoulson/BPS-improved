@@ -9,16 +9,17 @@
  */
 import { LitElement, html, css, nothing } from "./lit.js";
 import { SextantMap, polygonCentroid } from "./sextant-map.js";
-import { sharedStyles, toast, callWS, confirmDialog, fmtNum } from "./sextant-ui.js";
+import { sharedStyles, widgetStyles, toast, callWS, confirmDialog, fmtNum, uiField, uiSelect, uiSwitch, uiButton } from "./sextant-ui.js";
 import { mapUrlFor } from "./sextant-panel.js";
 
+// [id, label under the icon, icon, tooltip]
 const TOOLS = [
-  ["select", "Select / move", "mdi:cursor-default"],
-  ["receiver", "Place receiver", "mdi:access-point"],
-  ["zone", "Draw zone", "mdi:vector-square"],
-  ["subzone", "Draw sub-zone", "mdi:vector-rectangle"],
-  ["nogo", "Draw no-go", "mdi:cancel"],
-  ["measure", "Measure scale", "mdi:ruler"],
+  ["select", "Select", "mdi:cursor-default-outline", "Select and drag receivers, zones and vertices"],
+  ["receiver", "Receiver", "mdi:access-point-plus", "Place a receiver: pick a scanner, then click the map"],
+  ["zone", "Zone", "mdi:vector-polygon", "Draw a room: click corners, close on the first one"],
+  ["subzone", "Sub-zone", "mdi:vector-rectangle", "Draw a sub-zone (a couch, a desk) inside a room"],
+  ["nogo", "No-go", "mdi:cancel", "Draw an area trackers can never be in (a void, a wall)"],
+  ["measure", "Scale", "mdi:ruler", "Set the map scale from a known distance"],
 ];
 
 function uid(prefix) { return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`; }
@@ -307,12 +308,12 @@ class SextantEdit extends LitElement {
       <div class="stage">
         <canvas @click=${(e) => this._onCanvasClick(e)}></canvas>
         <div class="toolbar">
-          ${TOOLS.map(([id, label, icon]) => html`<button class=${this._tool === id ? "active" : ""} title=${label} @click=${() => this._setTool(id)}><ha-icon icon=${icon}></ha-icon></button>`)}
+          ${TOOLS.map(([id, label, icon, tip]) => html`<button class="tool ${this._tool === id ? "active" : ""}" title=${tip} @click=${() => this._setTool(id)}><ha-icon icon=${icon}></ha-icon><span>${label}</span></button>`)}
           <span class="sep"></span>
-          <button title="Fit" @click=${() => this._map.fit()}><ha-icon icon="mdi:fit-to-screen"></ha-icon></button>
+          <button class="tool" title="Fit the whole map into the view" @click=${() => this._map.fit()}><ha-icon icon="mdi:fit-to-screen"></ha-icon><span>Fit</span></button>
           <span class="sep"></span>
-          <button class="primary" ?disabled=${!this._dirty || this._busy} @click=${() => this._save()}>Save</button>
-          <button class="ghost" ?disabled=${!this._dirty} @click=${() => this._discard()}>Discard</button>
+          ${uiButton({ label: "Save", kind: "primary", disabled: !this._dirty || this._busy, onClick: () => this._save(), title: "Write the floor plan to the store" })}
+          ${uiButton({ label: "Discard", kind: "text", disabled: !this._dirty, onClick: () => this._discard() })}
         </div>
         ${this._tool === "receiver" ? html`<div class="hint">
           <select @change=${(e) => { this._placing = e.target.value || null; }}>
@@ -320,10 +321,10 @@ class SextantEdit extends LitElement {
             ${scanners.map(([addr, s]) => html`<option value=${addr} ?disabled=${placedAddr.has(addr)}>${s.name || s.slug}${placedAddr.has(addr) ? " (placed)" : ""}${s.area ? ` · ${s.area}` : ""}</option>`)}
           </select></div>` : nothing}
         ${this._tool === "measure" ? html`<div class="hint">
-          ${this._measure?.b ? html`Distance between the two points in metres: <input type="number" step="0.01" min="0.1" id="metres"> <button class="primary" @click=${() => this._applyMeasure(Number(this.renderRoot.querySelector("#metres").value))}>Set scale</button>`
+          ${this._measure?.b ? html`${uiField({ label: "Distance between the two points (m)", type: "number", step: 0.01, min: 0.1, onChange: (v) => { this._metres = Number(v); }, style: "width: 240px" })} ${uiButton({ label: "Set scale", kind: "primary", onClick: () => this._applyMeasure(this._metres) })}`
             : this._measure ? "Click the second point." : `Click two points a known distance apart. Current scale: ${f?.scale ? fmtNum(f.scale, 2) + " px/m" : "unset"}`}
         </div>` : nothing}
-        ${["zone", "subzone", "nogo"].includes(this._tool) ? html`<div class="hint">Click to add vertices; click the first vertex or double-click to close. <button class="ghost" @click=${() => { this._map.cancelDraft(); }}>Cancel</button></div>` : nothing}
+        ${["zone", "subzone", "nogo"].includes(this._tool) ? html`<div class="hint">Click to add corners; click the first corner or double-click to close. ${uiButton({ label: "Cancel", kind: "text", onClick: () => { this._map.cancelDraft(); } })}</div>` : nothing}
       </div>
       <aside class="side">
         ${f ? html`
@@ -331,23 +332,23 @@ class SextantEdit extends LitElement {
             <h4>${f.name} <span class="muted small">${f.scale ? `${fmtNum(f.scale, 1)} px/m` : "no scale"}</span></h4>
             <div class="row small muted">${(f.receivers || []).length} receivers · ${(f.zones || []).filter((z) => !z.no_go).length} zones · ${(f.zones || []).filter((z) => z.no_go).length} no-go · ${(f.subzones || []).length} sub-zones</div>
             <div class="row">
-              <label class="field">Scale px/m<input type="number" step="0.01" .value=${f.scale ?? ""} @change=${(e) => { f.scale = Number(e.target.value) || null; this._dirty = true; this.requestUpdate(); }}></label>
-              <button ?disabled=${this._busy} @click=${() => this._adjust("zones")}>Adjust zones</button>
-              <button ?disabled=${this._busy} @click=${() => this._adjust("subzones")}>Adjust sub-zones</button>
-              <button class="danger" ?disabled=${this._busy} @click=${() => this._removeFloor()}>Delete floor</button>
+              ${uiField({ label: "Scale (px per m)", type: "number", step: 0.01, value: f.scale ?? "", onChange: (v) => { f.scale = Number(v) || null; this._dirty = true; this.requestUpdate(); }, style: "width: 150px" })}
+              ${uiButton({ label: "Adjust zones", disabled: this._busy, onClick: () => this._adjust("zones"), title: "Square up rooms and snap shared walls" })}
+              ${uiButton({ label: "Adjust sub-zones", disabled: this._busy, onClick: () => this._adjust("subzones") })}
+              ${uiButton({ label: "Delete floor", kind: "danger", disabled: this._busy, onClick: () => this._removeFloor() })}
             </div>
           </div>` : html`<div class="card muted">No floor yet. Add one below.</div>`}
         ${this._proposal ? html`<div class="card">
           <h4>Proposed ${this._proposal.target}</h4>
           <ul class="plain small">${(this._proposal.report || this._proposal.changes || []).slice(0, 12).map((c) => html`<li>${typeof c === "string" ? c : `${c.name || c.zone || ""}: ${c.change || c.note || JSON.stringify(c)}`}</li>`)}</ul>
-          <div class="row"><button class="primary" @click=${() => this._acceptProposal()}>Accept</button><button class="ghost" @click=${() => { this._proposal = null; }}>Reject</button></div>
+          <div class="row">${uiButton({ label: "Accept", kind: "primary", onClick: () => this._acceptProposal() })}${uiButton({ label: "Reject", kind: "text", onClick: () => { this._proposal = null; } })}</div>
         </div>` : nothing}
         ${sel ? this._renderSelection(sel, f) : html`<div class="card muted small">Select a receiver, zone or sub-zone on the map to edit it. Drag to move; drag a vertex or an edge midpoint; right-click a vertex to remove it.</div>`}
         <div class="card">
           <h4>Add a floor</h4>
           <form @submit=${(e) => { e.preventDefault(); const fd = new FormData(e.target); this._addFloor(fd.get("name"), fd.get("file")); }}>
             <div class="row"><input class="grow" type="text" name="name" placeholder="Floor name" required><input type="file" name="file" accept="image/*" required></div>
-            <div class="row"><button type="submit" ?disabled=${this._busy}>Add floor</button><span class="muted small">The image is stored as the floor's map.</span></div>
+            <div class="row">${uiButton({ label: "Add floor", kind: "primary", disabled: this._busy, onClick: (e) => e.target.closest("form").requestSubmit() })}<span class="muted small">The image is stored as the floor's map.</span></div>
           </form>
         </div>
         ${(this.data?.scanner_diagnostics?.unplaced_scanners || []).length ? html`<div class="card small"><h4>Reporting, not placed</h4>${this.data.scanner_diagnostics.unplaced_scanners.join(", ")}</div>` : nothing}
@@ -363,30 +364,24 @@ class SextantEdit extends LitElement {
     return html`<div class="card">
       <h4>${sel.kind === "receiver" ? "Receiver" : sel.kind === "zone" ? (item.no_go ? "No-go area" : "Zone") : "Sub-zone"}</h4>
       <div class="row">
-        <label class="field grow">Name<input type="text" .value=${item.entity_id || ""} @change=${(e) => this._edit("entity_id", e.target.value)}></label>
+        ${uiField({ label: "Name", value: item.entity_id || "", onChange: (v) => this._edit("entity_id", v), style: "flex: 1" })}
       </div>
       ${sel.kind === "receiver" ? html`
         <div class="row">
-          <label class="field grow">Scanner address<select @change=${(e) => this._edit("address", e.target.value || undefined)}>
-            <option value="" ?selected=${!item.address}>none</option>
-            ${Object.entries(this.data?.scanners || {}).map(([addr, s]) => html`<option value=${addr} ?selected=${item.address === addr}>${s.name || s.slug} · ${addr}</option>`)}
-          </select></label>
+          ${uiSelect({ label: "Scanner", value: item.address || "", options: [{ value: "", label: "none" }, ...Object.entries(this.data?.scanners || {}).map(([addr, s]) => ({ value: addr, label: `${s.name || s.slug} · ${addr}` }))], onChange: (v) => this._edit("address", v || undefined), style: "flex: 1" })}
         </div>
         <div class="row">
-          <label class="field">Mount height m<input type="number" step="0.05" min="0" max="10" .value=${item.height ?? ""} @change=${(e) => this._edit("height", e.target.value)}></label>
-          <label class="field">Correction ×<input type="number" step="0.001" min="0.5" max="2" .value=${item.correction ?? ""} @change=${(e) => this._edit("correction", e.target.value)}></label>
+          ${uiField({ label: "Mount height (m)", type: "number", step: 0.05, min: 0, max: 10, value: item.height ?? "", onChange: (v) => this._edit("height", v), style: "width: 150px" })}
+          ${uiField({ label: "Correction ×", type: "number", step: 0.001, min: 0.5, max: 2, value: item.correction ?? "", onChange: (v) => this._edit("correction", v), style: "width: 150px" })}
         </div>
         <div class="muted small">${item.unmatched ? "Bermuda does not report this scanner right now." : "Linked."} x ${fmtNum(item.cords?.x, 0)}, y ${fmtNum(item.cords?.y, 0)}</div>` : nothing}
-      ${sel.kind === "zone" ? html`<label class="inline"><input type="checkbox" .checked=${!!item.no_go} @change=${(e) => this._edit("no_go", e.target.checked)}> No-go area (trackers cannot be here)</label>` : nothing}
+      ${sel.kind === "zone" ? uiSwitch({ label: "No-go area (trackers can never be here)", checked: !!item.no_go, onChange: (v) => this._edit("no_go", v) }) : nothing}
       ${sel.kind === "subzone" ? html`
         <div class="row">
-          <label class="field grow">Parent zone<select @change=${(e) => this._edit("parent", e.target.value || null)}>
-            <option value="" ?selected=${!item.parent}>none</option>
-            ${zones.map((z) => html`<option value=${z.zone_id} ?selected=${item.parent === z.zone_id}>${z.entity_id}</option>`)}
-          </select></label>
+          ${uiSelect({ label: "Parent zone", value: item.parent || "", options: [{ value: "", label: "none" }, ...zones.map((z) => ({ value: z.zone_id, label: z.entity_id }))], onChange: (v) => this._edit("parent", v || null), style: "flex: 1" })}
           <label class="field">Colour<input type="color" .value=${this._hex(item.color)} @change=${(e) => this._edit("color", e.target.value)}></label>
         </div>` : nothing}
-      <div class="row"><span class="muted small">${(item.cords?.length ?? 1)} point(s)</span><span class="grow"></span><button class="danger" @click=${() => this._deleteSelection()}>Delete</button></div>
+      <div class="row"><span class="muted small">${(item.cords?.length ?? 1)} point(s)</span><span class="grow"></span>${uiButton({ label: "Delete", kind: "danger", onClick: () => this._deleteSelection() })}</div>
     </div>`;
   }
 
@@ -400,11 +395,13 @@ class SextantEdit extends LitElement {
     return `#${f(0)}${f(8)}${f(4)}`;
   }
 
-  static styles = [sharedStyles, css`
+  static styles = [sharedStyles, widgetStyles, css`
     :host { display: grid; grid-template-columns: 1fr 320px; min-height: 0; }
     .stage { position: relative; min-width: 0; }
     canvas { width: 100%; height: 100%; display: block; --sextant-map-bg: var(--card-background-color, #fff); }
     .toolbar { position: absolute; left: 10px; top: 10px; display: flex; gap: 4px; padding: 6px; border-radius: 8px; background: var(--card-background-color); box-shadow: var(--ha-card-box-shadow, 0 1px 4px rgba(0,0,0,0.2)); align-items: center; }
+    .toolbar button.tool { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 62px; padding: 4px 6px; font-size: 11px; line-height: 1.1; }
+    .toolbar button.tool ha-icon { --mdc-icon-size: 22px; }
     .toolbar button.active { background: var(--primary-color); color: var(--text-primary-color, #fff); border-color: var(--primary-color); }
     .sep { width: 1px; height: 24px; background: var(--divider-color); margin: 0 4px; }
     .hint { position: absolute; left: 10px; bottom: 10px; right: 10px; padding: 8px 10px; border-radius: 8px; background: var(--card-background-color); box-shadow: var(--ha-card-box-shadow, 0 1px 4px rgba(0,0,0,0.2)); font-size: 13px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }

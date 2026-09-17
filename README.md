@@ -977,15 +977,17 @@ unknown key or an out-of-range value is refused with the allowed range;
 
 The panel is a native Home Assistant panel: no iframe, no couriered token,
 one websocket subscription for positions and request/response commands for
-everything else (`custom_components/sextant/ws.py`). It has four modes and a
-Legacy tab that still hosts the previous editor until the new one has
-everything you use.
+everything else (`custom_components/sextant/ws.py`). It has four modes, built
+with Home Assistant's own form elements so it looks and behaves like
+Settings. The previous editor was removed in 3.4.0; the sections further
+down that describe panel features (zones, sub-zones, calibration, history,
+debugging) refer to where they now live in these modes.
 
 - **Live** — the floor plan with every tracker, its confidence ring, the
   solver circles and the fingerprint fix on request, a trail, and a history
   scrubber that replays a tracker's retained positions. Selecting a tracker
-  shows its zone, sub-zone, floor probabilities, estimator telemetry and the
-  receivers in its solve.
+  shows its zone, sub-zone, floor probabilities, estimator telemetry and every
+  receiver currently hearing it with its distance.
 - **Edit** — the floor-plan editor on the same map: place receivers by
   picking a scanner Bermuda knows, drag them, draw zones, sub-zones and
   no-go areas (vertices drag, edge midpoints add, right-click removes), set
@@ -1000,8 +1002,8 @@ everything you use.
 - **Health** — receivers (online, unmatched, last heard, correction, height),
   naming mismatches and scanner linking detail, receiver calibration (start,
   auto, solve, apply, reset, per-floor results), the leave-one-out self-test,
-  the room-stability KPI computed from the recorder for any window, and every
-  tuning key with live apply.
+  the room-stability KPI computed from the recorder for any window, every
+  tuning key with live apply, and clearing the position history.
 
 The Lovelace card (`custom:sextant-map-card`, resource
 `/sextant/sextant-map-card.js`) draws with the same renderer and the same
