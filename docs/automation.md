@@ -1,0 +1,90 @@
+[Sextant](../README.md) › Sensors, card, services and API
+
+# Sensors, card, services and API
+
+Each tracked device gets four sensors under its own `<device> (Sextant)`
+device, nested beneath its Bermuda device:
+
+| Sensor | State |
+|---|---|
+| `sensor.<device>_sextant_floor` | the elected floor |
+| `sensor.<device>_sextant_room` | the elected room, with hysteresis and the stationary lock |
+| `sensor.<device>_sextant_nearest_room` | the nearest room on that floor, instantaneous |
+| `sensor.<device>_sextant_spot` | the spot inside the room, `unknown` when in none; attribute `room` |
+
+`_sextant_nearest_room` drops to `unknown` as soon as no proxy reports a
+distance (about 30 s, Bermuda's timeout): the clean "who is home" signal.
+`_sextant_room` and `_sextant_floor` hold their value through a grace
+period (`position_timeout`, five minutes by default) so a brief gap does
+not blink someone out of a room; after it the tracker leaves the map and
+all three read `unknown`. `sensor.sextant_position_accuracy` is the global
+self-test result.
+
+## Map card
+
+```yaml
+type: custom:sextant-map-card
+floor: Ground Floor
+entities:            # tracker keys as in /api/sextant/cords; omit for every tracker
+  - davids_phone
+title: Downstairs    # optional
+height: 360          # px
+circles: false       # the solver's distance circles
+trails: true
+labels: true
+subzones: true       # draw spots
+follow: false        # switch floors with the first entity
+```
+
+The card draws with the panel's renderer and the same subscription, so it
+shows exactly what Live shows. `image` (a URL) or `map_file` (a file under
+`/local/sextant_maps/`) overrides the floor's plan.
+
+## API
+
+- `GET /api/sextant/cords`: one row per tracker (`ent` is the tracker key)
+  with its position (`cords`), confidence, the radii the solver used and
+  their fit residual, `floor` and the floor probabilities (`floors`), the
+  room (`zone`), the raw room, the lock state and speed, the spot and the
+  spot shares (`sub_zones`), the anchor proxy, the estimator and the
+  fingerprint telemetry (`fp`).
+- `sextant/subscribe` over the websocket pushes the same payload plus proxy
+  health once per positioning cycle:
+
+  ```js
+  hass.connection.subscribeMessage(
+    (event) => console.log(event.positions, event.offline_receivers),
+    { type: "sextant/subscribe" },
+  );
+  ```
+- Websocket commands, all request/response: `layout/get`, `layout/save`,
+  `receivers`, `scanner_linking`, `beacon_links`, `adjust_zones`,
+  `calibration/status`, `calibration/action`, `history/index`,
+  `history/get`, `history/clear`, `kpi`, `kpi/baselines`,
+  `kpi/baseline/save`, `kpi/baseline/delete`, `tuning/set`,
+  `tracker/tune`, `selftest`, `truth/mark`, `truth/list`,
+  `truth/delete`, `truth/evaluate`, `truth/apply`, and under `bermuda/`: `candidates`,
+  `tracked`, `track`, `scanners`, `scanner_ranging`, `options`,
+  `options/set`, `findmy`, `findmy/add`, `findmy/remove`, `tiles`,
+  `tile_identities`, `tile/bind`, `tile/adopt`. All are prefixed
+  `sextant/`.
+- `GET /api/sextant/selftest` runs the leave-one-out self-test on demand.
+
+## Services
+
+| Service | Fields | Does |
+|---|---|---|
+| `sextant.start_calibration` | `floor`, `duration` (600) | sample one floor and solve |
+| `sextant.cancel_calibration` | | stop a run or turn auto calibration off |
+| `sextant.apply_corrections` | `floor` | apply the last solve |
+| `sextant.reset_corrections` | `floor` | remove a floor's corrections |
+| `sextant.set_auto_calibration` | `enabled` | continuous calibration on or off |
+| `sextant.set_receiver_heights` | `heights` (slug → m), `default` | proxy mount heights |
+| `sextant.set_tracker_heights` | `heights` (tracker → m) | carry heights |
+| `sextant.set_tuning` | `settings`, `reset` | any [tuning key](tuning.md#tuning-reference); an unknown key or out-of-range value is refused with the allowed range |
+
+```yaml
+action: sextant.set_tuning
+data:
+  settings: {position_estimator: fused, zone_switch_secs: 30}
+```
