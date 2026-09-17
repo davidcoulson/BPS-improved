@@ -2,9 +2,13 @@
 
 # Sextant — BLE indoor positioning for Home Assistant
 
-Sextant takes the per-receiver distances that
-[Bermuda](https://github.com/agittins/bermuda) measures and turns them into a
-position on your floor plan: a room, a floor, a sub-zone, and a dot on a map.
+**Powered by [Bermuda](https://github.com/agittins/bermuda).** Sextant takes
+the per-receiver distances that the Bermuda BLE Trilateration integration
+measures and turns them into a position on your floor plan: a room, a floor,
+a sub-zone, and a dot on a map. Bermuda is required; install it first
+([upstream](https://github.com/agittins/bermuda), or the
+[fork this project is developed against](https://github.com/davidcoulson/bermuda),
+which adds the APIs the Devices page and fingerprint fusion use).
 It began life as a fork of [Hogster/BPS](https://github.com/Hogster/BPS) via
 [maxi1134/BPS-improved](https://github.com/maxi1134/BPS-improved) and has since
 been rebuilt around Bermuda's snapshot API, a wall-clock stability model and a
@@ -29,8 +33,8 @@ Sextant is a new integration domain (`sextant`), so the upgrade is a
 re-install rather than an update:
 
 1. Install Sextant from HACS (`davidcoulson/sextant`) and restart.
-2. Add the integration under **Settings → Devices & Services → Add Integration → Sextant**.
-   On first start it copies the old layout, calibration state, position history
+2. Add the integration under **Settings → Devices & Services → Add Integration → Sextant**
+   (Bermuda must already be set up). On first start it copies the old layout, calibration state, position history
    and map images from where BPS kept them; nothing is deleted.
 3. Remove the old **BPS-Optimized** integration entry. Its sensors were named
    `sensor.<device>_bps_zone`; Sextant publishes `sensor.<device>_sextant_zone`
