@@ -281,7 +281,7 @@ class SextantHealth extends LitElement {
       ${(diag.unmatched_receivers || []).length ? html`<details open><summary>Naming mismatches (${diag.unmatched_receivers.length})</summary>
         <ul class="plain">${diag.unmatched_receivers.map((u) => html`<li><b>${u.entity_id}</b> on ${u.floor}${u.suggested ? html` → suggested <code>${u.suggested}</code>` : nothing}</li>`)}</ul></details>` : nothing}
       <details @toggle=${(e) => { if (e.target.open && !this._linking) this._loadLinking(); }}><summary>What each proxy hears right now</summary>
-        <p class="small muted">One row per placed proxy: which trackers it currently reports a distance for, and how far. A proxy with an empty row is online but hears nothing tracked; "unplaced and ignored" proxies are not shown because their readings are never used.</p>
+        <p class="small muted">One row per placed proxy: which trackers it currently reports a distance for, and how far. <b>live</b> = it heard a tracked device in the last minute; <b>silent</b> = it is fine but nothing tracked is in its range right now (normal for a proxy in an empty room; worth a look only if it stays silent while people walk past it); <b>unmatched</b> = no Bermuda proxy has that name, so fix the placement on the Edit page. Unplaced proxies are not shown because their readings are never used.</p>
         ${this._linking ? html`<div class="wrap"><table>
           <tr><th>Proxy</th><th>Status</th><th class="num">Reporting</th><th>Trackers heard</th></tr>
           ${(this._linking.placed || []).map((p) => {
