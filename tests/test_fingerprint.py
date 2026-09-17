@@ -264,3 +264,18 @@ def test_tracker_estimator_override(monkeypatch):
     assert sextant._tracker_estimator(layout, "bad") == "fused"     # an unknown value falls back to the tuning
     assert sextant._fingerprint_wanted({"tuning": {"position_estimator": "geometric"}, "tracker_estimators": {"tile": "fused"}})
     assert not sextant._fingerprint_wanted({"tuning": {"position_estimator": "geometric"}})
+
+
+def test_saved_gains_seed_a_fresh_database_but_never_a_learned_one():
+    db = fp.ReferenceDB()
+    saved = sextant._fingerprint_db
+    sextant._fingerprint_db = db
+    try:
+        sextant._restore_fp_gains({"learned_gain": 0.41, "tracker_gain": {"tile": 0.9, "bad": "x"}})
+        assert db.learned_gain == 0.41 and db.gain_for("tile") == 0.41 * 0.9 and "bad" not in db.tracker_gain
+        db.learn(2.0, conf=1.0, entity="tile")
+        before = (db.learned_gain, db.tracker_gain["tile"])
+        sextant._restore_fp_gains({"learned_gain": 3.0, "tracker_gain": {"tile": 3.0}})
+        assert (db.learned_gain, db.tracker_gain["tile"]) == before      # already learned this run: kept
+    finally:
+        sextant._fingerprint_db = saved

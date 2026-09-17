@@ -284,3 +284,9 @@ def test_truth_marks_are_recorded_evaluated_listed_applied_and_deleted(tmp_path,
     assert conn.results[-1][1]["mark"]["id"] == 1 and len(conn.results[-1][1]["rows"]) >= 1
     run(ws.ws_truth_delete(hass, conn, {"id": 9, "type": "sextant/truth/delete", "mark_id": 1}))
     assert conn.results[-1][1]["removed"] == 1 and sextant._fingerprint_db.extra_refs == []
+
+
+def test_every_websocket_handler_is_registered():
+    handlers = {name for name in dir(ws) if name.startswith("ws_")}
+    registered = {fn.__name__ for fn in ws.COMMANDS}
+    assert handlers <= registered, sorted(handlers - registered)

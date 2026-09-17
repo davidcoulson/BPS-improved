@@ -557,6 +557,7 @@ an iPhone from a Find My tag before tracking anything.
 | Calibration solves and the rolling sample window | `config/.storage/sextant_calibration_state` |
 | Stability baselines | `config/.storage/sextant_kpi_baselines` |
 | Truth marks with their samples | `config/.storage/sextant_truth` |
+| Learned fingerprint gains, saved every five minutes so a restart starts warm | `config/.storage/sextant_fingerprint_gains` |
 | Position history, one NDJSON segment per day, pruned to the retention | `config/.storage/sextant_history/` |
 | Floor-plan images | `config/www/sextant_maps/` |
 

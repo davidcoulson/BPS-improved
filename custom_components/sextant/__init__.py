@@ -55,8 +55,10 @@ from .storage import (
     get_layout,
     get_layout_for_edit,
     get_layout_version,
+    load_fp_gains,
     load_layout,
     load_truth,
+    save_fp_gains,
     migrate_from_bps,
     migrate_legacy,
     save_layout,
@@ -403,6 +405,9 @@ TUNING_SPEC = {
 # Reference fingerprints: receiver-to-receiver ranges, refreshed on a slow
 # cadence at the top of the loop (the receivers do not move).
 FINGERPRINT_REFRESH_SECS = 20.0
+# The learned gains are written out this often (when they moved), so a restart starts warm
+# instead of walking the shared gain back from 1.0 and every tracker's from scratch.
+FP_GAIN_PERSIST_SECS = 300.0
 _fingerprint_db = fingerprint.ReferenceDB()
 # The last cycles' solver inputs per tracker, for truth marks (truth.py).
 _truth_buffer = truth_mod.Buffer()
@@ -457,6 +462,36 @@ def _mark_refs(layout):
     return _fingerprint_db.extra_refs if _tuning(layout, "fingerprint_marks") and _fingerprint_db.extra_refs else None
 
 
+def _persist_fp_gains(hass, now_ts):
+    """Every FP_GAIN_PERSIST_SECS, save the learned gains if they moved (event loop only)."""
+    if now_ts - getattr(_persist_fp_gains, "last", 0.0) < FP_GAIN_PERSIST_SECS:
+        return
+    _persist_fp_gains.last = now_ts
+    snap = {"learned_gain": round(_fingerprint_db.learned_gain, 4),
+            "tracker_gain": {e: round(g, 4) for e, g in _fingerprint_db.tracker_gain.items()}}
+    if snap == getattr(_persist_fp_gains, "saved", None):
+        return
+    _persist_fp_gains.saved = snap
+    try:
+        hass.async_create_task(save_fp_gains(hass, snap))
+    except Exception as e:  # noqa: BLE001
+        _LOGGER.debug("Fingerprint gains not saved: %s", e)
+
+
+def _restore_fp_gains(saved):
+    """Seed the reference DB from a saved snapshot; never over a gain already learned this run."""
+    if not isinstance(saved, dict):
+        return
+    g = saved.get("learned_gain")
+    if isinstance(g, (int, float)) and not isinstance(g, bool) and 0 < g and _fingerprint_db.learned_gain == 1.0:
+        _fingerprint_db.learned_gain = min(fingerprint.LEARNED_GAIN_MAX, max(fingerprint.LEARNED_GAIN_MIN, float(g)))
+    for entity, tg in (saved.get("tracker_gain") or {}).items():
+        if isinstance(tg, (int, float)) and not isinstance(tg, bool) and tg > 0 and entity not in _fingerprint_db.tracker_gain:
+            _fingerprint_db.tracker_gain[entity] = min(fingerprint.LEARNED_GAIN_MAX, max(fingerprint.LEARNED_GAIN_MIN, float(tg)))
+    _persist_fp_gains.saved = {"learned_gain": round(_fingerprint_db.learned_gain, 4),
+                               "tracker_gain": {e: round(v, 4) for e, v in _fingerprint_db.tracker_gain.items()}}
+
+
 def _refresh_fingerprint_references(hass, layout, now_ts):
     """Sample Bermuda's scanner ranging into the reference DB when due."""
     if not _fingerprint_wanted(layout):
@@ -464,6 +499,7 @@ def _refresh_fingerprint_references(hass, layout, now_ts):
     if now_ts - getattr(_refresh_fingerprint_references, "last", 0.0) < FINGERPRINT_REFRESH_SECS:
         return
     _refresh_fingerprint_references.last = now_ts
+    _persist_fp_gains(hass, now_ts)
     ranging = bermuda_source.async_get_scanner_ranging(hass, max_age=fingerprint.REF_MAX_AGE_SECS)
     if ranging is None:
         if not getattr(_refresh_fingerprint_references, "warned", False):
@@ -3713,8 +3749,9 @@ async def async_setup_entry(hass, entry):
     try:
         store = await load_truth(hass)
         _fingerprint_db.extra_refs = [r for r in (truth_mod.mark_reference(m) for m in store.get("marks", [])) if r]
+        _restore_fp_gains(await load_fp_gains(hass))
     except Exception as e:  # noqa: BLE001
-        _LOGGER.warning("Truth marks not loaded: %s", e)
+        _LOGGER.warning("Truth marks or learned gains not loaded: %s", e)
     cleanup_legacy_sextant_registry_and_states(hass)
     await hass.config_entries.async_forward_entry_setups(entry, ["sensor"])
     entry.async_on_unload(entry.add_update_listener(async_update_options))

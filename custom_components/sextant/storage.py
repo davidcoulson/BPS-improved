@@ -33,6 +33,7 @@ STORAGE_KEY_LAYOUT = "sextant"                       # -> config/.storage/sextan
 STORAGE_KEY_CALIB = "sextant_calibration_state"      # -> config/.storage/sextant_calibration_state
 STORAGE_KEY_KPI = "sextant_kpi_baselines"            # -> config/.storage/sextant_kpi_baselines
 STORAGE_KEY_TRUTH = "sextant_truth"                  # -> config/.storage/sextant_truth (marks + their samples)
+STORAGE_KEY_FP_GAINS = "sextant_fingerprint_gains"   # -> the learned reference gains, so a restart starts warm
 
 # Serializes read-modify-write sequences on the layout across every writer
 # (panel save + calibration). Lives here so both importers share one lock
@@ -205,6 +206,30 @@ async def load_truth(hass) -> dict:
 
 async def save_truth(hass, data: dict) -> None:
     await _truth_store(hass).async_save(data)
+
+
+# --- Learned fingerprint gains ----------------------------------------------
+
+def _fp_gain_store(hass) -> Store:
+    bucket = _bucket(hass)
+    store = bucket.get("_fp_gain_store")
+    if store is None:
+        store = bucket["_fp_gain_store"] = Store(hass, STORAGE_VERSION, STORAGE_KEY_FP_GAINS)
+    return store
+
+
+async def load_fp_gains(hass) -> dict:
+    """``{"learned_gain": float, "tracker_gain": {entity: float}}``; empty when none."""
+    try:
+        data = await _fp_gain_store(hass).async_load()
+    except Exception as e:
+        _LOGGER.warning("Could not load fingerprint gains: %s", e)
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+async def save_fp_gains(hass, data: dict) -> None:
+    await _fp_gain_store(hass).async_save(data)
 
 
 # --- One-time migration of the old flat files -------------------------------
