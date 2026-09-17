@@ -119,3 +119,11 @@ def test_prune_finds_orphans_that_only_exist_in_the_registry(tmp_path):
     sn.prune_sensors_for_untracked(hass, {"phone"})
     assert sn.prune_sensors_for_untracked(hass, {"phone"}) == 4
     assert _entries_of(hass, "tile_9") == [] and "dev_tile_9" not in dr.async_get(hass).devices
+
+
+def test_device_lookup_uses_the_per_entry_api_when_the_core_has_it(tmp_path):
+    hass = _house(tmp_path, trackers=("phone",))
+    hass.config_entries = types.SimpleNamespace(async_entries=lambda domain: [types.SimpleNamespace(entry_id="entry-1")])
+    assert sn.remove_sensors_for_trackers(hass, ["phone"]) == 4
+    devs = dr.async_get(hass)
+    assert devs.by_identifier_calls == 1 and "dev_phone" not in devs.devices

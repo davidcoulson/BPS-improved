@@ -167,6 +167,10 @@ class FakeDeviceRegistry:
         wanted = set(identifiers or ())
         return next((d for d in self.devices.values() if d.identifiers & wanted), None)
 
+    def async_get_device_by_identifier(self, identifier, config_entry_id):
+        self.by_identifier_calls = getattr(self, "by_identifier_calls", 0) + 1
+        return next((d for d in self.devices.values() if identifier in d.identifiers), None)
+
     def async_remove_device(self, device_id):
         self.devices.pop(device_id, None)
 

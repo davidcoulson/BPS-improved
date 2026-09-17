@@ -108,10 +108,28 @@ def tracker_of_unique_id(unique_id):
     return None
 
 
+def _sextant_device(hass, dev_reg, tracker):
+    """The ``<tracker> (Sextant)`` device, looked up the way the running core wants.
+
+    2026.9 deprecates async_get_device(identifiers=...) in favour of the
+    per-config-entry lookup; older cores only have the former.
+    """
+    identifier = ("sextant", tracker)
+    by_identifier = getattr(dev_reg, "async_get_device_by_identifier", None)
+    entries = getattr(getattr(hass, "config_entries", None), "async_entries", None)
+    if by_identifier is not None and entries is not None:
+        for entry in entries("sextant"):
+            device = by_identifier(identifier, entry.entry_id)
+            if device is not None:
+                return device
+        return None
+    return dev_reg.async_get_device(identifiers={identifier})
+
+
 def _remove_sextant_device(hass, tracker):
     """Drop the ``<tracker> (Sextant)`` device once none of its entities remain."""
     dev_reg = dr.async_get(hass)
-    device = dev_reg.async_get_device(identifiers={("sextant", tracker)})
+    device = _sextant_device(hass, dev_reg, tracker)
     if device is None:
         return False
     ent_reg = er.async_get(hass)
