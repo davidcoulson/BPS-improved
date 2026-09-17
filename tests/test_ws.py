@@ -92,7 +92,16 @@ def test_bermuda_commands_pass_through_the_management_api(tmp_path, monkeypatch)
     calls = []
     api = types.ModuleType("custom_components.bermuda.api")
     api.SNAPSHOT_VERSION = 1
-    api.SNAPSHOT_FEATURES = frozenset({"device_management", "tracked_devices"})
+    api.SNAPSHOT_FEATURES = frozenset({"device_management", "tracked_devices", "tile_identity"})
+    api.async_get_tile_identities = lambda _h: {"cafe01": {"uid": "cafe01", "addresses": ["aa"], "tile_id": None}}
+
+    async def bind_tile(_h, tile_id, uid):
+        if uid == "taken":
+            raise ValueError("Tile ID taken is already declared as tile_x")
+        calls.append(("bind", tile_id, uid))
+        return {"tile_id": tile_id, "uid": uid, "address": "aa"}
+
+    api.async_bind_tile = bind_tile
     api.async_get_advert_snapshot = lambda *a, **k: None
     api.async_get_coordinator = lambda _h: types.SimpleNamespace(tile_manager=types.SimpleNamespace(diagnostics=lambda: {"handovers": 2}))
     api.async_get_device_candidates = lambda _h, **kw: [{"address": "aa", "config_value": "AA"}]
@@ -127,6 +136,12 @@ def test_bermuda_commands_pass_through_the_management_api(tmp_path, monkeypatch)
     assert "managed option" in conn.errors[-1][2]
     run(ws.ws_bermuda_tiles(hass, conn, {"id": 4, "type": "sextant/bermuda/tiles"}))
     assert conn.results[-1][1]["tiles"] == {"handovers": 2}
+    run(ws.ws_bermuda_tile_identities(hass, conn, {"id": 5, "type": "sextant/bermuda/tile_identities"}))
+    assert conn.results[-1][1]["identities"]["cafe01"]["addresses"] == ["aa"]
+    run(ws.ws_bermuda_tile_bind(hass, conn, {"id": 6, "type": "sextant/bermuda/tile/bind", "tile_id": "tile_1", "uid": "cafe01"}))
+    assert calls[-1] == ("bind", "tile_1", "cafe01") and conn.results[-1][1]["address"] == "aa"
+    run(ws.ws_bermuda_tile_bind(hass, conn, {"id": 7, "type": "sextant/bermuda/tile/bind", "tile_id": "tile_1", "uid": "taken"}))
+    assert "already declared" in conn.errors[-1][2]
 
 
 def test_bermuda_commands_explain_a_missing_api(tmp_path, monkeypatch):

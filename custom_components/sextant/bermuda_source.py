@@ -687,3 +687,25 @@ def async_get_readings_by_address(hass, include_history=False) -> dict[tuple[str
         cache["readings_addr_at"] = now
         cache["readings_addr_history"] = bool(include_history)
     return readings
+
+
+# --- Tile identity (bind a configured Tile to the ID read from the tag) ------
+
+
+def async_get_tile_identities(hass) -> dict | None:
+    """Every Tile ID Bermuda has read and where that Tile is now, or None
+    when this Bermuda build cannot (feature "tile_identity")."""
+    api = _bermuda_api()
+    if api is None or "tile_identity" not in _features(api):
+        return None
+    return api.async_get_tile_identities(hass)
+
+
+async def async_bind_tile(hass, tile_id, uid) -> dict | None:
+    """Declare that configured Tile ``tile_id`` is the tag with Tile ID ``uid``."""
+    api = _bermuda_api()
+    if api is None or "tile_identity" not in _features(api):
+        return None
+    result = await api.async_bind_tile(hass, tile_id, uid)
+    async_invalidate_cache(hass)
+    return result

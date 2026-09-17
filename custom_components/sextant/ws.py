@@ -623,6 +623,29 @@ async def ws_bermuda_scanners(hass, connection, msg):
     _bermuda_result(connection, msg, None if directory is None else {"scanners": directory}, feature="scanners")
 
 
+@websocket_api.websocket_command({vol.Required("type"): "sextant/bermuda/tile_identities"})
+@websocket_api.async_response
+async def ws_bermuda_tile_identities(hass, connection, msg):
+    """Every Tile ID Bermuda has read, with the area / loudest receiver it was last heard at."""
+    ids = bermuda_source.async_get_tile_identities(hass)
+    _bermuda_result(connection, msg, None if ids is None else {"identities": ids}, feature="tile_identity")
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "sextant/bermuda/tile/bind",
+    vol.Required("tile_id"): str,
+    vol.Required("uid"): str,
+})
+@websocket_api.async_response
+async def ws_bermuda_tile_bind(hass, connection, msg):
+    """Declare which Tile ID belongs to a configured Tile (the user knows which tag is on which keys)."""
+    try:
+        result = await bermuda_source.async_bind_tile(hass, msg["tile_id"], msg["uid"])
+    except ValueError as e:
+        return _error(connection, msg, str(e))
+    _bermuda_result(connection, msg, result, feature="tile_identity")
+
+
 @websocket_api.websocket_command({vol.Required("type"): "sextant/bermuda/scanner_ranging", vol.Optional("max_age"): vol.Coerce(float)})
 @websocket_api.async_response
 async def ws_bermuda_scanner_ranging(hass, connection, msg):
@@ -647,7 +670,7 @@ COMMANDS = (
     ws_adjust_zones, ws_kpi, ws_kpi_baselines, ws_kpi_baseline_save, ws_kpi_baseline_delete,
     ws_bermuda_candidates, ws_bermuda_tracked, ws_bermuda_track, ws_bermuda_findmy, ws_bermuda_findmy_add,
     ws_bermuda_findmy_remove, ws_bermuda_options, ws_bermuda_options_set, ws_bermuda_scanners, ws_bermuda_tiles,
-    ws_bermuda_scanner_ranging,
+    ws_bermuda_scanner_ranging, ws_bermuda_tile_identities, ws_bermuda_tile_bind,
 )
 
 

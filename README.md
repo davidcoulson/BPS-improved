@@ -883,6 +883,17 @@ to share, `unknown` for "in none of them") and shown next to the sub-zone
 in the Live drawer, like the floor probabilities. Set `zone_hysteresis` to
 false to publish the raw zone as before.
 
+## Tiles by identity
+
+Tiles rotate their Bluetooth address, and (it turns out) change it again
+right after every connection, so an address is never a durable name for
+one. Bermuda reads each Tile's ID over Bluetooth; the Devices page lists
+every ID heard with the area and loudest receiver it was last seen at, and a
+**Bind** control per row declares which configured Tile that ID is - the one
+thing only you know. From then on every rotation is resolved by identity
+(`sextant/bermuda/tile_identities`, `sextant/bermuda/tile/bind`, or the
+`bermuda.bind_tile` service). Needs Bermuda fork-testing.20 or later.
+
 ## Stability baselines
 
 The Health page's stability KPI (zone changes per tracker-hour, A → B → A

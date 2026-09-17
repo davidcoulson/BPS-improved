@@ -18,6 +18,8 @@ class SextantDevices extends LitElement {
     _tracked: { state: true },
     _candidates: { state: true },
     _tiles: { state: true },
+    _identities: { state: true },
+    _bindPick: { state: true },
     _findmy: { state: true },
     _options: { state: true },
     _filter: { state: true },
@@ -32,6 +34,8 @@ class SextantDevices extends LitElement {
     this._tracked = null;
     this._candidates = null;
     this._tiles = null;
+    this._identities = null;
+    this._bindPick = {};
     this._findmy = null;
     this._options = null;
     this._filter = "";
@@ -53,28 +57,43 @@ class SextantDevices extends LitElement {
 
   async _refresh() {
     if (!this.hass) return;
-    const [tracked, candidates, tiles, findmy, options] = await Promise.all([
+    const [tracked, candidates, tiles, findmy, options, identities] = await Promise.all([
       this.hass.callWS({ type: "sextant/bermuda/tracked" }).catch(() => null),
       this.hass.callWS({ type: "sextant/bermuda/candidates" }).catch(() => null),
       this.hass.callWS({ type: "sextant/bermuda/tiles" }).catch(() => null),
       this.hass.callWS({ type: "sextant/bermuda/findmy" }).catch(() => null),
       this.hass.callWS({ type: "sextant/bermuda/options" }).catch(() => null),
+      this.hass.callWS({ type: "sextant/bermuda/tile_identities" }).catch(() => null),
     ]);
     this._tracked = tracked?.tracked ?? null;
     this._candidates = candidates?.candidates ?? null;
     this._tiles = tiles?.tiles ?? null;
+    this._identities = identities?.identities ?? null;
     this._findmy = findmy?.accessories ?? null;
     this._options = options?.options ?? null;
   }
 
   async _refreshLight() {
     if (!this.hass) return;
-    const [candidates, tiles] = await Promise.all([
+    const [candidates, tiles, identities] = await Promise.all([
       this.hass.callWS({ type: "sextant/bermuda/candidates" }).catch(() => null),
       this.hass.callWS({ type: "sextant/bermuda/tiles" }).catch(() => null),
+      this.hass.callWS({ type: "sextant/bermuda/tile_identities" }).catch(() => null),
     ]);
     if (candidates) this._candidates = candidates.candidates;
     if (tiles) this._tiles = tiles.tiles;
+    if (identities) this._identities = identities.identities;
+  }
+
+  async _bindTile(uid) {
+    const tileId = this._bindPick[uid];
+    if (!tileId) return;
+    const r = await callWS(this, this.hass, { type: "sextant/bermuda/tile/bind", tile_id: tileId, uid });
+    if (r) {
+      toast(this, r.address ? `${slugLabel(tileId)} is now ${r.address}` : `${slugLabel(tileId)} remembered as ${uid}; it binds when that Tile is next heard`);
+      this._bindPick = { ...this._bindPick, [uid]: "" };
+      await this._refreshLight();
+    }
   }
 
   async _track(add, remove) {
@@ -247,10 +266,31 @@ class SextantDevices extends LitElement {
           <td class="small muted">${sources.slice(1, 4).join(" → ") || "—"}</td>
         </tr>`)}
       </table></div>
-      <p class="small muted">Handovers ${t.handovers ?? 0} (${t.ambiguous_handovers ?? 0} ambiguous) · probes ${t.probes ?? 0}, failed ${t.probe_failures ?? 0}${t.probes_pending?.length ? `, pending ${t.probes_pending.length}` : ""}.
+      ${this._renderIdentities(bindings.map(([id]) => id))}
+      <p class="small muted">Handovers ${t.handovers ?? 0} (${t.ambiguous_handovers ?? 0} ambiguous) · probes ${t.probes ?? 0}, failed ${t.probe_failures ?? 0}${t.probes_inherited ? `, ${t.probes_inherited} inherited` : ""}${t.probes_pending?.length ? `, pending ${t.probes_pending.length}` : ""}${t.probe_budget_left != null ? ` · ${t.probe_budget_left} connections left this hour` : ""}.
         ${t.last_handover ? html`Last: ${slugLabel(t.last_handover.tile)} → <code>${t.last_handover.to}</code> by ${t.last_handover.reason || "rssi pattern"}${t.last_handover.score != null ? ` (${fmtNum(t.last_handover.score, 1)} dB over ${t.last_handover.scanners} scanners)` : ""}.` : nothing}
         ${t.last_probe?.detail ? html`<br>Last probe of <code>${t.last_probe.address}</code>: ${t.last_probe.error || "ok"} ${t.last_probe.detail}` : nothing}
       </p>`;
+  }
+
+  _renderIdentities(tileIds) {
+    const ids = Object.values(this._identities || {}).sort((a, b) => (a.last_seen_age ?? 1e9) - (b.last_seen_age ?? 1e9));
+    if (!ids.length) return nothing;
+    const options = [{ value: "", label: "choose a Tile…" }, ...tileIds.map((id) => ({ value: id, label: slugLabel(id) }))];
+    return html`<h4>Tile IDs heard <span class="muted small">read from the tags; pick which configured Tile each one is</span></h4>
+      <div class="wrap"><table>
+        <tr><th>Tile ID</th><th>Last heard</th><th>Where</th><th>Loudest receiver</th><th>Is</th><th></th></tr>
+        ${ids.map((row) => html`<tr>
+          <td><code>${row.uid}</code></td>
+          <td>${row.last_seen_age != null ? `${fmtAge(row.last_seen_age)} ago` : "—"}</td>
+          <td>${row.area_name || "—"}</td>
+          <td class="small">${row.strongest ? `${row.strongest.scanner} (${row.strongest.rssi} dBm)` : "—"}</td>
+          <td>${row.tile_id ? html`<b>${slugLabel(row.tile_id)}</b>` : html`<div class="row">
+            ${uiSelect({ label: "", value: this._bindPick[row.uid] || "", options, onChange: (v) => { this._bindPick = { ...this._bindPick, [row.uid]: v }; }, style: "min-width: 200px" })}
+            ${uiButton({ label: "Bind", kind: "primary", disabled: !this._bindPick[row.uid], onClick: () => this._bindTile(row.uid) })}</div>`}</td>
+          <td class="small muted">${row.addresses?.length || 0} address${row.addresses?.length === 1 ? "" : "es"}</td>
+        </tr>`)}
+      </table></div>`;
   }
 
   static styles = [sharedStyles, widgetStyles, css`
