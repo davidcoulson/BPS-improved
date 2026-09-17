@@ -152,9 +152,10 @@ export function uiSelect({ label, value, options, onChange, disabled = false, st
   const opts = options.map((o) => ({ value: String(o.value), label: o.label, disabled: !!o.disabled }));
   const fire = (e) => { const nv = e.detail?.value ?? e.target?.value; if (nv != null && String(nv) !== v) onChange?.(String(nv)); };
   if (Sel && Sel.elementProperties?.has?.("options")) {
-    // HA 2026.3+: options are a property, selection arrives as value-changed.
+    // HA 2026.3+: options are a property; a choice arrives as `selected` (detail.value) on 2026.9,
+    // as value-changed on earlier builds. Listen for all of them; `fire` ignores a repeat of the current value.
     return html`<ha-select .label=${label ?? ""} .value=${v} .options=${opts} ?disabled=${disabled} style=${style}
-        @value-changed=${fire} @change=${fire} @closed=${(e) => e.stopPropagation()}></ha-select>`;
+        @selected=${fire} @value-changed=${fire} @change=${fire} @closed=${(e) => e.stopPropagation()}></ha-select>`;
   }
   if (Sel && has("mwc-list-item")) {
     return html`<ha-select .label=${label ?? ""} .value=${v} ?disabled=${disabled} style=${style} naturalMenuWidth fixedMenuPosition

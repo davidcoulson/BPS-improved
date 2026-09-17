@@ -14,6 +14,8 @@ import { sharedStyles, widgetStyles, fmtAge, fmtNum, toast, callWS, confirmDialo
 
 const KIND_FILTERS = [["all", "Everything"], ["tile", "Tiles"], ["ibeacon", "iBeacons"], ["device", "Other devices"]];
 const RECENT_SECS = 60;
+// The iBeacon every calibration probe advertises (README, "make each probe advertise"), hex without dashes.
+const PROBE_BEACON_UUID = "fde3b1502f6443baaee9867f75ee4a6f";
 const FINDMY_KEYS = ["master_key", "skn", "sks", "paired_at"];
 const FINDMY_GUIDE = "https://github.com/malmeloo/FindMy.py";
 
@@ -362,6 +364,7 @@ class SextantDevices extends LitElement {
    *  scanner's slug carries the same six (great_room_eth_d83d6c for ble-esp32-eth-d83d6c). */
   _isProxyBeacon(c) {
     if (c.kind !== "ibeacon") return false;
+    if (String(c.address || c.config_value || "").toLowerCase().replace(/-/g, "").startsWith(PROBE_BEACON_UUID)) return true;
     const name = String(c.name || "").toLowerCase();
     const scanners = Object.values(this.data?.scanners || {});
     if (scanners.some((s) => [s.name, s.slug].filter(Boolean).some((n) => n.toLowerCase() === name))) return true;
@@ -399,10 +402,14 @@ class SextantDevices extends LitElement {
     const live = new Map((this.positions?.positions || []).map((p) => [p.ent, p]));
     const tracked = Object.entries(this._tracked || {}).sort((a, b) => trackerName(this.data, a[1].slug).localeCompare(trackerName(this.data, b[1].slug)));
     const filter = this._filter.toLowerCase();
+    const placedHearing = (c) => (Array.isArray(c.heard_by) ? c.heard_by : []).filter((h) => placed.has(String(h.address || "").toLowerCase())).length;
     const all = (this._candidates || []).filter((c) => !this._isProxyBeacon(c) && !this._onlyUnplaced(c, placed));
     const recent = all.filter((c) => (c.last_seen_age ?? 1e9) <= RECENT_SECS);
+    // One proxy cannot place a device (the solver wants three), so something only one placed proxy hears is
+    // noise here: a neighbour's gadget at the edge of range, a proxy's own radar module. "Show all" lifts this.
+    const lonely = new Set(placed.size ? recent.filter((c) => placedHearing(c) < 2) : []);
     const haystack = (c) => { const w = this._heardWhere(c, index); return `${c.name} ${c.address} ${c.manufacturer || ""} ${c.apple_summary || ""} ${c.area_name || ""} ${c.kind} ${w ? `${w.room || ""} ${w.floor || ""} ${w.proxy || ""}` : ""}`.toLowerCase(); };
-    const candidates = (this._showAll ? all : recent)
+    const candidates = (this._showAll ? all : recent.filter((c) => !lonely.has(c)))
       .filter((c) => (this._kind === "all" || c.kind === this._kind) && (!filter || haystack(c).includes(filter)))
       .sort((a, b) => (a.last_seen_age ?? 1e9) - (b.last_seen_age ?? 1e9));
     return html`
@@ -436,7 +443,7 @@ class SextantDevices extends LitElement {
       </section>
 
       <section class="card">
-        <h3>Heard, not tracked <span class="muted">${candidates.length}${this._showAll ? "" : ` in the last ${RECENT_SECS} s`}</span></h3>
+        <h3>Heard, not tracked <span class="muted">${candidates.length}${this._showAll ? "" : ` in the last ${RECENT_SECS} s`}</span>${!this._showAll && lonely.size ? html` <span class="muted small" title="One proxy cannot position a device; switch on Show all to see them">· ${lonely.size} heard by a single proxy, hidden</span>` : nothing}</h3>
         <div class="row">
           <input class="grow" type="search" placeholder="Filter by name, address, maker, room, floor, proxy or kind" .value=${this._filter} @input=${(e) => { this._filter = e.target.value; }}>
           ${uiSelect({ label: "Kind", value: this._kind, options: KIND_FILTERS.map(([v, l]) => ({ value: v, label: l })), onChange: (v) => { this._kind = v; }, style: "min-width: 150px" })}
@@ -449,14 +456,14 @@ class SextantDevices extends LitElement {
             <td><b>${c.name}</b> ${c.kind === "tile" ? html`<span class="pill">Tile</span>` : c.kind === "ibeacon" ? html`<span class="pill">iBeacon</span>` : nothing}<br><span class="muted small">${c.address}</span></td>
             <td>${c.manufacturer || html`<span class="muted">unknown</span>`}${c.apple_summary ? html`<br><span class="small muted">${c.apple_summary}</span>` : c.address_type === "bd_addr_random_resolvable" ? html`<br><span class="small muted">rotating address (IRK)</span>` : nothing}</td>
             <td>${w ? html`${w.room || w.floor}${w.room ? html`<br><span class="muted small">${w.floor}</span>` : nothing}<br><span class="muted small">${w.proxy}</span>` : c.area_name ? html`${c.area_name}` : html`<span class="muted">—</span>`}</td>
-            <td class="num">${c.scanners}</td>
+            <td class="num" title="placed proxies hearing it">${placed.size ? placedHearing(c) : c.scanners}</td>
             <td class="num" title="strongest reading (RSSI)">${w ? w.rssi : c.best_rssi ?? "—"} dBm</td>
             <td class="small">${fmtAge(c.last_seen_age)} ago<br><span class="muted">first ${fmtAge(c.first_seen_age)}</span></td>
             <td>${uiButton({ label: "Track…", kind: "primary", disabled: this._busy, onClick: () => this._startTrack(c), title: "Choose its name, class and height first; Bermuda tracks it when you confirm" })}</td>
           </tr>`; })}
           ${candidates.length ? nothing : html`<tr><td colspan="7" class="muted">${this._candidates ? (this._showAll ? "No matching devices." : `Nothing heard in the last ${RECENT_SECS} s matches; switch on "Show all" for everything Bermuda remembers.`) : "Loading…"}</td></tr>`}
         </table></div>
-        <p class="small muted">Only what a placed proxy hears is listed; anything heard solely by an unplaced proxy (a kiosk, a test board) is left out. Apple FindMy tags are not in this list: they need their pairing keys, added on the Bermuda page.</p>
+        <p class="small muted">Only what two or more placed proxies hear is listed: one proxy cannot position a device, and anything heard solely by an unplaced proxy (a kiosk, a test board) is left out; "Show all" lifts both. Apple FindMy tags are not in this list: they need their pairing keys, added on the Bermuda page.</p>
       </section>`;
   }
 

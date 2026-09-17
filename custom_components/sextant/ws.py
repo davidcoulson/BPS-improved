@@ -26,6 +26,7 @@ from homeassistant.components import websocket_api
 
 from . import bermuda_source, kpi
 from . import history as history_mod
+from .const import PROBE_BEACON_UUID
 from .storage import (
     LAYOUT_LOCK, get_layout, get_layout_for_edit, get_layout_version, load_kpi_baselines, save_kpi_baselines,
     save_layout,
@@ -627,6 +628,9 @@ def _bermuda_result(connection, msg, value, feature="device_management"):
 @websocket_api.async_response
 async def ws_bermuda_candidates(hass, connection, msg):
     rows = bermuda_source.async_get_device_candidates(hass, max_age=msg.get("max_age"))
+    if rows:
+        # The proxies' own calibration iBeacon is not a device anyone tracks; keep it out of every list.
+        rows = [r for r in rows if not str(r.get("address") or r.get("config_value") or "").lower().replace("-", "").startswith(PROBE_BEACON_UUID)]
     _bermuda_result(connection, msg, None if rows is None else {"candidates": rows})
 
 
