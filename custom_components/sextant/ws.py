@@ -75,19 +75,33 @@ def _tracker_names(hass, entities) -> dict:
     for info in (bermuda_source.async_get_tracked_devices(hass) or {}).values():
         slug, name = info.get("slug"), info.get("name")
         if slug and name:
-            names[slug] = name
+            names[slug] = _tidy_device_name(name)
     try:
         from homeassistant.helpers import device_registry as dr, entity_registry as er  # noqa: PLC0415
 
         ent_reg, dev_reg = er.async_get(hass), dr.async_get(hass)
         for ent in entities:
-            entry = ent_reg.async_get(f"sensor.{ent}_sextant_zone")
-            device = dev_reg.async_get(entry.device_id) if entry and entry.device_id else None
-            if device is not None and (device.name_by_user or device.name):
-                names[ent] = device.name_by_user or device.name
+            # Only a name the user typed counts here: the registry's own name
+            # is Sextant's "<slug> (Sextant)" device or Bermuda's, which the
+            # tracked list already gave us in a nicer form.
+            for entity_id in (f"sensor.{ent}_sextant_zone", f"sensor.{ent}_area", f"device_tracker.{ent}"):
+                entry = ent_reg.async_get(entity_id)
+                device = dev_reg.async_get(entry.device_id) if entry and entry.device_id else None
+                if device is not None and device.name_by_user:
+                    names[ent] = device.name_by_user
+                    break
     except Exception:  # noqa: BLE001 - no registries (tests), Bermuda's names stand
         pass
     return names
+
+
+def _tidy_device_name(name: str) -> str:
+    """"Private BLE Device David's Phone" -> "David's Phone": the integration
+    prefix Bermuda copies into the device name is not part of the name."""
+    for prefix in ("Private BLE Device ", "Private BLE "):
+        if name.startswith(prefix) and len(name) > len(prefix):
+            return name[len(prefix):]
+    return name
 
 
 # --- layout ----------------------------------------------------------------------

@@ -229,3 +229,15 @@ def test_scanner_ranging_passes_through_and_explains_a_missing_api(tmp_path, mon
     monkeypatch.setattr(ws.bermuda_source, "async_get_scanner_ranging", lambda hass, max_age=None: None)
     run(ws.ws_bermuda_scanner_ranging(hass, conn, {"id": 2, "type": "sextant/bermuda/scanner_ranging"}))
     assert "scanner_ranging" in conn.errors[-1][2]
+
+
+def test_tracker_names_come_from_bermuda_tidied_and_user_renames_win(tmp_path, monkeypatch):
+    hass = _hass_with_layout(tmp_path, _layout())
+    monkeypatch.setattr(ws.bermuda_source, "async_get_tracked_devices", lambda _h: {
+        "aa": {"slug": "fry", "name": "Fry"},
+        "bb": {"slug": "private_ble_device_david_s_phone", "name": "Private BLE Device David's Phone"},
+        "cc": {"slug": "private_ble_jack_watch", "name": "Private BLE Jack Watch"},
+    })
+    names = ws._tracker_names(hass, ["fry", "private_ble_device_david_s_phone", "private_ble_jack_watch"])
+    assert names == {"fry": "Fry", "private_ble_device_david_s_phone": "David's Phone", "private_ble_jack_watch": "Jack Watch"}
+    assert ws._tidy_device_name("Private BLE Device ") == "Private BLE Device "   # never empty
