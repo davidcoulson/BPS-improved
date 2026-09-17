@@ -43,11 +43,27 @@ _LOGGER = logging.getLogger(__name__)
 # that is done once rather than N times. Bermuda's own coordinator updates about
 # once a second, so a sub-second TTL costs no freshness.
 _READINGS_TTL = 0.5
+# The raw snapshot itself is shared by the readings, the slug map, the
+# distance-pair listing and (on older Bermuda builds) the tracked-set check,
+# several of which run in the same cycle. Build it once per cycle.
+_SNAPSHOT_TTL = 0.5
 # The slug map only changes when a device/scanner is newly seen, which is rare
 # after the first few minutes of a boot.
 _SLUG_MAP_TTL = 30.0
+# The tracked-device set is asked for on EVERY Bermuda coordinator tick (~1 s,
+# see sensor.py's bermuda_updated) purely to notice a device being added or
+# removed. A few seconds of staleness there is invisible to the user; the
+# ~1 Hz rebuild it replaced was the single largest recurring cost in the
+# Bermuda/BPS pairing.
+_TRACKED_TTL = 5.0
 
 _CACHE_KEY = "bps_bermuda_source_cache"
+_EMPTY_CACHE = {
+    "readings_at": 0.0, "readings": None,
+    "slug_map_at": 0.0, "slug_map": None,
+    "snapshot_at": 0.0, "snapshot": None,
+    "tracked_at": 0.0, "tracked": None,
+}
 
 
 def _cache_for(hass) -> dict | None:
@@ -62,17 +78,18 @@ def _cache_for(hass) -> dict | None:
     data = getattr(hass, "data", None)
     if not isinstance(data, dict):
         return None
-    return data.setdefault(
-        _CACHE_KEY,
-        {"readings_at": 0.0, "readings": None, "slug_map_at": 0.0, "slug_map": None},
-    )
+    cache = data.setdefault(_CACHE_KEY, dict(_EMPTY_CACHE))
+    # A bucket created by an older build of this module lacks the newer keys.
+    for key, value in _EMPTY_CACHE.items():
+        cache.setdefault(key, value)
+    return cache
 
 
 def async_invalidate_cache(hass) -> None:
     """Drop cached lookups (call after entities are added or removed)."""
     cache = _cache_for(hass)
     if cache is not None:
-        cache.update({"readings_at": 0.0, "readings": None, "slug_map_at": 0.0, "slug_map": None})
+        cache.update(_EMPTY_CACHE)
 
 _DISTANCE_TO = "_distance_to_"
 
@@ -92,6 +109,22 @@ def _bermuda_api():
     if not hasattr(api, "async_get_advert_snapshot"):
         return None
     return api
+
+
+def _features(api) -> frozenset:
+    """
+    The additive snapshot features this Bermuda build advertises.
+
+    Bermuda layers optional capabilities (a tracked-only snapshot, a cheap
+    tracked-device accessor, a scanner liveness map) on SNAPSHOT_VERSION 1 and
+    names them in ``SNAPSHOT_FEATURES``. A build without the attribute is a
+    plain v1 build and gets the original, heavier code paths.
+    """
+    features = getattr(api, "SNAPSHOT_FEATURES", None)
+    try:
+        return frozenset(features or ())
+    except TypeError:
+        return frozenset()
 
 
 def async_api_available(hass) -> bool:
@@ -156,36 +189,112 @@ def async_get_tracked_device_prefixes(hass) -> set[str] | None:
     """
     Current slugs of the devices Bermuda is configured to TRACK.
 
-    Read directly from the live snapshot: each tracked device contributes
-    exactly its own CURRENT slug. Unlike a registry-based join over frozen,
-    one-per-rename entity_ids, a renamed device can never appear under more
-    than one prefix at once, because there is only one live slug to read -
-    no history to accumulate duplicates from. This is also the only source
-    available once entity creation is switched off (create_scanner_entities),
-    since there is then nothing in the registry to join against at all.
+    Each tracked device contributes exactly its own CURRENT slug. Unlike a
+    registry-based join over frozen, one-per-rename entity_ids, a renamed
+    device can never appear under more than one prefix at once, because there
+    is only one live slug to read - no history to accumulate duplicates from.
+    This is also the only source available once entity creation is switched
+    off (create_scanner_entities), since there is then nothing in the registry
+    to join against at all.
 
     Filtered to devices Bermuda currently reports as tracked, so a device the
     user has since removed from Bermuda's config stops being tracked here
-    immediately.
+    within _TRACKED_TTL seconds.
+
+    On a Bermuda build that advertises the ``tracked_devices`` feature this
+    reads the cheap tracked-set accessor (one attribute per known device, no
+    advert walk). Older builds fall back to filtering a snapshot. Either way
+    the answer is cached for _TRACKED_TTL, because the only caller that needs
+    it more often than once a cycle is a ~1 Hz change detector.
 
     Returns None when the Bermuda API is unavailable, so callers fall back.
     """
-    snapshot = _snapshot(hass)
-    if snapshot is None:
-        return None
-    return {
-        device["slug"]
-        for device in snapshot["devices"].values()
-        if device.get("tracked") and device.get("slug")
-    }
+    cache = _cache_for(hass)
+    now = time.monotonic()
+    if cache is not None and cache["tracked"] is not None and now - cache["tracked_at"] <= _TRACKED_TTL:
+        return cache["tracked"]
 
-
-def _snapshot(hass):
-    """A version-checked snapshot, or None."""
     api = _bermuda_api()
     if api is None:
         return None
-    snapshot = api.async_get_advert_snapshot(hass)
+    if "tracked_devices" in _features(api):
+        tracked = api.async_get_tracked_devices(hass)
+        if tracked is None:
+            return None
+        prefixes = {device["slug"] for device in tracked.values() if device.get("slug")}
+    else:
+        snapshot = _snapshot(hass)
+        if snapshot is None:
+            return None
+        prefixes = {
+            device["slug"]
+            for device in snapshot["devices"].values()
+            if device.get("tracked") and device.get("slug")
+        }
+    if cache is not None:
+        cache["tracked"] = prefixes
+        cache["tracked_at"] = now
+    return prefixes
+
+
+def async_get_scanner_ages(hass) -> dict[str, float] | None:
+    """
+    Seconds since each scanner last relayed ANY advert, keyed by scanner slug.
+
+    This is the proximity-independent liveness signal the receiver-status
+    poller needs: a proxy that is up ages fresh even when no tracked device is
+    anywhere near it, because the probes hear each other's iBeacons. It used
+    to be read by calling the ``bermuda.dump_devices`` service every poll,
+    which serialises every scanner's whole advert table just to reach one
+    ``last_seen`` per scanner. Bermuda's ``scanners`` feature exposes exactly
+    that field from the scanner set, with no advert walk and no JSON dump.
+
+    A scanner Bermuda has never heard relay anything reads as ``inf`` (never
+    seen) rather than 0 (seen just now).
+
+    Returns None when the Bermuda API is unavailable or predates the
+    ``scanners`` feature, so callers fall back to the service call.
+    """
+    api = _bermuda_api()
+    if api is None or "scanners" not in _features(api):
+        return None
+    scanners = api.async_get_scanners(hass)
+    if scanners is None:
+        return None
+    ages: dict[str, float] = {}
+    for scanner in scanners.values():
+        slug = scanner.get("slug")
+        if not slug:
+            continue
+        age = scanner.get("last_seen_age")
+        ages[slug] = float(age) if isinstance(age, (int, float)) else float("inf")
+    return ages
+
+
+def _snapshot(hass):
+    """
+    A version-checked snapshot, or None.
+
+    Every consumer in this module only ever reads TRACKED devices (the slug
+    map, the readings and the distance-pair listing all filter on
+    ``tracked``), so on a Bermuda build that supports it the snapshot is
+    requested tracked-only: Bermuda then skips the untracked majority before
+    doing any per-advert work, instead of serialising every device in range
+    for this module to discard. Cached for _SNAPSHOT_TTL so the several
+    callers within one positioning cycle share a single build.
+    """
+    cache = _cache_for(hass)
+    now = time.monotonic()
+    if cache is not None and cache["snapshot"] is not None and now - cache["snapshot_at"] <= _SNAPSHOT_TTL:
+        return cache["snapshot"]
+
+    api = _bermuda_api()
+    if api is None:
+        return None
+    if "tracked_only" in _features(api):
+        snapshot = api.async_get_advert_snapshot(hass, tracked_only=True)
+    else:
+        snapshot = api.async_get_advert_snapshot(hass)
     if snapshot is None:
         return None
     if snapshot.get("version") not in _SUPPORTED_SNAPSHOT_VERSIONS:
@@ -196,6 +305,9 @@ def _snapshot(hass):
             sorted(_SUPPORTED_SNAPSHOT_VERSIONS),
         )
         return None
+    if cache is not None:
+        cache["snapshot"] = snapshot
+        cache["snapshot_at"] = now
     return snapshot
 
 

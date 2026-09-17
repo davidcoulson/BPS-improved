@@ -457,3 +457,134 @@ def test_cache_is_per_hass_not_module_global(monkeypatch):
     _install_bermuda_api(monkeypatch, _snapshot(distance=9.0))
     hass_b = _HassWithData()
     assert bermuda_source.async_get_readings(hass_b)[("phone", "probe")]["distance"] == 9.0
+
+
+# --- additive Bermuda features (SNAPSHOT_FEATURES) --------------------------- #
+
+
+def _hass_with_data():
+    """A hass stand-in that can hold the per-hass cache (unlike object())."""
+    return types.SimpleNamespace(data={})
+
+
+def _install_featureful_api(monkeypatch, snapshot, *, tracked=None, scanners=None):
+    """A fake Bermuda that advertises the additive features and records how
+    the snapshot was requested."""
+    api = _install_bermuda_api(monkeypatch, snapshot)
+    api.SNAPSHOT_FEATURES = frozenset({"tracked_only", "tracked_devices", "scanners"})
+    api.calls = []
+
+    def _snap(_hass, *a, **kw):
+        api.calls.append(kw)
+        return snapshot
+
+    api.async_get_advert_snapshot = _snap
+    api.async_get_tracked_devices = lambda _hass: tracked
+    api.async_get_scanners = lambda _hass: scanners
+    return api
+
+
+def test_snapshot_is_requested_tracked_only_when_supported(monkeypatch):
+    """Every consumer here reads tracked devices only, so Bermuda should be
+    asked to skip the untracked majority before doing any per-advert work."""
+    api = _install_featureful_api(monkeypatch, _snapshot())
+
+    bermuda_source.async_get_readings(object())
+
+    assert api.calls and api.calls[-1] == {"tracked_only": True}
+
+
+def test_snapshot_is_not_passed_unknown_kwargs_on_a_plain_v1_build(monkeypatch):
+    """A Bermuda without SNAPSHOT_FEATURES must get the bare v1 call."""
+    api = _install_bermuda_api(monkeypatch, _snapshot())
+    api.calls = []
+
+    def _snap(_hass, *a, **kw):
+        api.calls.append(kw)
+        return _snapshot()
+
+    api.async_get_advert_snapshot = _snap
+
+    bermuda_source.async_get_readings(_hass_with_data())
+
+    assert api.calls == [{}]
+
+
+def test_snapshot_is_shared_within_a_cycle(monkeypatch):
+    """The readings, the slug map and the pair listing all run in one cycle;
+    they must share one snapshot build rather than each taking their own."""
+    api = _install_featureful_api(monkeypatch, _snapshot())
+    hass = _hass_with_data()
+
+    bermuda_source.async_get_readings(hass)
+    bermuda_source.async_get_snapshot_distance_pairs(hass)
+    bermuda_source.async_build_slug_map(hass)
+
+    assert len(api.calls) == 1
+
+
+def test_tracked_prefixes_use_the_cheap_accessor_when_available(monkeypatch):
+    """With the tracked_devices feature the ~1 Hz change check must not build
+    a snapshot at all."""
+    api = _install_featureful_api(
+        monkeypatch,
+        _snapshot(),
+        tracked={"aa:bb:cc:dd:ee:ff": {"name": "Phone", "slug": "phone", "unique_id": "x"}},
+    )
+
+    prefixes = bermuda_source.async_get_tracked_device_prefixes(object())
+
+    assert prefixes == {"phone"}
+    assert api.calls == []
+
+
+def test_tracked_prefixes_are_cached_for_the_ttl(monkeypatch):
+    api = _install_featureful_api(
+        monkeypatch,
+        _snapshot(),
+        tracked={"a": {"name": "Phone", "slug": "phone", "unique_id": "x"}},
+    )
+    hass = _hass_with_data()
+    hits = []
+    api.async_get_tracked_devices = lambda _hass: (hits.append(1), {"a": {"slug": "phone"}})[1]
+
+    first = bermuda_source.async_get_tracked_device_prefixes(hass)
+    second = bermuda_source.async_get_tracked_device_prefixes(hass)
+
+    assert first == second == {"phone"}
+    assert len(hits) == 1
+    # Invalidation forces a re-read.
+    bermuda_source.async_invalidate_cache(hass)
+    bermuda_source.async_get_tracked_device_prefixes(hass)
+    assert len(hits) == 2
+
+
+def test_tracked_prefixes_fall_back_to_the_snapshot_on_a_v1_build(monkeypatch):
+    _install_bermuda_api(monkeypatch, _snapshot(tracked=True))
+
+    assert bermuda_source.async_get_tracked_device_prefixes(object()) == {"phone"}
+
+
+def test_scanner_ages_come_from_the_scanner_map(monkeypatch):
+    _install_featureful_api(
+        monkeypatch,
+        _snapshot(),
+        scanners={
+            "11:22:33:44:55:66": {"slug": "probe", "last_seen_age": 4.5},
+            "ab:cd:ef:00:00:02": {"slug": "garage_proxy", "last_seen_age": None},
+            "no-slug": {"slug": "", "last_seen_age": 1.0},
+        },
+    )
+
+    ages = bermuda_source.async_get_scanner_ages(object())
+
+    assert ages["probe"] == 4.5
+    assert ages["garage_proxy"] == float("inf")  # never relayed anything
+    assert set(ages) == {"probe", "garage_proxy"}
+
+
+def test_scanner_ages_are_none_without_the_feature(monkeypatch):
+    """Callers must fall back to bermuda.dump_devices on an older Bermuda."""
+    _install_bermuda_api(monkeypatch, _snapshot())
+
+    assert bermuda_source.async_get_scanner_ages(object()) is None

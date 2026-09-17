@@ -140,7 +140,15 @@ def _install_homeassistant_stubs():
     helpers.storage = sys.modules["homeassistant.helpers.storage"]
     _module("homeassistant.helpers.event", async_track_state_change_event=lambda *a, **k: None)
     _module("homeassistant.helpers.template", Template=object)
-    _module("homeassistant.core", HomeAssistant=object, callback=lambda f: f)
+    _module("homeassistant.core", HomeAssistant=object, ServiceCall=object, callback=lambda f: f)
+    _module("homeassistant.exceptions", HomeAssistantError=Exception)
+    # `from homeassistant.helpers import config_validation as cv` reads the
+    # attribute off the parent package (like panel_custom above).
+    helpers.config_validation = _module(
+        "homeassistant.helpers.config_validation",
+        string=str, boolean=bool, positive_int=int, entity_id=str,
+        ensure_list=lambda v: v if isinstance(v, list) else [v],
+    )
     _module("homeassistant.helpers.entity_registry")
     _module("homeassistant.helpers.device_registry")
     _module("homeassistant.const", UnitOfLength=types.SimpleNamespace(METERS="m"))

@@ -642,7 +642,15 @@ async def update_tracked_entities(hass):
         # The scipy solves run in the executor so the loop is never blocked; the
         # calibration sample deques are snapshotted here on the loop thread first
         # to avoid a "mutated during iteration" race with calibration's ingest.
-        if now_ts - getattr(update_tracked_entities, "last_selftest", 0.0) >= SELFTEST_SENSOR_INTERVAL:
+        # Skipped entirely while the accuracy sensor is not live in HA (the
+        # user disabled it, or it has not been added yet): a leave-one-out
+        # solve over every placed receiver is real work, and its only consumer
+        # here is that sensor. The /api/bps/selftest endpoint computes on
+        # demand and is unaffected.
+        if (
+            now_ts - getattr(update_tracked_entities, "last_selftest", 0.0) >= SELFTEST_SENSOR_INTERVAL
+            and _sensor_is_live(hass, ACCURACY_ENTITY_ID)
+        ):
             update_tracked_entities.last_selftest = now_ts
             try:
                 samples = {k: list(v) for k, v in get_calibration_state(hass).get("samples", {}).items()}
@@ -1065,6 +1073,23 @@ def _refresh_dump_ages(hass, dom, devices):
         dom["rl_ages"] = ages
 
 
+def _iter_registry_devices(dev_reg):
+    """Every DeviceEntry in the device registry, on any supported HA core.
+
+    ``dev_reg.devices.values()`` is deprecated (removed in HA 2027.9): the
+    registry's ``devices`` is now a view whose supported use is plain
+    iteration, which yields entries. On cores older than that view, iterating
+    yields device ids (it was a mapping), so those are resolved through the
+    mapping - which on such cores is not deprecated.
+    """
+    devices = dev_reg.devices
+    for item in devices:
+        if isinstance(item, str):
+            yield devices[item]
+        else:
+            yield item
+
+
 def _build_device_availability(hass):
     """Maps for the device-availability tier: slug -> device, device -> entities.
 
@@ -1075,7 +1100,7 @@ def _build_device_availability(hass):
     dev_reg = dr.async_get(hass)
     slug_to_device = {}
     ambiguous = set()
-    for d in dev_reg.devices.values():
+    for d in _iter_registry_devices(dev_reg):
         name = d.name_by_user or d.name
         if not name:
             continue
@@ -1117,26 +1142,37 @@ async def update_receiver_liveness(hass):
     A receiver no tier can resolve at all is left ONLINE (never flagged).
     """
     dom = hass.data.setdefault(DOMAIN, {})
-    try:
-        devices = await wait_for(
-            hass.services.async_call(
-                "bermuda", "dump_devices", {"configured_devices": True},
-                blocking=True, return_response=True,
-            ),
-            timeout=DUMP_DEVICES_TIMEOUT_S,
-        ) or {}
-    except TimeoutError:
-        _LOGGER.warning(
-            "Receiver liveness: bermuda.dump_devices timed out after %ss; "
-            "skipping this refresh", DUMP_DEVICES_TIMEOUT_S,
-        )
-        devices = None
-    except Exception as e:
-        _LOGGER.info(f"Receiver liveness: dump_devices unavailable: {e}")
-        devices = None
+    # Tier 1's ages come straight from Bermuda's scanner set when its API
+    # exposes them: one small dict, already relative to "now", no service
+    # call. The dump_devices path below is the fallback for a Bermuda build
+    # without that feature - it serialises every scanner's whole advert
+    # table on every poll just to reach one last_seen per scanner.
+    api_ages = bermuda_source.async_get_scanner_ages(hass)
+    if api_ages is not None:
+        dom["rl_ages"] = api_ages
+        dom["rl_anchor_wall"] = time.time()
+        dom["rl_newest"] = None  # not a dump; nothing to re-anchor against
+    else:
+        try:
+            devices = await wait_for(
+                hass.services.async_call(
+                    "bermuda", "dump_devices", {"configured_devices": True},
+                    blocking=True, return_response=True,
+                ),
+                timeout=DUMP_DEVICES_TIMEOUT_S,
+            ) or {}
+        except TimeoutError:
+            _LOGGER.warning(
+                "Receiver liveness: bermuda.dump_devices timed out after %ss; "
+                "skipping this refresh", DUMP_DEVICES_TIMEOUT_S,
+            )
+            devices = None
+        except Exception as e:
+            _LOGGER.info(f"Receiver liveness: dump_devices unavailable: {e}")
+            devices = None
 
-    if isinstance(devices, dict):
-        _refresh_dump_ages(hass, dom, devices)
+        if isinstance(devices, dict):
+            _refresh_dump_ages(hass, dom, devices)
     ages = dom.get("rl_ages", {})
     elapsed = max(0.0, time.time() - dom["rl_anchor_wall"]) if dom.get("rl_anchor_wall") else 0.0
 
@@ -1645,6 +1681,22 @@ async def update_apitricords(hass, new_data):
     hass.data[DOMAIN]["apitricords"] = new_data
 
 
+def _sensor_is_live(hass, entity_id):
+    """Whether a cached BPS sensor object is actually attached to HA.
+
+    sensor.py creates the entity objects and caches them before
+    async_add_entities runs. An entity the user has DISABLED in the registry
+    is never added, so it stays in the cache with ``hass`` unset forever -
+    writing state to it raises ("Attribute hass is None"), which the
+    accuracy sensor did every self-test cycle.
+    """
+    sensors_cache = hass.data.get("bps_sensors")
+    if not sensors_cache:
+        return False
+    sensor = sensors_cache.get(entity_id)
+    return sensor is not None and getattr(sensor, "hass", None) is not None
+
+
 def update_bps_sensor_state(hass, entity_id, state, attributes=None):
     """Update state (and optional extra attributes) on a registered BPS SensorEntity."""
     sensors_cache = hass.data.get("bps_sensors")
@@ -1656,6 +1708,11 @@ def update_bps_sensor_state(hass, entity_id, state, attributes=None):
     sensor._state = state
     if attributes is not None:
         sensor._attrs = attributes
+    if getattr(sensor, "hass", None) is None:
+        # Not added to HA (disabled in the registry, or not yet added). The
+        # value is kept on the object so it is current if the entity is
+        # enabled later; there is just no state machine to write to yet.
+        return
     sensor.async_write_ha_state()
 
 async def process_single_entity(hass, new_global_data, eids):

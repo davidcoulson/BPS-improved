@@ -5,6 +5,7 @@ correction, 3D calibration ground truth, and the floor hypothesis-competition
 election helpers.
 """
 import asyncio
+import types
 import math
 
 import bps
@@ -738,3 +739,48 @@ def test_multistart_never_worse_than_centroid_only_and_sometimes_better():
             strictly_better += 1
 
     assert strictly_better > 0, "multi-start never improved on centroid-only"
+
+
+# ---------------------------------------------------------------------------
+# Sensor writes must tolerate an entity that was never added to HA
+# ---------------------------------------------------------------------------
+
+
+class _FakeSensor:
+    def __init__(self, live):
+        self.hass = object() if live else None
+        self._state = None
+        self._attrs = {}
+        self.writes = 0
+
+    def async_write_ha_state(self):
+        self.writes += 1
+
+
+def test_sensor_state_write_skips_an_entity_without_hass():
+    """A sensor the user disabled in the registry is cached but never added,
+    so it has no hass; writing to it raised every self-test cycle."""
+    hass = make_hass()
+    dead, live = _FakeSensor(False), _FakeSensor(True)
+    hass.data["bps_sensors"] = {"sensor.dead": dead, "sensor.live": live}
+
+    bps.update_bps_sensor_state(hass, "sensor.dead", 1.5, {"a": 1})
+    bps.update_bps_sensor_state(hass, "sensor.live", 2.5)
+
+    assert dead.writes == 0
+    assert dead._state == 1.5 and dead._attrs == {"a": 1}  # kept for a later enable
+    assert live.writes == 1 and live._state == 2.5
+    assert bps._sensor_is_live(hass, "sensor.dead") is False
+    assert bps._sensor_is_live(hass, "sensor.live") is True
+    assert bps._sensor_is_live(hass, "sensor.missing") is False
+
+
+def test_registry_device_iteration_handles_both_registry_shapes():
+    """Newer HA yields DeviceEntry objects from `dev_reg.devices`; older HA
+    yielded device ids from a mapping. Both must produce entries."""
+    entry_a, entry_b = object(), object()
+    new_style = types.SimpleNamespace(devices=[entry_a, entry_b])
+    assert list(bps._iter_registry_devices(new_style)) == [entry_a, entry_b]
+
+    old_style = types.SimpleNamespace(devices={"id-a": entry_a, "id-b": entry_b})
+    assert list(bps._iter_registry_devices(old_style)) == [entry_a, entry_b]
