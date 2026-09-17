@@ -191,6 +191,12 @@ def _install_homeassistant_stubs():
     )
     _module("homeassistant.helpers.entity_registry")
     _module("homeassistant.helpers.device_registry")
+    # Enough of the sensor platform for sensor.py to import (sensor tests
+    # exercise the cache/creation logic, never HA's entity machinery).
+    _module("homeassistant.components.sensor", SensorEntity=object,
+            SensorStateClass=types.SimpleNamespace(MEASUREMENT="measurement"))
+    _module("homeassistant.helpers.entity", DeviceInfo=dict)
+    sys.modules["homeassistant.helpers.event"].async_call_later = lambda *a, **k: None
     _module("homeassistant.const", UnitOfLength=types.SimpleNamespace(METERS="m"))
     _module("homeassistant.util", slugify=lambda s: s)
     _module("homeassistant.util.unit_conversion", DistanceConverter=_FakeDistanceConverter)

@@ -192,6 +192,28 @@ class SextantAccuracySensor(SensorEntity):
         return self._attrs
 
 
+@callback
+def ensure_sensors_for_trackers(hass, trackers):
+    """Create the sensors of any tracker in ``trackers`` that has none yet.
+
+    Called from the positioning loop with the trackers Bermuda reports, so
+    a device added to Bermuda after setup gets its zone/floor sensors on the
+    next cycle. O(trackers) dictionary lookups in steady state; the registry
+    is only touched when something is actually missing.
+    """
+    sensors_cache = hass.data.get("sextant_sensors")
+    add_entities = hass.data.get("sextant_add_entities")
+    if sensors_cache is None or add_entities is None:
+        return
+    new_sensors = []
+    for entity in trackers:
+        ensure_sensors_for_entity(hass, entity, sensors_cache, new_sensors)
+    if new_sensors:
+        _LOGGER.info("Creating Sextant sensors for %d tracker(s) added since setup", len(new_sensors) // len(SENSOR_KINDS) or 1)
+        add_entities(new_sensors, update_before_add=True)
+        normalize_sextant_registry_entity_ids_from_cache(hass)
+
+
 def cleanup_legacy_sextant_entities(hass):
     """Remove old duplicated-name Sextant entities from entity registry."""
     entity_registry = er.async_get(hass)
@@ -310,6 +332,13 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
         for entity_id in stale_sextant_ids:
             _LOGGER.info("Removing stale Sextant registry entity: %s", entity_id)
             entity_registry.async_remove(entity_id)
+
+    # Kept so the positioning loop can create sensors for a tracker that
+    # appears AFTER setup (a device added in Bermuda while HA runs): with
+    # Bermuda's distance entities disabled, the state listener below never
+    # sees such a device, and it would be positioned but have no sensors
+    # until the next restart.
+    hass.data["sextant_add_entities"] = async_add_entities
 
     new_sensors = []
     # The global accuracy diagnostic (once), before the per-tracker sensors.

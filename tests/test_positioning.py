@@ -1229,3 +1229,26 @@ def test_websocket_command_is_registered_once(monkeypatch):
     sextant._register_websocket(hass)
     sextant._register_websocket(hass)
     assert hass.data["_ws_commands"] == [sextant._ws_subscribe]
+
+
+def test_sensors_are_created_for_a_tracker_added_after_setup(monkeypatch):
+    """A device added to Bermuda while HA runs is positioned from the next
+    cycle; its zone/floor sensors must appear then too, not at the next restart."""
+    import sextant.sensor as sensor_mod
+    hass = make_hass()
+    added = []
+    hass.data["sextant_sensors"] = {}
+    hass.data["sextant_add_entities"] = lambda ents, update_before_add=False: added.extend(ents)
+    monkeypatch.setattr(sensor_mod, "find_bermuda_via_device", lambda *a, **k: None)
+    monkeypatch.setattr(sensor_mod, "normalize_sextant_registry_entity_ids_from_cache", lambda *a, **k: None)
+    sensor_mod.ensure_sensors_for_trackers(hass, ["tile_24d1093b0211"])
+    assert sorted(hass.data["sextant_sensors"]) == sorted(
+        f"sensor.tile_24d1093b0211_{suffix}" for suffix, _ in sensor_mod.SENSOR_KINDS)
+    assert len(added) == len(sensor_mod.SENSOR_KINDS)
+    # Steady state: nothing new, nothing added, no registry work.
+    sensor_mod.ensure_sensors_for_trackers(hass, ["tile_24d1093b0211"])
+    assert len(added) == len(sensor_mod.SENSOR_KINDS)
+    # Without the callback (platform not set up yet) it is a no-op.
+    hass.data.pop("sextant_add_entities")
+    sensor_mod.ensure_sensors_for_trackers(hass, ["other"])
+    assert "sensor.other_sextant_zone" not in hass.data["sextant_sensors"]

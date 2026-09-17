@@ -933,6 +933,9 @@ async def update_tracked_entities(hass):
                 _LOGGER.info("There are not enough trackers with available data to track, sleep 10 seconds")
                 await asyncio.sleep(10)
                 continue  # Skip and start over
+            # A tracker added to Bermuda since setup has no sensors yet.
+            from .sensor import ensure_sensors_for_trackers  # sensor.py imports this package
+            ensure_sensors_for_trackers(hass, unique_values)
             # Use a separate copy per entity to avoid cross-entity mutation side effects.
             layout = get_layout(hass)
             _refresh_fingerprint_references(hass, layout, now_ts)
@@ -3361,6 +3364,7 @@ async def async_unload_entry(hass: HomeAssistant, entry):
     # Allow clean setup after integration reload/removal.
     hass.data.pop("sextant_initialized", None)
     hass.data.pop("sextant_sensors", None)
+    hass.data.pop("sextant_add_entities", None)
 
     return True
 
