@@ -709,3 +709,13 @@ async def async_bind_tile(hass, tile_id, uid) -> dict | None:
     result = await api.async_bind_tile(hass, tile_id, uid)
     async_invalidate_cache(hass)
     return result
+
+
+async def async_bind_tile_address(hass, tile_id, address) -> dict | None:
+    """Declare that configured Tile ``tile_id`` is the tag at ``address`` now."""
+    api = _bermuda_api()
+    if api is None or not hasattr(api, "async_bind_tile_address"):
+        return None
+    result = await api.async_bind_tile_address(hass, tile_id, address)
+    async_invalidate_cache(hass)
+    return result

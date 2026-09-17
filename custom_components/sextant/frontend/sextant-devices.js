@@ -28,6 +28,7 @@ class SextantDevices extends LitElement {
     _tiles: { state: true },
     _identities: { state: true },
     _bindPick: { state: true },
+    _adoptPick: { state: true },
     _findmy: { state: true },
     _options: { state: true },
     _filter: { state: true },
@@ -46,6 +47,7 @@ class SextantDevices extends LitElement {
     this._tiles = null;
     this._identities = null;
     this._bindPick = {};
+    this._adoptPick = {};
     this._findmy = null;
     this._options = null;
     this._filter = "";
@@ -108,6 +110,18 @@ class SextantDevices extends LitElement {
       toast(this, r.address ? `${trackerName(this.data, tileId)} is now ${r.address}` : `${trackerName(this.data, tileId)} remembered as ${uid}; it binds when that Tile is next heard`);
       this._bindPick = { ...this._bindPick, [uid]: "" };
       await this._refreshLight();
+    }
+  }
+
+  async _adoptTile(tileId) {
+    const address = this._adoptPick[tileId];
+    if (!address) return;
+    const r = await callWS(this, this.hass, { type: "sextant/bermuda/tile/adopt", tile_id: tileId, address });
+    if (r) {
+      toast(this, `${trackerName(this.data, tileId)} is now ${r.address}`);
+      this._adoptPick = { ...this._adoptPick, [tileId]: "" };
+      await this._refreshLight();
+      this.dispatchEvent(new CustomEvent("layout-changed"));
     }
   }
 
@@ -458,6 +472,7 @@ class SextantDevices extends LitElement {
                  ["update_interval", "Update interval (s)", 0.1], ["smoothing_samples", "Smoothing samples", 1]].map(([k, l, step]) =>
                 uiField({ label: l, type: "number", step, value: this._options[k] ?? "", style: "width: 170px", onChange: (v) => { this._options = { ...this._options, [k]: v === "" ? null : Number(v) }; } }))}
               <span class="chips">${uiSwitch({ label: "Create scanner entities", checked: !!this._options.create_scanner_entities, onChange: (v) => { this._options = { ...this._options, create_scanner_entities: v }; } })}</span>
+              <span class="chips" title="Read Tile IDs over Bluetooth. Off by default: Private ID Tiles rotate the readable ID with the address, and a connection makes them rotate on the spot.">${uiSwitch({ label: "Tile identity probes", checked: !!this._options.tile_identity_probes, onChange: (v) => { this._options = { ...this._options, tile_identity_probes: v }; } })}</span>
             </div>
             <div class="row">${uiButton({ label: "Save options", kind: "primary", onClick: () => this._saveOptions() })}<span class="muted small">Bermuda reloads to apply. These are Bermuda's units, metres and dBm.</span></div>
           </form>` : html`<div class="muted">Loading…</div>`}
@@ -490,17 +505,25 @@ class SextantDevices extends LitElement {
     if (!t) return html`<div class="muted">Loading…</div>`;
     const bindings = Object.entries(t.bindings || {});
     if (!bindings.length) return html`<div class="muted">No Tiles configured. Track one from the Trackers page; Tiles show as <span class="pill">Tile</span>.</div>`;
+    // Live, unbound Tile addresses with where they are, for the adopt pickers.
+    const index = this._placedIndex();
+    const liveTiles = (this._candidates || []).filter((c) => c.kind === "tile" && (c.last_seen_age ?? 1e9) <= 60)
+      .map((c) => { const w = this._heardWhere(c, index); return { address: c.address, where: w ? `${w.room || w.floor} · ${w.proxy} (${w.rssi} dBm)` : c.area_name || "unplaced proxies only" }; })
+      .sort((a, b) => a.where.localeCompare(b.where));
     return html`
+      <p class="small muted">A Tile keeps its map name from the Trackers page (click its name there to call it "Kitchen keys"). Bermuda follows each Tile across its address rotations by RSSI pattern and remembers where it last was, so it finds it again after a restart; that works while the Tile is not sitting among other Tiles. A Tile marked <span class="pill warn">not heard</span> has rotated away unseen: pick the live address that is where the Tile is and Adopt. On Private ID Tiles the ID readable over Bluetooth rotates too, so it cannot name a tag; probing stays off unless "Tile identity probes" is on above.</p>
       <div class="wrap"><table class="compact">
-        <tr><th>Tile</th><th>Bound address</th><th>Tile ID</th><th>History</th></tr>
-        ${bindings.map(([id, sources]) => html`<tr>
-          <td><b>${trackerName(this.data, id)}</b></td>
+        <tr><th>Tile</th><th>Bound address</th><th>This Tile is…</th><th>History</th></tr>
+        ${bindings.map(([id, sources]) => { const lost = t.bound_age?.[id] == null || t.bound_age[id] > 300; return html`<tr>
+          <td><b>${trackerName(this.data, id)}</b>${t.uids?.[id] ? html`<br><code class="small">${t.uids[id]}</code>` : nothing}</td>
           <td><code>${sources[0] || "—"}</code>${t.bound_age?.[id] != null ? html` <span class="muted small">heard ${fmtAge(t.bound_age[id])} ago</span>` : html` <span class="pill warn">not heard</span>`}</td>
-          <td>${t.uids?.[id] ? html`<code>${t.uids[id]}</code>` : t.uids && id in t.uids ? html`<span class="pill warn">no ID characteristic</span>` : html`<span class="pill">not read yet</span>`}</td>
+          <td>${liveTiles.length ? html`<div class="row">
+            ${uiSelect({ label: lost ? "pick the tag it is now" : "re-point it", value: this._adoptPick[id] || "", options: [{ value: "", label: lost ? "choose a live Tile address…" : "leave as is" }, ...liveTiles.map((c) => ({ value: c.address, label: `${c.address} · ${c.where}` }))], onChange: (v) => { this._adoptPick = { ...this._adoptPick, [id]: v }; }, style: "min-width: 300px" })}
+            ${uiButton({ label: "Adopt", kind: lost ? "primary" : "outline", disabled: !this._adoptPick[id], onClick: () => this._adoptTile(id) })}</div>` : html`<span class="muted small">no unbound Tile address heard right now</span>`}</td>
           <td class="small muted">${sources.slice(1, 4).join(" → ") || "—"}</td>
-        </tr>`)}
+        </tr>`; })}
       </table></div>
-      ${this._renderIdentities(bindings.map(([id]) => id))}
+      ${this._options?.tile_identity_probes ? this._renderIdentities(bindings.map(([id]) => id)) : nothing}
       <p class="small muted">Handovers ${t.handovers ?? 0} (${t.ambiguous_handovers ?? 0} ambiguous) · probes ${t.probes ?? 0}, failed ${t.probe_failures ?? 0}${t.probes_inherited ? `, ${t.probes_inherited} inherited` : ""}${t.probes_pending?.length ? `, pending ${t.probes_pending.length}` : ""}${t.probe_budget_left != null ? ` · ${t.probe_budget_left} connections left this hour` : ""}.
         ${t.last_handover ? html`Last: ${trackerName(this.data, t.last_handover.tile)} → <code>${t.last_handover.to}</code> by ${t.last_handover.reason || "rssi pattern"}${t.last_handover.score != null ? ` (${fmtNum(t.last_handover.score, 1)} dB over ${t.last_handover.scanners} proxies)` : ""}.` : nothing}
         ${t.last_probe?.detail ? html`<br>Last probe of <code>${t.last_probe.address}</code>: ${t.last_probe.error || "ok"} ${t.last_probe.detail}` : nothing}

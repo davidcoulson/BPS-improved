@@ -13,7 +13,7 @@
  */
 import { LitElement, html, css, nothing } from "./lit.js";
 import { SextantMap, trackerHue } from "./sextant-map.js";
-import { sharedStyles, widgetStyles, fmtAge, toast, ensureHaComponents, uiSwitch, uiSelect, uiButton, callWS, sortFloors, trackerName, proxyName, fmtLen, fmtSpeed, classIcon } from "./sextant-ui.js";
+import { sharedStyles, widgetStyles, fmtAge, toast, ensureHaComponents, uiSwitch, uiSelect, uiButton, callWS, sortFloors, trackerName, proxyName, fmtLen, fmtSpeed, classIcon, PANEL_VERSION } from "./sextant-ui.js";
 import "./sextant-devices.js";
 import "./sextant-health.js";
 import "./sextant-edit.js";
@@ -142,6 +142,7 @@ class SextantPanel extends LitElement {
         <a class="repo" href=${REPO_URL} target="_blank" rel="noopener" title="Sextant on GitHub"><ha-icon icon="mdi:github"></ha-icon></a>
       </div>
       ${this._error ? html`<div class="banner error">${this._error} <button @click=${() => this._load()}>Retry</button></div>` : nothing}
+      ${this._data?.app_version && this._data.app_version !== PANEL_VERSION ? html`<div class="banner update">Sextant ${this._data.app_version} is installed; this page is still running ${PANEL_VERSION}. <button @click=${() => window.location.reload()}>Reload</button></div>` : nothing}
       <div class="body">${this._renderMode()}</div>
     `;
   }
@@ -188,6 +189,7 @@ class SextantPanel extends LitElement {
     .body { flex: 1; min-height: 0; display: flex; }
     .body > * { flex: 1; min-width: 0; }
     .banner.error { background: var(--error-color, #b00020); color: #fff; padding: 8px 12px; }
+    .banner.update { background: var(--warning-color, #c77800); color: #fff; padding: 8px 12px; }
     .banner button { margin-left: 8px; }
     .sr { position: absolute; left: -9999px; }
     @media (max-width: 960px) { .mode-label { display: none; } .modes button { padding: 0 8px; } }

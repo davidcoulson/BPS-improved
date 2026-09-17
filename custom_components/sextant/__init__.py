@@ -296,7 +296,7 @@ _floor_since = {}
 _kf_position_state = {}
 
 # Per-tracker zone election state (see _elect_zone) and the published
-# sub-zone's dwell state (see _subzone_with_dwell). Reset on floor change and
+# sub-zone's dwell state (see _elect_subzone). Reset on floor change and
 # on prune, like the Kalman state.
 _zone_state = {}
 _subzone_state = {}
@@ -2712,28 +2712,6 @@ def _elect_zone(entity, floor_name, instant_zone, point, kf_state, zone_polys, s
     st["challenge"] = {"zone": best, "since": since}
     return incumbent, False, speed
 
-
-def _subzone_with_dwell(entity, candidate, layout, now=None):
-    """Publish a (sub_zone, parent_zone) pair only once it has persisted for
-    subzone_switch_secs; until then the previous pair stands. Sub-zones are
-    small (a couch, a desk), so they flap at least as readily as zones."""
-    now = time.time() if now is None else now
-    st = _subzone_state.get(entity)
-    if st is None:
-        _subzone_state[entity] = {"value": candidate, "pending": None}
-        return candidate
-    if candidate == st["value"]:
-        st["pending"] = None
-        return candidate
-    pending = st["pending"]
-    if pending is None or pending[0] != candidate:
-        st["pending"] = (candidate, now)
-        return st["value"]
-    if now - pending[1] >= _tuning(layout, "subzone_switch_secs"):
-        st["value"] = candidate
-        st["pending"] = None
-        return candidate
-    return st["value"]
 
 def _subzone_membership(sub_polys, samples):
     """sub-zone id -> share of sample weight inside it; samples in no

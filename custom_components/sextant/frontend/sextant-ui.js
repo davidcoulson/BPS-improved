@@ -1,3 +1,5 @@
+/** The version these modules were built for; the backend reports the installed one. */
+export const PANEL_VERSION = "3.8.12";
 /**
  * Shared styles and helpers for the Sextant panel's modes.
  *

@@ -986,17 +986,6 @@ def test_zone_election_resets_on_floor_change_and_prune():
     assert zone == "Dining" and sextant._zone_state["e"]["floor"] == "G"
 
 
-def test_sub_zone_dwell_publishes_only_a_persisted_change():
-    sextant._subzone_state.clear()
-    layout = {"tuning": {"subzone_switch_secs": 20.0}}
-    assert sextant._subzone_with_dwell("e", ("Sofa", "Living"), layout, now=0.0) == ("Sofa", "Living")
-    assert sextant._subzone_with_dwell("e", ("unknown", "Living"), layout, now=5.0) == ("Sofa", "Living")
-    assert sextant._subzone_with_dwell("e", ("Sofa", "Living"), layout, now=10.0) == ("Sofa", "Living")
-    assert sextant._subzone_with_dwell("e", ("Desk", "Living"), layout, now=20.0) == ("Sofa", "Living")
-    assert sextant._subzone_with_dwell("e", ("Desk", "Living"), layout, now=39.0) == ("Sofa", "Living")
-    assert sextant._subzone_with_dwell("e", ("Desk", "Living"), layout, now=40.0) == ("Desk", "Living")
-
-
 # ---------------------------------------------------------------------------
 # End to end: one positioning cycle through election, filter, zones, publish
 # ---------------------------------------------------------------------------

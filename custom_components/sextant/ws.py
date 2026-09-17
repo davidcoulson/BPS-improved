@@ -65,6 +65,15 @@ def _tuning_spec_json(spec):
     return out
 
 
+def _manifest_version() -> str | None:
+    try:
+        from pathlib import Path  # noqa: PLC0415
+
+        return json.loads((Path(__file__).parent / "manifest.json").read_text()).get("version")
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _tracker_names(hass, entities, layout=None) -> dict:
     """{slug: display name} for the tracked entities.
 
@@ -149,6 +158,9 @@ async def ws_layout_get(hass, connection, msg):
         # Display names: what Bermuda calls the device, overridden by the name
         # the user gave the device in Home Assistant (device registry).
         "names": _safe(lambda: _tracker_names(hass, tracked, layout), {}),
+        # The installed integration version: the panel compares it with the
+        # module it is running and offers a reload when they differ.
+        "app_version": await hass.async_add_executor_job(_manifest_version),
         "scanners": {
             addr: {"slug": info.get("slug"), "name": info.get("name"), "area": info.get("area_name"),
                    "is_remote": info.get("is_remote")}
@@ -711,6 +723,21 @@ async def ws_bermuda_tile_bind(hass, connection, msg):
     _bermuda_result(connection, msg, result, feature="tile_identity")
 
 
+@websocket_api.websocket_command({
+    vol.Required("type"): "sextant/bermuda/tile/adopt",
+    vol.Required("tile_id"): str,
+    vol.Required("address"): str,
+})
+@websocket_api.async_response
+async def ws_bermuda_tile_adopt(hass, connection, msg):
+    """The user points at the live Tile address a configured Tile is using now."""
+    try:
+        result = await bermuda_source.async_bind_tile_address(hass, msg["tile_id"], msg["address"])
+    except ValueError as e:
+        return _error(connection, msg, str(e))
+    _bermuda_result(connection, msg, result, feature="tile adoption")
+
+
 @websocket_api.websocket_command({vol.Required("type"): "sextant/bermuda/scanner_ranging", vol.Optional("max_age"): vol.Coerce(float)})
 @websocket_api.async_response
 async def ws_bermuda_scanner_ranging(hass, connection, msg):
@@ -735,7 +762,7 @@ COMMANDS = (
     ws_adjust_zones, ws_kpi, ws_kpi_baselines, ws_kpi_baseline_save, ws_kpi_baseline_delete,
     ws_bermuda_candidates, ws_bermuda_tracked, ws_bermuda_track, ws_bermuda_findmy, ws_bermuda_findmy_add,
     ws_bermuda_findmy_remove, ws_bermuda_options, ws_bermuda_options_set, ws_bermuda_scanners, ws_bermuda_tiles,
-    ws_bermuda_scanner_ranging, ws_bermuda_tile_identities, ws_bermuda_tile_bind,
+    ws_bermuda_scanner_ranging, ws_bermuda_tile_identities, ws_bermuda_tile_bind, ws_bermuda_tile_adopt,
 )
 
 
