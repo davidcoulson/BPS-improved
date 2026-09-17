@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import re
 import time
 from datetime import datetime, timedelta, timezone
 from importlib import import_module
@@ -238,6 +239,7 @@ async def ws_tuning_set(hass, connection, msg):
     vol.Optional("tracker_class"): vol.Any(None, str),
     vol.Optional("estimator"): vol.Any(None, "", "geometric", "fingerprint", "fused"),
     vol.Optional("fp_weight"): vol.Any(None, vol.Coerce(float)),
+    vol.Optional("color"): vol.Any(None, str),
 })
 @websocket_api.async_response
 async def ws_tracker_tune(hass, connection, msg):
@@ -281,6 +283,19 @@ async def ws_tracker_tune(hass, connection, msg):
                 heights[entity] = float(raw)
                 changes["height"] = float(raw)
             data["tracker_heights"] = heights
+        if "color" in msg:
+            raw = (msg["color"] or "").strip().lower()
+            colors = data.get("tracker_colors")
+            if not isinstance(colors, dict):
+                colors = {}
+            if raw:
+                if not re.fullmatch(r"#[0-9a-f]{6}", raw):
+                    return _error(connection, msg, "color must be #rrggbb")
+                colors[entity] = raw
+            else:
+                colors.pop(entity, None)
+            data["tracker_colors"] = colors
+            changes["color"] = raw or None
         if "icon" in msg:
             icons = data.get("tracker_icons")
             if not isinstance(icons, dict):

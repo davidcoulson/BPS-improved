@@ -290,3 +290,14 @@ def test_every_websocket_handler_is_registered():
     handlers = {name for name in dir(ws) if name.startswith("ws_")}
     registered = {fn.__name__ for fn in ws.COMMANDS}
     assert handlers <= registered, sorted(handlers - registered)
+
+
+def test_tracker_colour_is_validated_and_stored(tmp_path):
+    hass = _hass_with_layout(tmp_path, _layout())
+    conn = _Conn()
+    run(ws.ws_tracker_tune(hass, conn, {"id": 1, "type": "sextant/tracker/tune", "entity": "fry", "color": "#6D4C41"}))
+    assert st.get_layout(hass)["tracker_colors"]["fry"] == "#6d4c41" and conn.results[-1][1]["color"] == "#6d4c41"
+    run(ws.ws_tracker_tune(hass, conn, {"id": 2, "type": "sextant/tracker/tune", "entity": "fry", "color": "brown"}))
+    assert conn.errors[-1][2].startswith("color")
+    run(ws.ws_tracker_tune(hass, conn, {"id": 3, "type": "sextant/tracker/tune", "entity": "fry", "color": None}))
+    assert "fry" not in st.get_layout(hass)["tracker_colors"]

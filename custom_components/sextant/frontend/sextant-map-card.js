@@ -84,7 +84,8 @@ class SextantMapCard extends LitElement {
     const icons = layout?.tracker_icons || {};
     this._icons = this._icons || new Map();
     const classes = layout?.tracker_classes || {};
-    this._map.setTrackers(rows.map((p) => ({ ...p, icon: this._icon(icons[p.ent]), mdi: classIcon(classes[p.ent]), label: trackerName(this._data, p.ent) })));
+    const colors = this._data?.layout?.tracker_colors || {};
+    this._map.setTrackers(rows.map((p) => ({ ...p, icon: this._icon(icons[p.ent]), mdi: classIcon(classes[p.ent]), color: colors[p.ent] || null, label: trackerName(this._data, p.ent) })));
     if (this._config.trails) for (const p of rows) this._trail(p);
   }
 

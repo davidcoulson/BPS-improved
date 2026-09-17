@@ -52,6 +52,22 @@ export function mdiPath(name, onReady) {
   return null;
 }
 
+/** A tracker's colour: the one it was given (#rrggbb), else its automatic hue. */
+export function trackerColor(ent, custom) {
+  return custom && /^#[0-9a-f]{6}$/i.test(custom) ? custom : `hsl(${trackerHue(ent)}, 70%, 45%)`;
+}
+
+/** The same colour with an alpha (and optionally darkened, for the halo). */
+export function trackerRgba(ent, custom, alpha, darker = false) {
+  if (custom && /^#[0-9a-f]{6}$/i.test(custom)) {
+    const n = parseInt(custom.slice(1), 16);
+    const f = darker ? 0.8 : 1;
+    return `rgba(${Math.round((n >> 16) * f)}, ${Math.round(((n >> 8) & 255) * f)}, ${Math.round((n & 255) * f)}, ${alpha})`;
+  }
+  const hue = trackerHue(ent);
+  return darker ? `hsla(${hue}, 80%, 40%, ${alpha})` : `hsla(${hue}, 70%, 45%, ${alpha})`;
+}
+
 export function trackerHue(name) {
   let h = 0;
   for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
@@ -584,8 +600,9 @@ export class SextantMap {
     const focus = this.options.focus || null;
     for (const t of this.trackers) {
       if (!t.cords) continue;
-      const hue = t.hue ?? trackerHue(t.ent);
-      const color = `hsl(${hue}, 70%, 45%)`;
+      const custom = t.color || null;
+      const color = trackerColor(t.ent, custom);
+      const paint = (a, dark = false) => trackerRgba(t.ent, custom, a, dark);
       const focused = focus && t.ent === focus;
       ctx.save();
       if (focus && !focused) ctx.globalAlpha = 0.28;   // everything but the one you clicked fades back
@@ -593,12 +610,12 @@ export class SextantMap {
       if (trail && trail.length > 1) {
         ctx.beginPath();
         trail.forEach((p, i) => (i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])));
-        ctx.strokeStyle = `hsla(${hue}, 70%, 45%, 0.5)`; ctx.lineWidth = 2 / k; ctx.stroke();
+        ctx.strokeStyle = paint(0.5); ctx.lineWidth = 2 / k; ctx.stroke();
       }
       if (this.options.circles && Array.isArray(t.radii)) {
         for (const [x, y, r] of t.radii) {
           ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
-          ctx.strokeStyle = `hsla(${hue}, 70%, 45%, 0.35)`; ctx.lineWidth = 1 / k; ctx.stroke();
+          ctx.strokeStyle = paint(0.35); ctx.lineWidth = 1 / k; ctx.stroke();
         }
       }
       if (this.options.fingerprint && t.fp && t.fp.fix) {
@@ -606,29 +623,29 @@ export class SextantMap {
         ctx.beginPath(); ctx.arc(t.fp.fix[0], t.fp.fix[1], 7 / k, 0, Math.PI * 2);
         ctx.strokeStyle = color; ctx.lineWidth = 2 / k; ctx.setLineDash([3 / k, 3 / k]); ctx.stroke(); ctx.setLineDash([]);
         ctx.beginPath(); ctx.moveTo(t.fp.fix[0], t.fp.fix[1]); ctx.lineTo(t.cords[0], t.cords[1]);
-        ctx.strokeStyle = `hsla(${hue}, 70%, 45%, 0.5)`; ctx.lineWidth = 1 / k; ctx.stroke();
+        ctx.strokeStyle = paint(0.5); ctx.lineWidth = 1 / k; ctx.stroke();
         if (t.fp.geo) {
           const s = 6 / k;
           ctx.beginPath(); ctx.rect(t.fp.geo[0] - s, t.fp.geo[1] - s, 2 * s, 2 * s);
           ctx.strokeStyle = color; ctx.lineWidth = 2 / k; ctx.stroke();
           ctx.beginPath(); ctx.moveTo(t.fp.geo[0], t.fp.geo[1]); ctx.lineTo(t.cords[0], t.cords[1]);
-          ctx.strokeStyle = `hsla(${hue}, 70%, 45%, 0.5)`; ctx.lineWidth = 1 / k; ctx.stroke();
+          ctx.strokeStyle = paint(0.5); ctx.lineWidth = 1 / k; ctx.stroke();
         }
       }
       if (t.raw && this.options.circles) {
         ctx.beginPath(); ctx.arc(t.raw[0], t.raw[1], 4 / k, 0, Math.PI * 2);
-        ctx.fillStyle = `hsla(${hue}, 70%, 45%, 0.6)`; ctx.fill();
+        ctx.fillStyle = paint(0.6); ctx.fill();
       }
       const selected = focused || (this.selection && this.selection.kind === "tracker" && this.selection.ent === t.ent);
       const r = (focused ? TRACKER_RADIUS * 1.6 : TRACKER_RADIUS) / k;
       if (focused) {
         // A halo that does not scale with zoom, so the focused tracker is findable at any zoom level.
         ctx.beginPath(); ctx.arc(t.cords[0], t.cords[1], r * 2.6, 0, Math.PI * 2);
-        ctx.strokeStyle = `hsla(${hue}, 80%, 40%, 0.9)`; ctx.lineWidth = 3 / k; ctx.setLineDash([8 / k, 5 / k]); ctx.stroke(); ctx.setLineDash([]);
+        ctx.strokeStyle = paint(0.9, true); ctx.lineWidth = 3 / k; ctx.setLineDash([8 / k, 5 / k]); ctx.stroke(); ctx.setLineDash([]);
       }
       // Confidence ring: the published conf in (0,1] as the ring's alpha.
       ctx.beginPath(); ctx.arc(t.cords[0], t.cords[1], r * 1.9, 0, Math.PI * 2);
-      ctx.fillStyle = `hsla(${hue}, 70%, 45%, ${0.08 + 0.22 * (t.conf ?? 0.5)})`; ctx.fill();
+      ctx.fillStyle = paint(0.08 + 0.22 * (t.conf ?? 0.5)); ctx.fill();
       ctx.beginPath(); ctx.arc(t.cords[0], t.cords[1], r, 0, Math.PI * 2);
       ctx.fillStyle = color; ctx.fill();
       ctx.lineWidth = (selected ? 3 : 2) / k; ctx.strokeStyle = selected ? "#ffd166" : "#ffffff"; ctx.stroke();

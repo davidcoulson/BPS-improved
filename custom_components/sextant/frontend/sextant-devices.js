@@ -9,11 +9,15 @@
  * accessories (with a step-by-step add) and the Tiles' binding state.
  */
 import { LitElement, html, css, nothing } from "./lit.js";
-import { pointInPolygon } from "./sextant-map.js";
+import { pointInPolygon, trackerColor } from "./sextant-map.js";
 import { sharedStyles, widgetStyles, fmtAge, fmtNum, toast, callWS, confirmDialog, uiField, uiSelect, uiSwitch, uiButton, trackerName, fmtLen, lenUnit, toDisplayLen, fromDisplayLen, TRACKER_CLASSES, classIcon } from "./sextant-ui.js";
 
 const KIND_FILTERS = [["all", "Everything"], ["tile", "Tiles"], ["ibeacon", "iBeacons"], ["device", "Other devices"]];
 const RECENT_SECS = 60;
+// Quick colours for a tracker; the picker next to them takes any colour.
+const PALETTE = ["#e53935", "#fb8c00", "#fdd835", "#43a047", "#00897b", "#1e88e5", "#3949ab", "#8e24aa", "#d81b60", "#6d4c41", "#8d6e63", "#546e7a"];
+const CROP_SIZE = 260;   // the cropper on screen (px)
+const ICON_SIZE = 192;   // the icon that is uploaded (px)
 // The iBeacon every calibration probe advertises (README, "make each probe advertise"), hex without dashes.
 const PROBE_BEACON_UUID = "fde3b1502f6443baaee9867f75ee4a6f";
 const FINDMY_KEYS = ["master_key", "skn", "sks", "paired_at"];
@@ -172,12 +176,12 @@ class SextantDevices extends LitElement {
   async _uploadIcon(entity, file) {
     if (!file) return null;
     const form = new FormData();
-    form.append("icon", file, file.name);
+    form.append("icon", file, file.name || `${entity}-icon.png`);
     try {
       const resp = await this.hass.fetchWithAuth("/api/sextant/upload_tracker_icon", { method: "POST", body: form });
       if (!resp.ok) throw new Error(await resp.text());
       const body = await resp.json().catch(() => ({}));
-      return body.value || body.path || `/local/sextant_icons/${file.name}`;
+      return body.icon_url || body.value || body.path || `/local/sextant_icons/${file.name}`;
     } catch (e) {
       toast(this, `icon upload failed: ${e.message || e}`, 6000);
       return null;
@@ -210,8 +214,93 @@ class SextantDevices extends LitElement {
       ref: layout.tracker_ref_offsets?.[slug] ?? "",
       icon: layout.tracker_icons?.[slug] || "",
       estimator: layout.tracker_estimators?.[slug] || "",
-      file: null,
+      color: layout.tracker_colors?.[slug] || "",
+      file: null,     // the cropped photo (a Blob) waiting to be uploaded on Save
+      preview: null,  // its object URL
+      crop: null,     // the cropper state while a photo is being framed
     };
+  }
+
+  // --- Photo cropper: drag and zoom a picture inside a circle; the circle becomes the icon. ---
+
+  _startCrop(file) {
+    const w = this._wizard;
+    if (!w || !file) return;
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      if (this._wizard !== w) return;
+      w.crop = { img, url, zoom: 1, x: 0, y: 0 };
+      this.requestUpdate();
+      this.updateComplete.then(() => this.renderRoot.querySelector("canvas.cropper")?.scrollIntoView({ block: "nearest" }));
+    };
+    img.onerror = () => { toast(this, "That file is not an image the browser can read", 5000); URL.revokeObjectURL(url); };
+    img.src = url;
+  }
+
+  /** Draw the photo into a square of `size` px with the crop's zoom and pan; `clip` cuts the circle. */
+  _paintCrop(ctx, size, clip) {
+    const c = this._wizard?.crop;
+    if (!c) return;
+    const base = size / Math.min(c.img.naturalWidth, c.img.naturalHeight);
+    const k = base * c.zoom, f = size / CROP_SIZE;
+    const dw = c.img.naturalWidth * k, dh = c.img.naturalHeight * k;
+    ctx.save();
+    if (clip) { ctx.beginPath(); ctx.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2); ctx.clip(); }
+    ctx.drawImage(c.img, (size - dw) / 2 + c.x * f, (size - dh) / 2 + c.y * f, dw, dh);
+    ctx.restore();
+  }
+
+  _drawCropper() {
+    const canvas = this.renderRoot.querySelector("canvas.cropper");
+    const c = this._wizard?.crop;
+    if (!canvas || !c) return;
+    const ctx = canvas.getContext("2d"), S = CROP_SIZE;
+    ctx.clearRect(0, 0, S, S);
+    ctx.fillStyle = "#222"; ctx.fillRect(0, 0, S, S);
+    this._paintCrop(ctx, S, false);
+    // Dim everything outside the circle.
+    ctx.beginPath(); ctx.rect(0, 0, S, S); ctx.arc(S / 2, S / 2, S / 2 - 1, 0, Math.PI * 2, true);
+    ctx.fillStyle = "rgba(0,0,0,0.55)"; ctx.fill("evenodd");
+    ctx.beginPath(); ctx.arc(S / 2, S / 2, S / 2 - 1, 0, Math.PI * 2); ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.stroke();
+  }
+
+  _cropPointer(e) {
+    const c = this._wizard?.crop;
+    if (!c) return;
+    if (e.type === "pointerdown") { e.currentTarget.setPointerCapture(e.pointerId); c.drag = { x: e.clientX - c.x, y: e.clientY - c.y }; }
+    else if (e.type === "pointermove" && c.drag) { c.x = e.clientX - c.drag.x; c.y = e.clientY - c.drag.y; this._drawCropper(); }
+    else if (e.type === "pointerup" || e.type === "pointercancel") { c.drag = null; }
+  }
+
+  _cropWheel(e) {
+    const c = this._wizard?.crop;
+    if (!c) return;
+    e.preventDefault();
+    c.zoom = Math.min(4, Math.max(1, c.zoom * (e.deltaY < 0 ? 1.08 : 1 / 1.08)));
+    this._drawCropper(); this.requestUpdate();
+  }
+
+  _acceptCrop() {
+    const w = this._wizard;
+    if (!w?.crop) return;
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = ICON_SIZE;
+    this._paintCrop(canvas.getContext("2d"), ICON_SIZE, true);
+    canvas.toBlob((blob) => {
+      if (!blob || this._wizard !== w) return;
+      if (w.preview) URL.revokeObjectURL(w.preview);
+      w.file = new File([blob], `${w.slug}-icon.png`, { type: "image/png" });
+      w.preview = URL.createObjectURL(blob);
+      w.icon = "";
+      URL.revokeObjectURL(w.crop.url);
+      w.crop = null;
+      this.requestUpdate();
+    }, "image/png");
+  }
+
+  updated() {
+    if (this._wizard?.crop) this._drawCropper();
   }
 
   async _saveWizard() {
@@ -224,6 +313,7 @@ class SextantDevices extends LitElement {
       ref_offset_db: w.ref === "" || w.ref == null ? null : Number(w.ref),
       icon: w.icon || null,
       estimator: w.estimator || null,
+      color: w.color || null,
     };
     if (w.new) {
       // Nothing has touched Bermuda yet. Now it does; the settings follow once the device has a slug.
@@ -257,6 +347,14 @@ class SextantDevices extends LitElement {
           ${TRACKER_CLASSES.map(([key, label, icon]) => html`<button class="cls ${w.tracker_class === key ? "on" : ""}" title=${label} @click=${() => { w.tracker_class = key; this.requestUpdate(); }}>
             ${icon ? html`<ha-icon icon=${icon}></ha-icon>` : html`<span class="initials">Ab</span>`}<span>${label}</span></button>`)}
         </div>
+        <div class="row colour">
+          <span class="avatar-preview" style="background: ${trackerColor(w.slug, w.color || null)}" title="how this tracker will look">${w.preview || w.icon ? html`<img src=${w.preview || w.icon} alt="">` : classIcon(w.tracker_class) ? html`<ha-icon icon=${classIcon(w.tracker_class)}></ha-icon>` : html`<span class="initials">${(w.name || w.placeholder || "?").slice(0, 2).toUpperCase()}</span>`}</span>
+          <span class="small">Colour</span>
+          ${PALETTE.map((c) => html`<button class="swatch ${w.color === c ? "on" : ""}" style="background: ${c}" title=${c} @click=${() => { w.color = c; this.requestUpdate(); }}></button>`)}
+          <input type="color" title="Any colour" .value=${w.color || "#1e88e5"} @input=${(e) => { w.color = e.target.value; this.requestUpdate(); }}>
+          ${w.color ? uiButton({ label: "Auto", kind: "text", onClick: () => { w.color = ""; this.requestUpdate(); }, title: "Back to the automatic colour" }) : nothing}
+        </div>
+        <p class="small muted">The colour is used everywhere this tracker is drawn: the map, the Live list, the map card.</p>
         <div class="row">
           ${uiField({ label: `Height (${unit})`, type: "number", step: 0.05, min: 0, max: unit === "ft" ? 16 : 5, value: w.height, placeholder: String(toDisplayLen(this._defaultHeight(), this.hass)), onChange: (v) => { w.height = v; this.requestUpdate(); }, style: "width: 150px" })}
           ${uiField({ label: "Ref trim (dB)", type: "number", step: 0.5, min: -20, max: 20, value: w.ref, placeholder: "0", onChange: (v) => { w.ref = v; this.requestUpdate(); }, style: "width: 150px" })}
@@ -266,13 +364,23 @@ class SextantDevices extends LitElement {
           ${uiSelect({ label: "Positioning", value: w.estimator || "", options: [{ value: "", label: `Default (${this.data?.layout?.tuning?.position_estimator || "geometric"})` }, { value: "geometric", label: "Geometric only, no fingerprint" }, { value: "fused", label: "Fused" }, { value: "fingerprint", label: "Fingerprint only" }], onChange: (v) => { w.estimator = v; this.requestUpdate(); }, style: "min-width: 280px" })}
         </div>
         <p class="small muted">Positioning: the estimator for this tracker alone. If the fingerprint makes it worse (a Tile or a tag whose radio reads unlike the phones), pick geometric only.</p>
-        <h4>Custom icon <span class="muted small">optional, overrides the class icon</span></h4>
-        <div class="row">
-          ${w.icon ? html`<img class="icon" src=${w.icon} alt="">` : nothing}
-          ${uiSelect({ value: w.icon || "", options: [{ value: "", label: "none" }, ...(this.data?.icons || []).map((i) => ({ value: i.value, label: i.label }))], onChange: (v) => { w.icon = v; this.requestUpdate(); }, style: "min-width: 180px" })}
-          <label class="btn small" title="Upload an image">Upload…<input type="file" accept="image/*" hidden @change=${(e) => { w.file = e.target.files[0] || null; this.requestUpdate(); }}></label>
-          ${w.file ? html`<span class="small muted">${w.file.name}</span>` : nothing}
-        </div>
+        <h4>Photo or custom icon <span class="muted small">optional, drawn instead of the class icon</span></h4>
+        ${w.crop ? html`<div class="cropper">
+          <canvas class="cropper" width=${CROP_SIZE} height=${CROP_SIZE}
+                  @pointerdown=${(e) => this._cropPointer(e)} @pointermove=${(e) => this._cropPointer(e)} @pointerup=${(e) => this._cropPointer(e)} @pointercancel=${(e) => this._cropPointer(e)}
+                  @wheel=${(e) => this._cropWheel(e)}></canvas>
+          <div class="row">
+            <span class="small muted">Drag to move</span>
+            <input type="range" min="1" max="4" step="0.02" .value=${String(w.crop.zoom)} title="Zoom" @input=${(e) => { w.crop.zoom = Number(e.target.value); this._drawCropper(); }}>
+            ${uiButton({ label: "Use this crop", kind: "primary", onClick: () => this._acceptCrop() })}
+            ${uiButton({ label: "Cancel", kind: "text", onClick: () => { URL.revokeObjectURL(w.crop.url); w.crop = null; this.requestUpdate(); } })}
+          </div>
+        </div>` : html`<div class="row">
+          ${w.preview ? html`<img class="icon round" src=${w.preview} alt=""><span class="small muted">cropped photo, uploaded on ${w.new ? "Track" : "Save"}</span>` : w.icon ? html`<img class="icon round" src=${w.icon} alt="">` : nothing}
+          <label class="btn small" title="Pick a photo, then frame it in the circle">Photo…<input type="file" accept="image/*" hidden @change=${(e) => { this._startCrop(e.target.files[0] || null); e.target.value = ""; }}></label>
+          ${uiSelect({ value: w.preview ? "" : (w.icon || ""), options: [{ value: "", label: w.preview ? "the cropped photo" : "class icon" }, ...(this.data?.icons || []).map((i) => ({ value: i.value, label: i.label }))], onChange: (v) => { w.icon = v; if (v) { w.file = null; if (w.preview) URL.revokeObjectURL(w.preview); w.preview = null; } this.requestUpdate(); }, style: "min-width: 180px" })}
+          ${(w.preview || w.icon) ? uiButton({ label: "Remove", kind: "text", onClick: () => { w.icon = ""; w.file = null; if (w.preview) URL.revokeObjectURL(w.preview); w.preview = null; this.requestUpdate(); } }) : nothing}
+        </div>`}
         <div class="row end">
           ${uiButton({ label: "Cancel", kind: "text", onClick: () => { this._wizard = null; } })}
           ${uiButton({ label: this._busy ? (w.new ? "Tracking…" : "Saving…") : (w.new ? "Track" : "Save"), kind: "primary", disabled: this._busy, onClick: () => this._saveWizard() })}
@@ -410,7 +518,7 @@ class SextantDevices extends LitElement {
     const layout = this.data?.layout || {};
     const placed = this._placedAddresses();
     const index = this._placedIndex();
-    const heights = layout.tracker_heights || {}, offsets = layout.tracker_ref_offsets || {}, icons = layout.tracker_icons || {}, classes = layout.tracker_classes || {};
+    const heights = layout.tracker_heights || {}, offsets = layout.tracker_ref_offsets || {}, icons = layout.tracker_icons || {}, classes = layout.tracker_classes || {}, colors = layout.tracker_colors || {};
     const live = new Map((this.positions?.positions || []).map((p) => [p.ent, p]));
     const tracked = Object.entries(this._tracked || {}).sort((a, b) => trackerName(this.data, a[1].slug).localeCompare(trackerName(this.data, b[1].slug)));
     const filter = this._filter.toLowerCase();
@@ -434,7 +542,7 @@ class SextantDevices extends LitElement {
             return html`<tr>
               <td class="who">
                 <button class="iconpick" title="Change the icon or class of ${name}" @click=${() => this._openWizard(slug, address)}>
-                  ${icons[slug] ? html`<img class="icon" src=${icons[slug]} alt="">` : html`<ha-icon class="icon" icon=${mdi || "mdi:tag-outline"}></ha-icon>`}
+                  ${icons[slug] ? html`<img class="icon round" src=${icons[slug]} alt="" style="box-shadow: 0 0 0 2px ${trackerColor(slug, colors[slug])}">` : html`<ha-icon class="icon" icon=${mdi || "mdi:tag-outline"} style="color: ${trackerColor(slug, colors[slug])}"></ha-icon>`}
                 </button>
                 <div><a href="#" class="name" title="Edit name, class, height, ref trim and icon" @click=${(e) => { e.preventDefault(); this._openWizard(slug, address); }}>${name}</a><br><span class="muted small">${address}${classes[slug] ? ` · ${(TRACKER_CLASSES.find(([k]) => k === classes[slug]) || [])[1] || classes[slug]}` : ""}${layout.tracker_estimators?.[slug] ? ` · ${layout.tracker_estimators[slug]} only` : ""}</span></div>
               </td>
@@ -605,6 +713,16 @@ class SextantDevices extends LitElement {
     td.actions { white-space: nowrap; }
     button.iconbtn.danger { color: var(--error-color, #b00020); border-color: transparent; }
     button.iconbtn.danger:hover { border-color: var(--error-color, #b00020); }
+    .icon.round { border-radius: 50%; object-fit: cover; }
+    .row.colour { align-items: center; gap: 6px; }
+    .swatch { width: 22px; height: 22px; border-radius: 50%; border: 2px solid transparent; padding: 0; cursor: pointer; }
+    .swatch.on { border-color: var(--primary-text-color); box-shadow: 0 0 0 1px #fff inset; }
+    .row.colour input[type=color] { width: 34px; height: 26px; border: 0; padding: 0; background: none; cursor: pointer; }
+    .avatar-preview { width: 32px; height: 32px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; overflow: hidden; color: #fff; border: 2px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,0.15); --mdc-icon-size: 20px; }
+    .avatar-preview img { width: 100%; height: 100%; object-fit: cover; }
+    .avatar-preview .initials { font-size: 11px; font-weight: 700; }
+    .cropper canvas { display: block; border-radius: 8px; touch-action: none; cursor: grab; max-width: 100%; }
+    .cropper input[type=range] { flex: 1; min-width: 100px; }
     .modal { position: fixed; inset: 0; background: rgba(0,0,0,0.45); display: flex; align-items: center; justify-content: center; z-index: 20; padding: 16px; }
     .dialog { width: min(640px, 100%); max-height: 90vh; overflow: auto; }
     .dialog.wide { width: min(820px, 100%); }

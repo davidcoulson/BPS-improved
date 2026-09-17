@@ -12,7 +12,7 @@
  *   tuning       stability KPI, live tuning, history retention
  */
 import { LitElement, html, css, nothing } from "./lit.js";
-import { SextantMap, trackerHue } from "./sextant-map.js";
+import { SextantMap, trackerColor } from "./sextant-map.js";
 import { sharedStyles, widgetStyles, fmtAge, fmtNum, toast, confirmDialog, ensureHaComponents, uiSwitch, uiSelect, uiButton, callWS, sortFloors, trackerName, proxyName, fmtLen, fmtSpeed, classIcon } from "./sextant-ui.js";
 
 // The backend registers the panel as sextant-panel.js?v=<manifest version>, so a page
@@ -341,7 +341,8 @@ class SextantLive extends LitElement {
   _pushTrackers() {
     const rows = (this.positions?.positions || []).filter((p) => p.floor === this.floor);
     const classes = this.data?.layout?.tracker_classes || {};
-    let trackers = rows.map((p) => ({ ...p, icon: this._icon(p.ent), mdi: classIcon(classes[p.ent]), label: this._label(p.ent) }));
+    const colors = this.data?.layout?.tracker_colors || {};
+    let trackers = rows.map((p) => ({ ...p, icon: this._icon(p.ent), mdi: classIcon(classes[p.ent]), color: colors[p.ent] || null, label: this._label(p.ent) }));
     // Scrubbing: replace the live dot of the scrubbed tracker with the past one.
     const h = this._history;
     if (h && this._scrub != null && h.ent) {
@@ -349,7 +350,7 @@ class SextantLive extends LitElement {
       const at = this._pointAt(h, this._scrub);
       trackers = trackers.filter((t) => t.ent !== h.ent);
       if (at && at.f === this.floor && f?.scale) {
-        trackers.push({ ent: h.ent, cords: [at.x * f.scale, at.y * f.scale], zone: at.z, conf: 1, label: `${this._label(h.ent)} · ${new Date(this._scrub * 1000).toLocaleTimeString()}`, icon: this._icon(h.ent), mdi: classIcon(classes[h.ent]) });
+        trackers.push({ ent: h.ent, cords: [at.x * f.scale, at.y * f.scale], zone: at.z, conf: 1, label: `${this._label(h.ent)} · ${new Date(this._scrub * 1000).toLocaleTimeString()}`, icon: this._icon(h.ent), mdi: classIcon(classes[h.ent]), color: colors[h.ent] || null });
       }
       this._map.clearTrails();
       if (f?.scale) {
@@ -365,7 +366,7 @@ class SextantLive extends LitElement {
 
   /** The same disc the map draws: the tracker's hue, with its custom icon, its class icon, or initials. */
   _avatar(ent) {
-    const color = `hsl(${trackerHue(ent)}, 70%, 45%)`;
+    const color = trackerColor(ent, this.data?.layout?.tracker_colors?.[ent]);
     const src = this.data?.layout?.tracker_icons?.[ent];
     const mdi = classIcon(this.data?.layout?.tracker_classes?.[ent]);
     return html`<span class="avatar" style="background: ${color}">
