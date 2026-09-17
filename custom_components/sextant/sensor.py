@@ -98,6 +98,103 @@ def ensure_sensors_for_entity(hass, entity, sensors_cache, new_sensors):
         new_sensors.append(sensor)
 
 
+def tracker_of_unique_id(unique_id):
+    """The tracker slug behind a per-tracker Sextant unique_id, else None."""
+    if not unique_id:
+        return None
+    for suffix, _label in SENSOR_KINDS:
+        if unique_id.startswith(suffix + "_"):
+            return unique_id[len(suffix) + 1:]
+    return None
+
+
+def _remove_sextant_device(hass, tracker):
+    """Drop the ``<tracker> (Sextant)`` device once none of its entities remain."""
+    dev_reg = dr.async_get(hass)
+    device = dev_reg.async_get_device(identifiers={("sextant", tracker)})
+    if device is None:
+        return False
+    ent_reg = er.async_get(hass)
+    if any(e.device_id == device.id for e in ent_reg.entities.values()):
+        return False
+    dev_reg.async_remove_device(device.id)
+    return True
+
+
+@callback
+def remove_sensors_for_trackers(hass, trackers, reason="untracked"):
+    """Remove the Sextant sensors and device of each tracker in ``trackers``.
+
+    Cache object, registry entry, state and the per-tracker device all go.
+    Called from the Trackers page's untrack (ws bermuda/track with ``remove``)
+    and from the reconcile below. Removing the registry entry makes HA retire
+    the live entity too, so this is the whole cleanup. Returns the number of
+    registry entries removed.
+    """
+    trackers = [t for t in trackers if t]
+    if not trackers:
+        return 0
+    sensors_cache = hass.data.get("sextant_sensors") or {}
+    ent_reg = er.async_get(hass)
+    states = getattr(hass, "states", None)
+    removed = 0
+    for tracker in trackers:
+        for suffix, _label in SENSOR_KINDS:
+            entity_id = f"sensor.{tracker}_{suffix}"
+            sensors_cache.pop(entity_id, None)
+            if ent_reg.async_get(entity_id) is not None:
+                ent_reg.async_remove(entity_id)
+                removed += 1
+            if getattr(states, "get", None) is not None and states.get(entity_id) is not None:
+                states.async_remove(entity_id)
+        _remove_sextant_device(hass, tracker)
+    _LOGGER.info("Removed the Sextant sensors of %d %s tracker(s): %s", len(trackers), reason, ", ".join(trackers))
+    return removed
+
+
+@callback
+def prune_sensors_for_untracked(hass, tracked):
+    """Reconcile Sextant's sensors against the set of trackers Bermuda reports.
+
+    ``tracked`` must be Bermuda's FULL tracked set (never the trackers heard
+    this cycle: a phone that is out for the day is still tracked). Anything
+    Sextant still carries for a device outside it is an orphan: a device
+    untracked while HA was down, or before this reconcile existed, whose
+    four sensors would otherwise sit in the registry as ``unavailable``
+    forever. Two safety rails: an empty set never prunes (a Bermuda reload
+    can report nothing for a moment), and a set has to be reported twice in
+    a row before it is acted on, so a single odd answer changes nothing.
+    Cheap in steady state: one set comparison per cycle, the registry is
+    only scanned when the tracked set changed.
+    """
+    if not tracked:
+        return 0
+    tracked = frozenset(tracked)
+    if hass.data.get("sextant_pruned_for") == tracked:
+        return 0
+    seen = hass.data.get("sextant_prune_candidate")
+    if seen != tracked:
+        hass.data["sextant_prune_candidate"] = tracked
+        return 0
+    ent_reg = er.async_get(hass)
+    stale = set()
+    for entry in list(ent_reg.entities.values()):
+        if entry.platform != "sextant" or entry.entity_id == ACCURACY_ENTITY_ID:
+            continue
+        tracker = tracker_of_unique_id(entry.unique_id)
+        if tracker is not None and tracker not in tracked:
+            stale.add(tracker)
+    for entity_id, sensor in list((hass.data.get("sextant_sensors") or {}).items()):
+        if entity_id == ACCURACY_ENTITY_ID:
+            continue
+        tracker = tracker_of_unique_id(getattr(sensor, "unique_id", None))
+        if tracker is not None and tracker not in tracked:
+            stale.add(tracker)
+    removed = remove_sensors_for_trackers(hass, sorted(stale), reason="no longer tracked") if stale else 0
+    hass.data["sextant_pruned_for"] = tracked
+    return removed
+
+
 def is_legacy_sextant_entity_id(entity_id):
     """Detect old duplicated-name entity IDs like sensor.name_name_sextant_floor."""
     if not entity_id.startswith("sensor.") or "_sextant_" not in entity_id:

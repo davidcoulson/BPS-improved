@@ -132,6 +132,20 @@ def test_bermuda_commands_pass_through_the_management_api(tmp_path, monkeypatch)
     assert conn.results[-1][1]["candidates"][0]["config_value"] == "AA"
     run(ws.ws_bermuda_track(hass, conn, {"id": 2, "type": "sextant/bermuda/track", "add": ["aa"], "remove": []}))
     assert calls == [("track", ["aa"], [])] and conn.results[-1][1]["configured_devices"] == ["AA"]
+    # Untracking takes the device's Sextant sensors and device with it, resolved
+    # from the address the Trackers page sends to the slug the sensors carry.
+    from homeassistant.helpers import device_registry as dr
+    from homeassistant.helpers import entity_registry as er
+    api.async_get_tracked_devices = lambda _h: {"aa": {"name": "A", "slug": "phone"}, "bb": {"name": "B", "slug": "watch"}}
+    for slug in ("phone", "watch"):
+        dr.async_get(hass).add({("sextant", slug)}, device_id=f"dev_{slug}")
+        for suffix in ("sextant_room", "sextant_floor", "sextant_nearest_room", "sextant_spot"):
+            er.async_get(hass).add(f"sensor.{slug}_{suffix}", unique_id=f"{suffix}_{slug}", device_id=f"dev_{slug}")
+    run(ws.ws_bermuda_track(hass, conn, {"id": 20, "type": "sextant/bermuda/track", "add": [], "remove": ["AA"]}))
+    assert calls[-1] == ("track", [], ["AA"])
+    assert not any(e.startswith("sensor.phone_") for e in er.async_get(hass).entities)
+    assert dr.async_get(hass).async_get_device(identifiers={("sextant", "phone")}) is None
+    assert sum(e.startswith("sensor.watch_") for e in er.async_get(hass).entities) == 4
     run(ws.ws_bermuda_options_set(hass, conn, {"id": 3, "type": "sextant/bermuda/options/set", "options": {"bad": 1}}))
     assert "managed option" in conn.errors[-1][2]
     run(ws.ws_bermuda_tiles(hass, conn, {"id": 4, "type": "sextant/bermuda/tiles"}))

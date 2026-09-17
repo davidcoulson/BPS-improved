@@ -59,8 +59,9 @@ def _aiofiles_open(path, mode="r", *a, **k):
     return _AsyncFile(path, mode)
 
 
-async def _aiofiles_makedirs(*a, **k):
-    return None
+async def _aiofiles_makedirs(path, *a, exist_ok=False, **k):
+    # Real directories: setup creates www/sextant_maps and www/sextant_icons.
+    os.makedirs(path, exist_ok=exist_ok)
 
 
 async def _aiofiles_remove(path):
@@ -107,6 +108,67 @@ def _json_response(data=None, status=200):
     r = _Response(status=status)
     r.json_body = data
     return r
+
+
+class FakeEntityEntry:
+    def __init__(self, entity_id, platform="sextant", unique_id=None, device_id=None):
+        self.entity_id = entity_id
+        self.platform = platform
+        self.unique_id = unique_id
+        self.device_id = device_id
+        self.disabled_by = None
+        self.original_name = None
+
+
+class FakeEntityRegistry:
+    def __init__(self):
+        self.entities = {}
+
+    def add(self, entity_id, platform="sextant", unique_id=None, device_id=None):
+        self.entities[entity_id] = FakeEntityEntry(entity_id, platform, unique_id, device_id)
+        return self.entities[entity_id]
+
+    def async_get(self, entity_id):
+        return self.entities.get(entity_id)
+
+    def async_remove(self, entity_id):
+        self.entities.pop(entity_id, None)
+
+    def async_update_entity(self, entity_id, new_unique_id=None, new_entity_id=None, **_kw):
+        entry = self.entities.pop(entity_id)
+        if new_unique_id:
+            entry.unique_id = new_unique_id
+        if new_entity_id:
+            entry.entity_id = new_entity_id
+        self.entities[entry.entity_id] = entry
+        return entry
+
+
+class FakeDevice:
+    def __init__(self, device_id, identifiers):
+        self.id = device_id
+        self.identifiers = set(identifiers)
+        self.name = None
+
+
+class FakeDeviceRegistry:
+    def __init__(self):
+        self.devices = {}
+
+    def add(self, identifiers, device_id=None):
+        device_id = device_id or f"dev{len(self.devices) + 1}"
+        self.devices[device_id] = FakeDevice(device_id, identifiers)
+        return self.devices[device_id]
+
+    def async_get(self, device_id):
+        return self.devices.get(device_id)
+
+    def async_get_device(self, identifiers=None, connections=None):
+        wanted = set(identifiers or ())
+        return next((d for d in self.devices.values() if d.identifiers & wanted), None)
+
+    def async_remove_device(self, device_id):
+        self.devices.pop(device_id, None)
 
 
 def _install_homeassistant_stubs():
@@ -189,8 +251,18 @@ def _install_homeassistant_stubs():
         string=str, boolean=bool, positive_int=int, entity_id=str,
         ensure_list=lambda v: v if isinstance(v, list) else [v],
     )
-    _module("homeassistant.helpers.entity_registry")
-    _module("homeassistant.helpers.device_registry")
+    # Entity and device registries: in-memory fakes, one pair per hass, with
+    # the handful of methods the integration uses (entries are plain objects
+    # with entity_id / platform / unique_id / device_id).
+    _module("homeassistant.helpers.entity_registry",
+            async_get=lambda hass: hass.data.setdefault("_test_entity_registry", FakeEntityRegistry()))
+    _module("homeassistant.helpers.device_registry",
+            async_get=lambda hass: hass.data.setdefault("_test_device_registry", FakeDeviceRegistry()))
+
+    async def _async_get_integration(hass, domain):
+        return types.SimpleNamespace(domain=domain, version="9.9.9-test")
+
+    _module("homeassistant.loader", async_get_integration=_async_get_integration)
     # Enough of the sensor platform for sensor.py to import (sensor tests
     # exercise the cache/creation logic, never HA's entity machinery).
     _module("homeassistant.components.sensor", SensorEntity=object,

@@ -957,8 +957,7 @@ def cleanup_legacy_sextant_registry_and_states(hass: HomeAssistant):
 
 async def update_tracked_entities(hass):
     """Update tracked_entities with the result of the Jinja code once per second."""
-    global tracked_entities, tracked_listeners, new_global_data
-    global secToUpdate
+    global tracked_entities, new_global_data
     while True:
         # Receiver liveness and the self-localization accuracy sensor are
         # receiver-side diagnostics, independent of how many beacons are being
@@ -1028,6 +1027,11 @@ async def update_tracked_entities(hass):
             # API answer still works when the entities are disabled.
             tracked_prefixes = bermuda_source.async_get_tracked_device_prefixes(hass)
             if tracked_prefixes is not None:
+                # Bermuda's tracked set is authoritative: anything Sextant still
+                # carries for a device outside it (untracked while HA was down)
+                # is an orphan and goes. One set comparison per cycle.
+                from .sensor import prune_sensors_for_untracked  # noqa: PLC0415 - sensor imports this package
+                prune_sensors_for_untracked(hass, tracked_prefixes)
                 unique_values = sorted(tracked_prefixes)
                 readings = bermuda_source.async_get_readings(hass) or {}
                 # Count device<->scanner pairs with a live distance, which is
@@ -1319,7 +1323,7 @@ def _placed_receivers(coordinates_json):
     """Placed receivers as (floor_name, entity_id slug, stored scanner_uid, address).
 
     Parsed defensively: a malformed or hand-edited bpsdata.txt yields [] rather
-    than raising into a caller (diagnostics must never break read_text). Each
+    than raising into a caller (a bad layout must never break the diagnostics). Each
     entity_id must be a non-empty string — a non-string slug isn't a real
     scanner name and would be unhashable when callers build a set of slugs.
     """
@@ -3548,7 +3552,6 @@ async def async_setup(hass, config):
             hass.http.register_view(SextantFrontendView())
             hass.http.register_view(SextantSaveAPIText())
             hass.http.register_view(SextantUploadTrackerIconAPI())
-            hass.http.register_view(SextantReadAPIText())
             hass.http.register_view(SextantCordsAPI(hass))
             hass.http.register_view(SextantSelfTestAPI(hass))
             hass.data["sextant_views_registered"] = True
@@ -3907,54 +3910,6 @@ class SextantSaveAPIText(HomeAssistantView):
                 return web.Response(status=500, text="Failed to remove file")
         return None
 
-
-class SextantReadAPIText(HomeAssistantView):
-    """Return the stored Sextant layout plus the tracked-device / receiver lists."""
-
-    url = "/api/sextant/read_text"
-    name = "api:sextant:read_text"
-    requires_auth = True
-
-    async def get(self, request):
-        hass = request.app["hass"]
-        # Both the tracked devices and their receivers come from the same
-        # Bermuda "_distance_to_" sensors — the device is the part before
-        # "_distance_to_", the receiver (scanner) the part after. Filtering to
-        # Bermuda's own sensors keeps look-alike sensors from other integrations
-        # out of both the tracked-device list and the receiver picker.
-        entities = []
-        receivers = []
-        try:
-            allowed = _bermuda_distance_sensor_ids(hass)
-            entities = sorted({eid[len("sensor."):].split("_distance_to_")[0] for eid in allowed})
-            receivers = sorted({eid.split("_distance_to_", 1)[1] for eid in allowed})
-        except Exception as e:
-            _LOGGER.info(f"Error listing Bermuda distance sensors: {e}")
-
-        # Offline scanners come from the Bermuda-liveness poller (proximity-
-        # independent), refreshed on a slower cadence by the background loop.
-        offline_receivers = list(hass.data.get(DOMAIN, {}).get("rl_offline", []))
-
-        try:
-            # The layout now lives in the Store; a fresh install has none, and
-            # the frontend's `if (data.coordinates)` guard expects "" (not "[]")
-            # in that case so it never JSON.parses an empty layout.
-            layout = get_layout(hass)
-            content = json.dumps(layout) if layout else ""
-            return web.json_response({
-                "coordinates": content,
-                "entities": entities,
-                "receivers": receivers,
-                "offline_receivers": offline_receivers,
-                # Naming-mismatch diagnostics (issue #64): placed receivers whose
-                # slug has no Bermuda distance sensor, and reporting scanners not
-                # placed anywhere.
-                "scanner_diagnostics": _scanner_diagnostics(hass, content),
-            })
-
-        except Exception as e:
-            _LOGGER.error(f"Failed to read coordinates: {e}")
-            return web.Response(status=500, text="Failed to read coordinates")
 
 def list_map_files(maps_path):
     """Map image file names on disk (runs in the executor)."""

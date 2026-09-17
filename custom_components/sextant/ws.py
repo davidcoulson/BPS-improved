@@ -862,8 +862,28 @@ async def ws_bermuda_tracked(hass, connection, msg):
 })
 @websocket_api.async_response
 async def ws_bermuda_track(hass, connection, msg):
-    devices = await bermuda_source.async_set_tracked_devices(hass, add=msg.get("add") or [], remove=msg.get("remove") or [])
+    add, remove = msg.get("add") or [], msg.get("remove") or []
+    # Resolve the slugs of the devices being removed BEFORE Bermuda forgets
+    # them, so their Sextant sensors and devices go too; otherwise Bermuda's
+    # reload leaves four "unavailable" sensors per device behind.
+    slugs = _tracked_slugs_for(hass, remove) if remove else []
+    devices = await bermuda_source.async_set_tracked_devices(hass, add=add, remove=remove)
+    if devices is not None and slugs:
+        from .sensor import remove_sensors_for_trackers  # noqa: PLC0415 - sensor imports this package
+
+        remove_sensors_for_trackers(hass, slugs)
     _bermuda_result(connection, msg, None if devices is None else {"configured_devices": devices})
+
+
+def _tracked_slugs_for(hass, keys):
+    """Tracker slugs of the tracked devices named by address, unique_id or slug."""
+    wanted = {str(k).lower() for k in keys}
+    slugs = []
+    for address, dev in (bermuda_source.async_get_tracked_devices(hass) or {}).items():
+        ids = {str(address).lower(), str(dev.get("unique_id") or "").lower(), str(dev.get("slug") or "").lower()}
+        if ids & wanted and dev.get("slug"):
+            slugs.append(dev["slug"])
+    return slugs
 
 
 @websocket_api.websocket_command({vol.Required("type"): "sextant/bermuda/findmy"})
