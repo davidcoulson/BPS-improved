@@ -26,7 +26,10 @@ from homeassistant.components import websocket_api
 
 from . import bermuda_source, kpi
 from . import history as history_mod
-from .storage import LAYOUT_LOCK, get_layout, get_layout_for_edit, get_layout_version, save_layout
+from .storage import (
+    LAYOUT_LOCK, get_layout, get_layout_for_edit, get_layout_version, load_kpi_baselines, save_kpi_baselines,
+    save_layout,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -414,24 +417,26 @@ async def ws_adjust_zones(hass, connection, msg):
 # --- KPI --------------------------------------------------------------------------
 
 
-@websocket_api.websocket_command({
-    vol.Required("type"): "sextant/kpi",
-    vol.Optional("hours", default=12.0): vol.Coerce(float),
-})
-@websocket_api.async_response
-async def ws_kpi(hass, connection, msg):
+class _KpiUnavailable(Exception):
+    """The recorder cannot answer (not loaded, or the query failed)."""
+
+
+def _kpi_hours(msg):
+    return max(0.25, min(float(msg.get("hours") or 12.0), 24 * 14))
+
+
+async def _compute_kpi(hass, hours):
     """Zone/floor stability over the last ``hours`` from the recorder."""
-    hours = max(0.25, min(float(msg.get("hours") or 12.0), 24 * 14))
     entity_ids = sorted(
         s.entity_id for s in hass.states.async_all("sensor") if s.entity_id.endswith(kpi.SUFFIXES)
     )
     if not entity_ids:
-        return connection.send_result(msg["id"], {"hours": hours, "entities": {}, "summary": {}})
+        return {"hours": hours, "generated_at": datetime.now(timezone.utc).isoformat(), "entities": {}, "summary": {}}
     try:
         from homeassistant.components.recorder import get_instance  # noqa: PLC0415
         from homeassistant.components.recorder import history as rec_history  # noqa: PLC0415
-    except Exception:  # noqa: BLE001
-        return _error(connection, msg, "the recorder is not available")
+    except Exception as e:  # noqa: BLE001
+        raise _KpiUnavailable("the recorder is not available") from e
     end = datetime.now(timezone.utc)
     start = end - timedelta(hours=hours)
     try:
@@ -439,17 +444,97 @@ async def ws_kpi(hass, connection, msg):
             rec_history.get_significant_states, hass, start, end, entity_ids, None, True, True, True, True,
         )
     except Exception as e:  # noqa: BLE001
-        return _error(connection, msg, f"recorder query failed: {e}")
+        raise _KpiUnavailable(f"recorder query failed: {e}") from e
     per_entity = {}
     for eid in entity_ids:
         rows = kpi.rows_from_recorder(states.get(eid))
         per_entity[eid] = kpi.compute_metrics(rows, hours)
-    connection.send_result(msg["id"], {
+    return {
         "hours": hours,
         "generated_at": end.isoformat(),
         "entities": per_entity,
         "summary": kpi.summarise(per_entity),
-    })
+    }
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "sextant/kpi",
+    vol.Optional("hours", default=12.0): vol.Coerce(float),
+    vol.Optional("baseline"): str,
+})
+@websocket_api.async_response
+async def ws_kpi(hass, connection, msg):
+    """Stability KPI for the window; with ``baseline`` also the deltas against
+    a saved baseline (sextant/kpi/baseline/save)."""
+    hours = _kpi_hours(msg)
+    try:
+        result = await _compute_kpi(hass, hours)
+    except _KpiUnavailable as e:
+        return _error(connection, msg, str(e))
+    name = (msg.get("baseline") or "").strip()
+    if name:
+        baselines = await load_kpi_baselines(hass)
+        base = baselines.get(name)
+        if not isinstance(base, dict):
+            return _error(connection, msg, f"no KPI baseline named {name!r}")
+        result["baseline"] = {
+            "name": name, "saved_at": base.get("saved_at"), "hours": base.get("hours"), "summary": base.get("summary"),
+        }
+        result["deltas"] = kpi.deltas(result, base)
+    connection.send_result(msg["id"], result)
+
+
+@websocket_api.websocket_command({vol.Required("type"): "sextant/kpi/baselines"})
+@websocket_api.async_response
+async def ws_kpi_baselines(hass, connection, msg):
+    baselines = await load_kpi_baselines(hass)
+    rows = [
+        {
+            "name": name, "saved_at": b.get("saved_at"), "hours": b.get("hours"), "summary": b.get("summary"),
+            "trackers": len(b.get("entities") or {}),
+        }
+        for name, b in baselines.items() if isinstance(b, dict)
+    ]
+    rows.sort(key=lambda r: r.get("saved_at") or "")
+    connection.send_result(msg["id"], {"baselines": rows})
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "sextant/kpi/baseline/save",
+    vol.Required("name"): str,
+    vol.Optional("hours", default=12.0): vol.Coerce(float),
+})
+@websocket_api.async_response
+async def ws_kpi_baseline_save(hass, connection, msg):
+    """Compute the window now and keep it under ``name`` for later comparison."""
+    name = msg["name"].strip()
+    if not name or len(name) > 60:
+        return _error(connection, msg, "baseline name must be 1-60 characters")
+    hours = _kpi_hours(msg)
+    try:
+        result = await _compute_kpi(hass, hours)
+    except _KpiUnavailable as e:
+        return _error(connection, msg, str(e))
+    if not result["entities"]:
+        return _error(connection, msg, "no zone sensors in the recorder window; nothing to save")
+    baselines = await load_kpi_baselines(hass)
+    baselines[name] = {
+        "saved_at": result["generated_at"], "hours": hours,
+        "entities": result["entities"], "summary": result["summary"],
+    }
+    await save_kpi_baselines(hass, baselines)
+    connection.send_result(msg["id"], {"name": name, "saved_at": result["generated_at"], "trackers": len(result["entities"])})
+
+
+@websocket_api.websocket_command({vol.Required("type"): "sextant/kpi/baseline/delete", vol.Required("name"): str})
+@websocket_api.async_response
+async def ws_kpi_baseline_delete(hass, connection, msg):
+    baselines = await load_kpi_baselines(hass)
+    if msg["name"] not in baselines:
+        return _error(connection, msg, f"no KPI baseline named {msg['name']!r}")
+    del baselines[msg["name"]]
+    await save_kpi_baselines(hass, baselines)
+    connection.send_result(msg["id"], {"deleted": msg["name"]})
 
 
 # --- Bermuda management ------------------------------------------------------------
@@ -538,6 +623,16 @@ async def ws_bermuda_scanners(hass, connection, msg):
     _bermuda_result(connection, msg, None if directory is None else {"scanners": directory}, feature="scanners")
 
 
+@websocket_api.websocket_command({vol.Required("type"): "sextant/bermuda/scanner_ranging", vol.Optional("max_age"): vol.Coerce(float)})
+@websocket_api.async_response
+async def ws_bermuda_scanner_ranging(hass, connection, msg):
+    """Receiver-to-receiver ranges from Bermuda: {"scanners": {tx: {rx: {distance, age, ...}}}}.
+    What the fingerprint references are built from; also how an unplaced
+    receiver's position is estimated."""
+    ranging = bermuda_source.async_get_scanner_ranging(hass, max_age=msg.get("max_age"))
+    _bermuda_result(connection, msg, ranging, feature="scanner_ranging")
+
+
 @websocket_api.websocket_command({vol.Required("type"): "sextant/bermuda/tiles"})
 @websocket_api.async_response
 async def ws_bermuda_tiles(hass, connection, msg):
@@ -549,9 +644,10 @@ COMMANDS = (
     ws_layout_get, ws_layout_save, ws_tuning_set, ws_tracker_tune,
     ws_history_index, ws_history_get, ws_history_clear,
     ws_calibration_status, ws_calibration_action, ws_selftest, ws_scanner_linking, ws_receivers, ws_beacon_links,
-    ws_adjust_zones, ws_kpi,
+    ws_adjust_zones, ws_kpi, ws_kpi_baselines, ws_kpi_baseline_save, ws_kpi_baseline_delete,
     ws_bermuda_candidates, ws_bermuda_tracked, ws_bermuda_track, ws_bermuda_findmy, ws_bermuda_findmy_add,
     ws_bermuda_findmy_remove, ws_bermuda_options, ws_bermuda_options_set, ws_bermuda_scanners, ws_bermuda_tiles,
+    ws_bermuda_scanner_ranging,
 )
 
 

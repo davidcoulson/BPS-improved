@@ -331,8 +331,11 @@ class SextantEdit extends LitElement {
           <div class="card">
             <h4>${f.name} <span class="muted small">${f.scale ? `${fmtNum(f.scale, 1)} px/m` : "no scale"}</span></h4>
             <div class="row small muted">${(f.receivers || []).length} receivers · ${(f.zones || []).filter((z) => !z.no_go).length} zones · ${(f.zones || []).filter((z) => z.no_go).length} no-go · ${(f.subzones || []).length} sub-zones</div>
+            <div class="row small muted">Level: storey number, 0 = ground, -1 = basement; orders the floor picker top-down. Bias: election prior, 1.2 = a 20 % head start every cycle.</div>
             <div class="row">
               ${uiField({ label: "Scale (px per m)", type: "number", step: 0.01, value: f.scale ?? "", onChange: (v) => { f.scale = Number(v) || null; this._dirty = true; this.requestUpdate(); }, style: "width: 150px" })}
+              ${uiField({ label: "Level", type: "number", step: 1, value: f.level ?? "", placeholder: "0", onChange: (v) => { if (v === "" || v == null) delete f.level; else f.level = Math.round(Number(v)); this._dirty = true; this.requestUpdate(); }, style: "width: 90px" })}
+              ${uiField({ label: "Election bias", type: "number", step: 0.05, min: 0.25, max: 4, value: f.bias ?? "", placeholder: "1", onChange: (v) => { if (v === "" || v == null) delete f.bias; else f.bias = Number(v); this._dirty = true; this.requestUpdate(); }, style: "width: 120px" })}
               ${uiButton({ label: "Adjust zones", disabled: this._busy, onClick: () => this._adjust("zones"), title: "Square up rooms and snap shared walls" })}
               ${uiButton({ label: "Adjust sub-zones", disabled: this._busy, onClick: () => this._adjust("subzones") })}
               ${uiButton({ label: "Delete floor", kind: "danger", disabled: this._busy, onClick: () => this._removeFloor() })}

@@ -187,3 +187,8 @@ export const widgetStyles = css`
   ha-button.danger, mwc-button.danger { --mdc-theme-primary: var(--error-color, #b00020); }
   ha-formfield { --mdc-typography-body2-font-size: 13px; }
 `;
+
+/** Floors top-down by their storey `level` (1 = the floor above ground, 0 = ground, -1 = basement); ties keep file order. */
+export function sortFloors(floors) {
+  return [...(floors || [])].map((f, i) => [f, i]).sort((a, b) => ((b[0].level ?? 0) - (a[0].level ?? 0)) || (a[1] - b[1])).map(([f]) => f);
+}

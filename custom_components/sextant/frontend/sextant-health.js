@@ -15,6 +15,9 @@ class SextantHealth extends LitElement {
     _selftest: { state: true },
     _kpi: { state: true },
     _kpiHours: { state: true },
+    _baselines: { state: true },
+    _baseline: { state: true },
+    _baselineName: { state: true },
     _linking: { state: true },
     _busy: { state: true },
     _tuning: { state: true },
@@ -29,6 +32,9 @@ class SextantHealth extends LitElement {
     this._selftest = null;
     this._kpi = null;
     this._kpiHours = 12;
+    this._baselines = [];
+    this._baseline = "";
+    this._baselineName = "";
     this._linking = null;
     this._busy = null;
     this._tuning = {};
@@ -56,6 +62,7 @@ class SextantHealth extends LitElement {
     ]);
     this._receivers = rx;
     this._cal = cal;
+    this._loadBaselines();
     if (!this._calFloor) this._calFloor = cal?.floor || this.floor || this.data?.layout?.floor?.[0]?.name || null;
   }
 
@@ -88,9 +95,39 @@ class SextantHealth extends LitElement {
 
   async _runKpi() {
     this._busy = "kpi";
-    const r = await callWS(this, this.hass, { type: "sextant/kpi", hours: this._kpiHours });
+    const msg = { type: "sextant/kpi", hours: this._kpiHours };
+    if (this._baseline) msg.baseline = this._baseline;
+    const r = await callWS(this, this.hass, msg);
     this._busy = null;
     if (r) this._kpi = r;
+  }
+
+  async _loadBaselines() {
+    const r = await this.hass.callWS({ type: "sextant/kpi/baselines" }).catch(() => null);
+    if (r) {
+      this._baselines = r.baselines || [];
+      if (this._baseline && !this._baselines.some((b) => b.name === this._baseline)) this._baseline = "";
+    }
+  }
+
+  async _saveBaseline() {
+    const name = (this._baselineName || "").trim();
+    if (!name) return;
+    this._busy = "baseline";
+    const r = await callWS(this, this.hass, { type: "sextant/kpi/baseline/save", name, hours: this._kpiHours });
+    this._busy = null;
+    if (r) {
+      toast(this, `Saved baseline "${r.name}" (${r.trackers} trackers, ${this._kpiHours} h)`);
+      this._baselineName = "";
+      await this._loadBaselines();
+      this._baseline = r.name;
+    }
+  }
+
+  async _deleteBaseline(name) {
+    if (!name || !confirmDialog(`Delete the KPI baseline "${name}"?`)) return;
+    const r = await callWS(this, this.hass, { type: "sextant/kpi/baseline/delete", name });
+    if (r) { toast(this, `Deleted baseline "${name}"`); this._baseline = ""; if (this._kpi) this._kpi = { ...this._kpi, baseline: undefined, deltas: undefined }; await this._loadBaselines(); }
   }
 
   async _loadLinking() {
@@ -219,18 +256,31 @@ class SextantHealth extends LitElement {
   _renderKpi() {
     const k = this._kpi;
     const s = k?.summary || {};
+    const d = k?.deltas;
     const ents = Object.entries(k?.entities || {}).filter(([e]) => e.endsWith("_sextant_zone")).sort((a, b) => (b[1].changes_per_hour ?? 0) - (a[1].changes_per_hour ?? 0));
+    // Fewer changes / flips is better (green); a longer dwell is better.
+    const lessIsBetter = (v, digits = 1, scale = 1) => v == null ? "—" : html`<span class=${v < 0 ? "good" : v > 0 ? "bad" : ""}>${v > 0 ? "+" : ""}${fmtNum(v * scale, digits)}</span>`;
+    const moreIsBetter = (v) => v == null ? "—" : html`<span class=${v > 0 ? "good" : v < 0 ? "bad" : ""}>${v > 0 ? "+" : "−"}${fmtAge(Math.abs(v))}</span>`;
+    const sz = d?.summary?.sextant_zone;
+    const baselineOptions = [{ value: "", label: "no baseline" }, ...this._baselines.map((b) => ({ value: b.name, label: `${b.name} · ${b.hours} h · ${(b.saved_at || "").slice(0, 10)}` }))];
     return html`<section class="card">
       <h3>Stability</h3>
       <div class="row">
         ${uiSelect({ label: "Window", value: this._kpiHours, options: [1, 3, 6, 12, 24, 48].map((h) => ({ value: h, label: `${h} h` })), onChange: (v) => { this._kpiHours = Number(v); }, style: "min-width: 110px" })}
+        ${uiSelect({ label: "Compare with", value: this._baseline, options: baselineOptions, onChange: (v) => { this._baseline = v; }, style: "min-width: 240px" })}
         ${uiButton({ label: this._busy === "kpi" ? "Computing…" : "Compute", kind: "primary", disabled: this._busy === "kpi", onClick: () => this._runKpi() })}
         ${s.sextant_zone ? html`<span class="pill">${s.sextant_zone.changes_per_tracker_hour} zone changes / tracker-h</span>
           <span class="pill">flip ratio ${s.sextant_zone.flip_ratio}</span><span class="pill">median dwell ${fmtAge(s.sextant_zone.median_of_median_dwell_s)}</span>` : nothing}
+        ${sz ? html`<span class="pill" title="this window minus the baseline">vs ${k.baseline.name}: ${lessIsBetter(sz.changes_per_tracker_hour, 2)} chg/tracker-h · ${lessIsBetter(sz.flip_ratio, 0, 100)} flip pts · ${moreIsBetter(sz.median_of_median_dwell_s)} dwell</span>` : nothing}
+      </div>
+      <div class="row">
+        ${uiField({ label: "Save this window as a baseline", value: this._baselineName, placeholder: "e.g. fused 2026-09-17", onChange: (v) => { this._baselineName = v; }, style: "width: 260px" })}
+        ${uiButton({ label: this._busy === "baseline" ? "Saving…" : "Save baseline", disabled: this._busy === "baseline" || !(this._baselineName || "").trim(), onClick: () => this._saveBaseline(), title: "Computes the selected window now and keeps it for later comparison" })}
+        ${this._baseline ? uiButton({ label: "Delete baseline", kind: "danger", onClick: () => this._deleteBaseline(this._baseline) }) : nothing}
       </div>
       ${ents.length ? html`<div class="wrap"><table>
-        <tr><th>Tracker</th><th class="num">chg/h</th><th class="num">flip %</th><th class="num">dwell</th><th class="num">&lt;60 s %</th><th class="num">dead</th></tr>
-        ${ents.map(([e, m]) => html`<tr><td>${e.replace(/^sensor\./, "").replace(/_sextant_zone$/, "")}</td><td class="num">${fmtNum(m.changes_per_hour, 1)}</td><td class="num">${m.flip_ratio != null ? fmtNum(m.flip_ratio * 100, 0) : "—"}</td><td class="num">${fmtAge(m.median_dwell_s)}</td><td class="num">${m.short_dwell_ratio != null ? fmtNum(m.short_dwell_ratio * 100, 0) : "—"}</td><td class="num">${m.dead}</td></tr>`)}
+        <tr><th>Tracker</th><th class="num">chg/h</th><th class="num">flip %</th><th class="num">dwell</th><th class="num">&lt;60 s %</th><th class="num">dead</th>${d ? html`<th class="num">Δ chg/h</th><th class="num">Δ flip pts</th><th class="num">Δ dwell</th>` : nothing}</tr>
+        ${ents.map(([e, m]) => html`<tr><td>${e.replace(/^sensor\./, "").replace(/_sextant_zone$/, "")}</td><td class="num">${fmtNum(m.changes_per_hour, 1)}</td><td class="num">${m.flip_ratio != null ? fmtNum(m.flip_ratio * 100, 0) : "—"}</td><td class="num">${fmtAge(m.median_dwell_s)}</td><td class="num">${m.short_dwell_ratio != null ? fmtNum(m.short_dwell_ratio * 100, 0) : "—"}</td><td class="num">${m.dead}</td>${d ? html`<td class="num">${lessIsBetter(d.entities?.[e]?.changes_per_hour, 1)}</td><td class="num">${lessIsBetter(d.entities?.[e]?.flip_ratio, 0, 100)}</td><td class="num">${moreIsBetter(d.entities?.[e]?.median_dwell_s)}</td>` : nothing}</tr>`)}
       </table></div>` : k ? html`<div class="muted small">No zone sensors in the recorder window.</div>` : nothing}
     </section>`;
   }
@@ -238,11 +288,11 @@ class SextantHealth extends LitElement {
   _renderTuning() {
     const spec = this.data?.tuning_spec || {};
     const groups = [
-      ["Estimator", ["position_estimator", "fingerprint_weight", "fingerprint_floor_weight", "fingerprint_k", "fingerprint_missing_m", "fingerprint_ref_gain", "distance_estimator", "median_window_secs", "median_min_samples"]],
+      ["Estimator", ["position_estimator", "fingerprint_weight", "fingerprint_floor_weight", "fingerprint_k", "fingerprint_missing_m", "fingerprint_ref_gain", "fingerprint_auto_gain", "distance_estimator", "median_window_secs", "median_min_samples"]],
       ["Solver", ["solver_max_receivers", "solver_max_range", "solver_near_always"]],
       ["Zones", ["zone_hysteresis", "zone_prob_smoothing", "zone_switch_margin", "zone_switch_secs", "stationary_speed", "stationary_secs", "zone_unlock_margin", "zone_unlock_secs"]],
       ["Sub-zones", ["subzone_switch_secs", "subzone_enter_prob", "subzone_unlock_margin"]],
-      ["Floors", ["floor_switch_secs", "floor_tenure_bonus", "floor_tenure_full_secs", "floor_proximity_weight"]],
+      ["Floors", ["floor_switch_secs", "floor_tenure_bonus", "floor_tenure_full_secs", "floor_proximity_weight", "floor_proximity_k"]],
       ["Calibration", ["calibration_target"]],
     ];
     const known = new Set(groups.flatMap((g) => g[1]));
@@ -283,6 +333,8 @@ class SextantHealth extends LitElement {
   }
 
   static styles = [sharedStyles, widgetStyles, css`
+    .good { color: var(--success-color, #2e7d32); font-weight: 600; }
+    .bad { color: var(--error-color, #c62828); font-weight: 600; }
     :host { display: block; overflow: auto; }
     .cols { grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); }
     section.receivers { grid-column: 1 / -1; }

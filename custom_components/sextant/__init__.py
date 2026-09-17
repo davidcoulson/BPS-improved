@@ -351,6 +351,11 @@ TUNING_SPEC = {
     # is, relative to the nearest receiver on any competing floor (see
     # _proximity_weighted_scores). 0 = pure fit-quality election.
     "floor_proximity_weight": (0.5, float, 0.0, 1.0),
+    # How many of a floor's nearest receivers that proximity term averages.
+    # One receiver straight through a wood floor can read nearer than the
+    # receivers in the room (a dog on the sun-room floor: basement 1.7 m,
+    # ground 1.9 m); the three nearest cannot (3.1 m vs 4.9 m).
+    "floor_proximity_k": (3, int, 1, 8),
     # Where receiver calibration writes its corrections. "sextant": a per-receiver
     # distance multiplier in this layout (the original behaviour). "bermuda":
     # the equivalent per-scanner rssi offset written into Bermuda itself
@@ -371,6 +376,11 @@ TUNING_SPEC = {
     "fingerprint_k": (3, int, 1, 8),                    # references averaged per fix
     "fingerprint_missing_m": (12.0, float, 2.0, 50.0),  # "not heard" counts as this far
     "fingerprint_ref_gain": (1.0, float, 0.25, 4.0),    # probe beacons hotter (<1) / cooler (>1) than trackers
+    # Learn the rest of that gain from the trackers themselves: every match
+    # yields the median ratio between the tracker's ranges and its best
+    # reference's, and the learned factor (fingerprint.ReferenceDB.learn)
+    # multiplies fingerprint_ref_gain. Reported per fix as fp.gain.
+    "fingerprint_auto_gain": (True, bool),
 }
 
 # Reference fingerprints: receiver-to-receiver ranges, refreshed on a slow
@@ -1798,9 +1808,12 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
     estimator = _tuning(layout, "position_estimator")
     refs_by_floor = {}
     tracker_vec = {}
+    fp_gain = 1.0
     if estimator != "geometric":
-        refs_by_floor = fingerprint.build_references(
-            layout, _fingerprint_db.vectors(), _tuning(layout, "fingerprint_ref_gain"))
+        fp_gain = _tuning(layout, "fingerprint_ref_gain")
+        if _tuning(layout, "fingerprint_auto_gain"):
+            fp_gain *= _fingerprint_db.learned_gain
+        refs_by_floor = fingerprint.build_references(layout, _fingerprint_db.vectors(), fp_gain)
         tracker_vec = fingerprint.tracker_vector(layout)
     # A floor with references can compete on its fingerprint with a single
     # receiver hearing the tracker; trilateration alone needs three.
@@ -1887,6 +1900,7 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
                 "missing_m": _tuning(layout, "fingerprint_missing_m"),
                 "weight": _tuning(layout, "fingerprint_weight"),
                 "floor_weight": _tuning(layout, "fingerprint_floor_weight"),
+                "gain": fp_gain,
             },
         })
 
@@ -1963,9 +1977,13 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
     # receivers are physically nearest gets the benefit of the doubt.
     scores = _proximity_weighted_scores(
         {f: s["conf"] for f, s in solved.items()},
-        {c["name"]: c.get("nearest_m") for c in candidates},
+        {c["name"]: c.get("near_k_m", c.get("nearest_m")) for c in candidates},
         _tuning(layout, "floor_proximity_weight"),
     )
+    # The floor's own prior (layout floor["bias"], default 1): in a house the
+    # ground floor is where things usually are, and a phone on the kitchen
+    # counter must not tie with the bedroom directly above it.
+    scores = {f: s * _floor_bias(layout, f) for f, s in scores.items()}
     probs = _update_floor_probabilities(entity, scores, valid_floors)
     now = time.time()
     # The incumbent's required lead grows with how long it has held the floor
@@ -1997,6 +2015,11 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
         update_trilateration_and_zone.last_floor[entity] = lowest_floor_name
 
     elected = solved[lowest_floor_name]
+    # The elected floor's match is the one whose tracker-vs-reference range
+    # ratio says something about the probe gain; fold it in (slowly).
+    fp_tel = elected.get("fp")
+    if fp_tel and fp_tel.get("ratio") and _tuning(layout, "fingerprint_auto_gain"):
+        _fingerprint_db.learn(fp_tel["ratio"], fp_tel.get("conf") or 0.0)
     weighted = elected["weighted"]
     zone_polys = elected["zone_polys"]
     floor_bounds = elected["bounds"]
@@ -2053,6 +2076,9 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
                 "zone_raw": instant_zone,
                 "zone_locked": zone_locked,
                 "sub_zone": sub_zone,
+                # Smoothed sub-zone membership shares (name -> share, plus
+                # "unknown"), the sub-zone counterpart of "floors" below.
+                "sub_zones": _subzone_probs(entity),
                 "speed": None if zone_speed is None else round(zone_speed, 2),
                 "floor": lowest_floor_name,
                 # The exact solver input (post-correction, post-filter), for
@@ -2145,6 +2171,11 @@ def _fuse_fingerprint(spec, geo_fix, geo_conf):
         "conf": round(m["conf"], 3),
         "score": round(m["score"], 3),
         "refs": m["refs"],
+        # Tracker/reference range ratio over the receivers both were heard
+        # by (>1: references read short), and the gain the references were
+        # built with - the auto-gain loop's input and output.
+        "ratio": None if m.get("ratio") is None else round(m["ratio"], 3),
+        "gain": round(float(spec.get("gain", 1.0)), 3),
     }
     if m is None:
         return geo_fix, geo_conf, None
@@ -2303,6 +2334,7 @@ def extract_candidate_floors(new_global_data, tmpentity):
         max_receivers = _tuning(layout, "solver_max_receivers")
         max_range = _tuning(layout, "solver_max_range")
         near_always = _tuning(layout, "solver_near_always")
+        prox_k = max(1, int(_tuning(layout, "floor_proximity_k")))
         for floor in layout["floor"]:
             entries = []
             for receiver in floor["receivers"]:
@@ -2321,11 +2353,15 @@ def extract_candidate_floors(new_global_data, tmpentity):
             # contribute mostly noise, and 1/r^2 does not zero them out.
             cords = _select_receivers(entries, max_receivers, max_range, near_always)
             nearest = min((e[0] for e in entries), default=float("inf"))
+            ranked = sorted(e[0] for e in entries)[:prox_k]
             if cords:
                 candidates.append({
                     "name": floor["name"],
                     "cords": cords,
                     "nearest_m": nearest,
+                    # Mean of the floor_proximity_k nearest slants: what the
+                    # proximity term compares across floors.
+                    "near_k_m": sum(ranked) / len(ranked) if ranked else float("inf"),
                 })
     candidates.sort(key=lambda c: c["nearest_m"])  # stable: file order breaks ties
     return candidates
@@ -2365,6 +2401,23 @@ def _score_floor_fit(fix, weighted, scale):
     # must not out-cover a floor with 6 of 8 receivers reporting.
     coverage = min(1.0, n / COVERAGE_TARGET_N)
     return 0.5 * coverage + 0.5 * quality, rms_m, coverage
+
+
+def _floor_bias(layout, floor_name):
+    """The floor's election prior from the layout (floor["bias"]), default 1.
+
+    Multiplies the floor's score before the probabilities are updated, so a
+    bias of 1.2 is a 20 % head start in every cycle, not a one-off nudge.
+    Anything not a number in (0, 10] is ignored.
+    """
+    floors = layout.get("floor") if isinstance(layout, dict) else None
+    for floor in floors or []:
+        if isinstance(floor, dict) and floor.get("name") == floor_name:
+            bias = floor.get("bias")
+            if isinstance(bias, (int, float)) and not isinstance(bias, bool) and 0 < bias <= 10:
+                return float(bias)
+            return 1.0
+    return 1.0
 
 
 def _proximity_weighted_scores(scores, nearest_by_floor, weight):
@@ -2669,6 +2722,15 @@ def _subzone_membership(sub_polys, samples):
         shares[hit] = shares.get(hit, 0.0) + w
     total = sum(shares.values())
     return {s: v / total for s, v in shares.items()} if total > 0 else {}
+
+
+def _subzone_probs(entity):
+    """The tracker's smoothed sub-zone shares for the telemetry payload, or None."""
+    st = _subzone_state.get(entity)
+    probs = st.get("probs") if isinstance(st, dict) else None
+    if not probs:
+        return None
+    return {name: round(p, 3) for name, p in probs.items()}
 
 
 def _elect_subzone(entity, floor_name, zone, zone_locked, point, kf_state, sub_polys, scale, layout, now=None):

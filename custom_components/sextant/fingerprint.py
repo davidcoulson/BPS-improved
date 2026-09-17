@@ -40,6 +40,15 @@ SCORE_SCALE = math.log(2.0)
 # in, even inside the k cut - a poor third neighbour would drag the fix.
 NEIGHBOUR_SCORE_RATIO = 3.0
 
+# Auto-gain: each accepted match moves the learned reference gain by
+# ratio ** (LEARN_ALPHA * conf); at one match per tracker per cycle, a
+# household of trackers walks a factor-of-two error off in a few minutes
+# and then hovers, never runs away (clamped).
+LEARN_ALPHA = 0.02
+LEARNED_GAIN_MIN = 0.25
+LEARNED_GAIN_MAX = 4.0
+MIN_SHARED_FOR_RATIO = 3   # receivers both vectors need before a ratio is trusted
+
 
 class ReferenceDB:
     """Rolling per-pair ranges between receivers, from Bermuda's scanner ranging."""
@@ -48,6 +57,24 @@ class ReferenceDB:
         self._samples = {}  # (tx_address, rx_address) -> deque of raw metres
         self._maxlen = samples
         self.stamp = None
+        # Multiplies the configured reference gain (see learn()).
+        self.learned_gain = 1.0
+
+    def learn(self, ratio, conf=1.0, alpha=LEARN_ALPHA):
+        """Fold one match's tracker/reference range ratio into the learned gain.
+
+        ``ratio`` > 1 means the tracker reads farther than the reference the
+        matcher paired it with, i.e. the references are built too short and
+        the gain should rise. A tracker is rarely exactly at a reference, so
+        single ratios scatter either side of the truth; the exponent is
+        small and scaled by the match confidence so only the average moves
+        the gain. Returns the new gain.
+        """
+        if not isinstance(ratio, (int, float)) or isinstance(ratio, bool) or not ratio > 0 or not math.isfinite(ratio):
+            return self.learned_gain
+        step = alpha * max(0.0, min(1.0, float(conf)))
+        self.learned_gain = min(LEARNED_GAIN_MAX, max(LEARNED_GAIN_MIN, self.learned_gain * ratio ** step))
+        return self.learned_gain
 
     def ingest(self, ranging, max_age=REF_MAX_AGE_SECS):
         """Fold one ``async_get_scanner_ranging`` payload into the medians."""
@@ -234,10 +261,22 @@ def match(tracker, refs, k=3, missing_m=12.0):
         x += w * r["x"]
         y += w * r["y"]
     conf = 1.0 / (1.0 + (best / SCORE_SCALE) ** 2)
+    # Gain evidence: over the receivers that heard BOTH the tracker and the
+    # best reference (never the reference's own self entry), the median of
+    # tracker / reference. Independent of the score's weighting on purpose.
+    best_ref = scored[0][1]
+    logs = [
+        math.log(tracker[rx] / best_ref["vector"][rx])
+        for rx in tracker
+        if rx in best_ref["vector"] and rx != best_ref.get("address") and best_ref["vector"][rx] > 0
+    ]
+    ratio = math.exp(_median(logs)) if len(logs) >= MIN_SHARED_FOR_RATIO else None
     return {
         "x": x / wsum,
         "y": y / wsum,
         "conf": conf,
         "score": best,
         "refs": [(r.get("slug"), round(s, 3)) for s, r in chosen],
+        "ratio": ratio,
+        "shared": len(logs),
     }

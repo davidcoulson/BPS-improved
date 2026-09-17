@@ -1327,3 +1327,41 @@ def test_subzone_switches_to_a_clearly_better_neighbour():
     # dwell, wins outright without passing through unknown.
     seen = [_sub("e", (800, 750), t + 40 + dt)[0] for dt in range(0, 80, 10)]
     assert seen[0] == "Sofa" and seen[-1] == "Desk" and "unknown" not in seen
+
+
+# --- Floor election: k-nearest proximity and the per-floor bias ---------------
+
+def test_candidates_carry_the_mean_of_the_k_nearest_slants():
+    def layout(k=None):
+        lay = {"floor": [{"name": "F", "scale": 100.0, "zones": [], "subzones": [], "receivers": [
+            {"entity_id": f"r{i}", "cords": {"x": i * 100.0, "y": 0.0, "r": d * 100.0}, "distance": d}
+            for i, d in enumerate((1.0, 2.0, 3.0, 10.0))
+        ]}]}
+        if k is not None:
+            lay["tuning"] = {"floor_proximity_k": k}
+        return lay
+    cand = sextant.extract_candidate_floors([{"entity": "e", "data": layout()}], "e")[0]
+    assert cand["nearest_m"] == 1.0
+    assert abs(cand["near_k_m"] - 2.0) < 1e-9            # default k = 3: (1 + 2 + 3) / 3
+    cand = sextant.extract_candidate_floors([{"entity": "e", "data": layout(1)}], "e")[0]
+    assert cand["near_k_m"] == 1.0                        # k = 1 is the old nearest-only behaviour
+    cand = sextant.extract_candidate_floors([{"entity": "e", "data": layout(8)}], "e")[0]
+    assert abs(cand["near_k_m"] - 4.0) < 1e-9             # more than the floor has: all of them
+
+
+def test_floor_bias_reads_the_layout_and_ignores_junk():
+    layout = {"floor": [{"name": "Ground", "bias": 1.2}, {"name": "Up", "bias": "hot"}, {"name": "Down", "bias": 0}, {"name": "Attic"}]}
+    assert sextant._floor_bias(layout, "Ground") == 1.2
+    assert sextant._floor_bias(layout, "Up") == 1.0
+    assert sextant._floor_bias(layout, "Down") == 1.0
+    assert sextant._floor_bias(layout, "Attic") == 1.0
+    assert sextant._floor_bias(layout, "Nowhere") == 1.0
+    assert sextant._floor_bias([], "Ground") == 1.0
+
+
+def test_subzone_probs_come_from_the_election_state():
+    sextant._subzone_state.pop("e", None)
+    assert sextant._subzone_probs("e") is None
+    sextant._subzone_state["e"] = {"floor": "F", "zone": "Z", "value": ("Couch", "Z"), "probs": {"Couch": 0.66666, "unknown": 0.33334}, "pending": None}
+    assert sextant._subzone_probs("e") == {"Couch": 0.667, "unknown": 0.333}
+    sextant._subzone_state.pop("e", None)

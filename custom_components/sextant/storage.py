@@ -31,6 +31,7 @@ DOMAIN = "sextant"
 STORAGE_VERSION = 1
 STORAGE_KEY_LAYOUT = "sextant"                       # -> config/.storage/sextant
 STORAGE_KEY_CALIB = "sextant_calibration_state"      # -> config/.storage/sextant_calibration_state
+STORAGE_KEY_KPI = "sextant_kpi_baselines"            # -> config/.storage/sextant_kpi_baselines
 
 # Serializes read-modify-write sequences on the layout across every writer
 # (panel save + calibration). Lives here so both importers share one lock
@@ -150,6 +151,30 @@ async def load_calib_state(hass):
 
 async def save_calib_state(hass, payload) -> None:
     await _calib_store(hass).async_save(payload)
+
+
+# --- Stability (KPI) baselines -----------------------------------------------
+
+def _kpi_store(hass) -> Store:
+    bucket = _bucket(hass)
+    store = bucket.get("_kpi_store")
+    if store is None:
+        store = bucket["_kpi_store"] = Store(hass, STORAGE_VERSION, STORAGE_KEY_KPI)
+    return store
+
+
+async def load_kpi_baselines(hass) -> dict:
+    """``{name: {"saved_at", "hours", "entities", "summary"}}``; empty when none."""
+    try:
+        data = await _kpi_store(hass).async_load()
+    except Exception as e:
+        _LOGGER.warning("Could not load KPI baselines: %s", e)
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+async def save_kpi_baselines(hass, baselines: dict) -> None:
+    await _kpi_store(hass).async_save(baselines)
 
 
 # --- One-time migration of the old flat files -------------------------------

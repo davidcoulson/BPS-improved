@@ -16,6 +16,7 @@
  */
 import { LitElement, html, css, nothing } from "./lit.js";
 import { SextantMap } from "./sextant-map.js";
+import { sortFloors } from "./sextant-ui.js";
 
 function mapUrlFor(floorName, maps) {
   if (!floorName || !maps) return null;
@@ -111,7 +112,7 @@ class SextantMapCard extends LitElement {
       <div class="stage" style="height:${this._config?.height || 360}px">
         <canvas></canvas>
         ${floors.length > 1 && !this._config?.floor ? html`<select class="floor" @change=${(e) => { this._floor = e.target.value; }}>
-          ${floors.map((f) => html`<option value=${f.name} ?selected=${f.name === this._floor}>${f.name}</option>`)}</select>` : nothing}
+          ${sortFloors(floors).map((f) => html`<option value=${f.name} ?selected=${f.name === this._floor}>${f.name}</option>`)}</select>` : nothing}
         ${this._error ? html`<div class="err">${this._error}</div>` : nothing}
       </div>
     </ha-card>`;

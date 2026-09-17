@@ -10,7 +10,7 @@
  */
 import { LitElement, html, css, nothing } from "./lit.js";
 import { SextantMap, trackerHue } from "./sextant-map.js";
-import { sharedStyles, widgetStyles, fmtAge, toast, ensureHaComponents, uiSwitch, uiSelect, uiButton, callWS, slugLabel } from "./sextant-ui.js";
+import { sharedStyles, widgetStyles, fmtAge, toast, ensureHaComponents, uiSwitch, uiSelect, uiButton, callWS, slugLabel, sortFloors } from "./sextant-ui.js";
 import "./sextant-devices.js";
 import "./sextant-health.js";
 import "./sextant-edit.js";
@@ -124,7 +124,7 @@ class SextantPanel extends LitElement {
           <label class="floor-pick">
             <span class="sr">Floor</span>
             <select @change=${(e) => { this._floor = e.target.value; }}>
-              ${floors.map((f) => html`<option value=${f.name} ?selected=${f.name === this._floor}>${f.name}</option>`)}
+              ${sortFloors(floors).map((f) => html`<option value=${f.name} ?selected=${f.name === this._floor}>${f.name}</option>`)}
             </select>
           </label>` : nothing}
         <span class="stamp" title="last position update">${this._positions.stamp ? fmtAge(Date.now() / 1000 - this._positions.stamp) : "—"}</span>
@@ -336,10 +336,10 @@ class SextantLive extends LitElement {
             <h4>${this._label(sel.ent)}</h4>
             <dl>
               <dt>Zone</dt><dd>${sel.zone} ${sel.zone_locked ? html`<ha-icon icon="mdi:lock" title="stationary lock"></ha-icon>` : nothing}</dd>
-              <dt>Sub-zone</dt><dd>${sel.sub_zone || "—"}</dd>
+              <dt>Sub-zone</dt><dd>${sel.sub_zone || "—"} ${sel.sub_zones ? html`<span class="muted small">${Object.entries(sel.sub_zones).sort((a, b) => b[1] - a[1]).map(([s, p]) => `${s === "unknown" ? "none" : s} ${(p * 100).toFixed(0)}%`).join(" · ")}</span>` : nothing}</dd>
               <dt>Floor</dt><dd>${sel.floor} ${sel.floors ? html`<span class="muted small">${Object.entries(sel.floors).map(([f, p]) => `${f} ${(p * 100).toFixed(0)}%`).join(" · ")}</span>` : nothing}</dd>
               <dt>Confidence</dt><dd>${sel.conf ?? "—"} ${sel.rms_m != null ? html`<span class="muted small">rms ${sel.rms_m} m</span>` : nothing}</dd>
-              <dt>Estimator</dt><dd>${sel.estimator || "geometric"}${sel.fp ? html` <span class="muted small">fp ${sel.fp.conf} · ${(sel.fp.refs || []).map((r) => r[0]).slice(0, 2).join(", ")}</span>` : nothing}</dd>
+              <dt>Estimator</dt><dd>${sel.estimator || "geometric"}${sel.fp ? html` <span class="muted small">fp ${sel.fp.conf}${sel.fp.gain != null ? ` · gain ×${sel.fp.gain}` : ""} · ${(sel.fp.refs || []).map((r) => r[0]).slice(0, 2).join(", ")}</span>` : nothing}</dd>
               <dt>Receivers</dt><dd>${sel.radii?.length ?? 0} in the solve</dd>
               <dt>Speed</dt><dd>${sel.speed != null ? `${sel.speed} m/s` : "—"}</dd>
               <dt>Updated</dt><dd>${fmtAge(Date.now() / 1000 - sel.updated)} ago</dd>

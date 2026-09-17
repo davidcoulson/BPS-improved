@@ -165,3 +165,62 @@ def test_geometric_mode_never_touches_the_reference_db(monkeypatch):
     assert calls == []
     sextant._refresh_fingerprint_references(hass, _square_layout({"position_estimator": "fused"}), 2e9)
     assert calls == [1]
+
+
+# --- Auto-gain: the tracker/reference range ratio and the learned gain -------
+
+def test_match_reports_the_tracker_to_reference_range_ratio():
+    refs = [{"slug": "a", "address": ADDR["a"], "x": 0.0, "y": 0.0,
+             "vector": {ADDR["a"]: fp.SELF_DISTANCE_M, ADDR["b"]: 5.0, ADDR["c"]: 7.0, ADDR["d"]: 5.0}}]
+    # The tracker sits on receiver a and reads every range twice as long as the
+    # reference does: the references are built too short by a factor of two.
+    tracker = {ADDR["a"]: 1.0, ADDR["b"]: 10.0, ADDR["c"]: 14.0, ADDR["d"]: 10.0}
+    m = fp.match(tracker, refs)
+    assert m["shared"] == 3                      # the reference's own self entry is not evidence
+    assert abs(m["ratio"] - 2.0) < 1e-9
+    # Too few receivers in common: no ratio, but still a fix.
+    m2 = fp.match({ADDR["b"]: 10.0, ADDR["c"]: 14.0}, refs)
+    assert m2["ratio"] is None and m2["shared"] == 2 and m2["x"] == 0.0
+
+
+def test_reference_db_learns_the_gain_slowly_and_within_bounds():
+    db = fp.ReferenceDB()
+    assert db.learned_gain == 1.0
+    for _ in range(50):
+        db.learn(2.0, conf=1.0)
+    assert abs(db.learned_gain - 2.0) < 0.01       # 2 ** (0.02 * 50)
+    for _ in range(1000):
+        db.learn(2.0, conf=1.0)
+    assert db.learned_gain == fp.LEARNED_GAIN_MAX  # clamped, never runs away
+    db = fp.ReferenceDB()
+    for bad in (None, 0.0, -1.0, float("inf"), float("nan"), True):
+        assert db.learn(bad) == 1.0
+    assert db.learn(2.0, conf=0.0) == 1.0          # a worthless match moves nothing
+    db.learn(0.5, conf=0.5)
+    assert db.learned_gain < 1.0                    # references too long -> gain falls
+
+
+def test_learned_gain_converges_on_references_that_read_short():
+    """Probes advertising hotter than the trackers: every reference range is
+    half the truth. Closing the loop (references rebuilt with the learned
+    gain each cycle) walks the gain to 2 and holds it there."""
+    layout = {"floor": [{"name": "F", "scale": 100.0, "receivers": [
+        {"entity_id": k, "address": ADDR[k], "cords": {"x": POS[k][0] * 100, "y": POS[k][1] * 100}} for k in ADDR
+    ], "zones": [], "subzones": []}]}
+    truth = {}
+    for a in ADDR:
+        for b in ADDR:
+            if a != b:
+                truth[(ADDR[a], ADDR[b])] = math.dist(POS[a], POS[b])
+    vectors = {}
+    for (tx, rx), d in truth.items():
+        vectors.setdefault(tx, {})[rx] = d * 0.5    # the probes read short
+    tracker = {ADDR["a"]: 0.8, ADDR["b"]: 10.0, ADDR["c"]: 14.1, ADDR["d"]: 10.0}  # on receiver a, true ranges
+    db = fp.ReferenceDB()
+    for _ in range(400):
+        refs = fp.build_references(layout, vectors, gain=db.learned_gain)
+        m = fp.match(tracker, refs["F"])
+        db.learn(m["ratio"], m["conf"])
+    assert abs(db.learned_gain - 2.0) < 0.1
+    refs = fp.build_references(layout, vectors, gain=db.learned_gain)
+    assert abs(fp.match(tracker, refs["F"])["ratio"] - 1.0) < 0.05

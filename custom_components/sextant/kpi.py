@@ -115,3 +115,49 @@ def rows_from_recorder(states):
             continue
         rows.append({"state": state, "last_changed": ts})
     return rows
+
+
+DELTA_METRICS = ("changes_per_hour", "flip_ratio", "median_dwell_s", "short_dwell_ratio", "dead")
+SUMMARY_DELTA_METRICS = ("changes_per_tracker_hour", "flip_ratio", "median_of_median_dwell_s")
+
+
+def _num(value):
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def deltas(current, baseline):
+    """current minus baseline, per entity and per summary group.
+
+    Both are ``{"entities": {eid: metrics}, "summary": {group: metrics}}`` as
+    ``compute_metrics``/``summarise`` produce them. Only entities and metrics
+    present on both sides with numeric values appear; a tracker added since
+    the baseline simply has no delta row.
+    """
+    out = {"entities": {}, "summary": {}}
+    cur_e = (current or {}).get("entities") or {}
+    base_e = (baseline or {}).get("entities") or {}
+    for eid, metrics in cur_e.items():
+        base = base_e.get(eid)
+        if not isinstance(base, dict) or not isinstance(metrics, dict):
+            continue
+        row = {}
+        for key in DELTA_METRICS:
+            a, b = _num(metrics.get(key)), _num(base.get(key))
+            if a is not None and b is not None:
+                row[key] = round(a - b, 4)
+        if row:
+            out["entities"][eid] = row
+    cur_s = (current or {}).get("summary") or {}
+    base_s = (baseline or {}).get("summary") or {}
+    for group, metrics in cur_s.items():
+        base = base_s.get(group)
+        if not isinstance(base, dict) or not isinstance(metrics, dict):
+            continue
+        row = {}
+        for key in SUMMARY_DELTA_METRICS:
+            a, b = _num(metrics.get(key)), _num(base.get(key))
+            if a is not None and b is not None:
+                row[key] = round(a - b, 4)
+        if row:
+            out["summary"][group] = row
+    return out

@@ -734,7 +734,19 @@ per-floor scenarios) instead of on a single loudest reading:
   confidence is therefore scaled by **receiver proximity** — the nearest
   measured distance on any competing floor divided by this floor's own
   nearest — weighted by `floor_proximity_weight` (0.5 by default, 0 for a
-  pure fit-quality election).
+  pure fit-quality election). Since 3.5.0 "nearest" is the **mean of the
+  `floor_proximity_k` nearest receivers** (3 by default): one receiver
+  straight through a wood floor can read nearer than the receivers in the
+  room (a dog on the sun-room floor read a basement receiver at 1.7 m and
+  the nearest ground-floor one at 1.9 m), but the three nearest cannot
+  (3.1 m vs 4.9 m). `floor_proximity_k: 1` is the old behaviour.
+- Each floor can carry an **election bias** (Edit mode, floor card; stored
+  as `bias` on the floor, default 1): its score is multiplied by it every
+  cycle, so 1.2 is a standing 20 % head start. In a house the ground floor
+  is where things usually are, and a phone on the kitchen counter should
+  not tie with the bedroom directly above it. Floors also carry a **level**
+  (storey number: 0 ground, -1 basement, 1 the floor above), which only
+  orders the floor pickers top-down the way the house is stacked.
 - The probabilities are published per tracker (`floors` in
   `/api/sextant/cords`), so "why did it pick this floor" is now inspectable.
 - Bonus: a tracker heard by too few receivers on the nearest floor but by
@@ -866,7 +878,25 @@ The `*_sextant_zone` sensor is now elected the way the floor is:
 answer, and `/api/sextant/cords` carries `zone_raw` (the point's own zone),
 `zone_locked` and `speed` per tracker. Sub-zones get the same dwell
 (`subzone_switch_secs`) and can only be published against their own parent
-zone. Set `zone_hysteresis` to false to publish the raw zone as before.
+zone; their smoothed membership shares are published as `sub_zones` (name
+to share, `unknown` for "in none of them") and shown next to the sub-zone
+in the Live drawer, like the floor probabilities. Set `zone_hysteresis` to
+false to publish the raw zone as before.
+
+## Stability baselines
+
+The Health page's stability KPI (zone changes per tracker-hour, A → B → A
+flip ratio, median dwell, computed from the recorder) can be **saved as a
+named baseline** and every later window compared against it: pick the
+window, type a name, *Save baseline*; then choose it under *Compare with*
+and *Compute* adds a delta column per tracker (green where the window is
+better: fewer changes, fewer flips, a longer dwell) and a summary pill.
+Baselines live in `.storage/sextant_kpi_baselines`, so they survive
+restarts and can be deleted from the same card. The websocket commands are
+`sextant/kpi` (with an optional `baseline`), `sextant/kpi/baselines`,
+`sextant/kpi/baseline/save` and `sextant/kpi/baseline/delete`;
+`tools/flap_kpi.py --baseline` does the same from a shell against a JSON
+export.
 
 ## Nearest-receiver cap
 
@@ -933,7 +963,14 @@ cancels it.
 - Either mode lets a floor that only one or two receivers hear compete on its
   fingerprint, where trilateration alone needs three.
 - `fingerprint_ref_gain` scales the reference ranges for probe beacons that
-  transmit hotter (`< 1`) or cooler (`> 1`) than the trackers do.
+  transmit hotter (`< 1`) or cooler (`> 1`) than the trackers do. With
+  `fingerprint_auto_gain` (on by default) the rest of that factor is
+  **learned from the trackers**: every match also yields the median ratio
+  between the tracker's ranges and its best reference's over the receivers
+  that heard both, and the learned factor moves by `ratio ^ (0.02 x
+  confidence)` per match — a factor-of-two error is walked off in a few
+  minutes of normal traffic and then hovers, clamped to 0.25–4. The gain in
+  force is published per fix as `fp.gain` and shown in the Live drawer.
 
 Needs a Bermuda build with the `scanner_ranging` API (this fork,
 v0.8.7-fork-testing.14 or later); otherwise a warning is logged once and the
@@ -969,7 +1006,8 @@ Keys: `distance_estimator`, `median_window_secs`, `median_min_samples`,
 `zone_switch_secs`, `stationary_speed`, `stationary_secs`,
 `zone_unlock_margin`, `zone_unlock_secs`, `subzone_switch_secs`,
 `floor_switch_secs`, `floor_tenure_bonus`, `floor_tenure_full_secs`,
-`floor_proximity_weight`, `calibration_target` (`sextant` or `bermuda`). An
+`floor_proximity_weight`, `floor_proximity_k`, `fingerprint_auto_gain`,
+`calibration_target` (`sextant` or `bermuda`). An
 unknown key or an out-of-range value is refused with the allowed range;
 `reset: true` restores the defaults. Changes apply on the next cycle.
 

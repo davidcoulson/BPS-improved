@@ -150,3 +150,67 @@ def test_kpi_metrics_match_the_command_line_tool():
     from datetime import datetime, timezone
     objs = [types.SimpleNamespace(state="A", last_changed=datetime(2026, 9, 17, tzinfo=timezone.utc)), {"state": "B", "last_changed": "2026-09-17T00:10:00+00:00"}]
     assert kpi.compute_metrics(kpi.rows_from_recorder(objs), 1.0)["changes"] == 1
+
+
+def test_kpi_deltas_compare_entities_and_summaries_present_on_both_sides():
+    from sextant import kpi
+    current = {"entities": {"sensor.a_sextant_zone": {"changes_per_hour": 4.0, "flip_ratio": 0.2, "median_dwell_s": 300.0, "dead": 0},
+                            "sensor.new_sextant_zone": {"changes_per_hour": 1.0}},
+               "summary": {"sextant_zone": {"changes_per_tracker_hour": 5.0, "flip_ratio": 0.3, "median_of_median_dwell_s": 200.0}}}
+    baseline = {"entities": {"sensor.a_sextant_zone": {"changes_per_hour": 10.0, "flip_ratio": 0.5, "median_dwell_s": 100.0, "dead": 1}},
+                "summary": {"sextant_zone": {"changes_per_tracker_hour": 8.0, "flip_ratio": 0.4, "median_of_median_dwell_s": 150.0}}}
+    d = kpi.deltas(current, baseline)
+    assert d["entities"] == {"sensor.a_sextant_zone": {"changes_per_hour": -6.0, "flip_ratio": -0.3, "median_dwell_s": 200.0, "dead": -1}}
+    assert d["summary"] == {"sextant_zone": {"changes_per_tracker_hour": -3.0, "flip_ratio": -0.1, "median_of_median_dwell_s": 50.0}}
+    assert kpi.deltas({}, None) == {"entities": {}, "summary": {}}
+
+
+def test_kpi_baselines_are_saved_listed_compared_and_deleted(tmp_path, monkeypatch):
+    hass = _hass_with_layout(tmp_path, _layout())
+    windows = iter([
+        {"hours": 12.0, "generated_at": "2026-09-17T05:00:00+00:00",
+         "entities": {"sensor.a_sextant_zone": {"changes_per_hour": 10.0, "flip_ratio": 0.5, "median_dwell_s": 100.0, "dead": 0}},
+         "summary": {"sextant_zone": {"changes_per_tracker_hour": 10.0, "flip_ratio": 0.5, "median_of_median_dwell_s": 100.0}}},
+        {"hours": 12.0, "generated_at": "2026-09-17T17:00:00+00:00",
+         "entities": {"sensor.a_sextant_zone": {"changes_per_hour": 4.0, "flip_ratio": 0.2, "median_dwell_s": 300.0, "dead": 0}},
+         "summary": {"sextant_zone": {"changes_per_tracker_hour": 4.0, "flip_ratio": 0.2, "median_of_median_dwell_s": 300.0}}},
+    ])
+
+    windows = list(windows)
+
+    async def fake_compute(hass, hours):
+        return windows.pop(0) if len(windows) > 1 else windows[0]   # the last window repeats
+    monkeypatch.setattr(ws, "_compute_kpi", fake_compute)
+    conn = _Conn()
+    run(ws.ws_kpi_baseline_save(hass, conn, {"id": 1, "type": "sextant/kpi/baseline/save", "name": "  ", "hours": 12}))
+    assert conn.errors and "name" in conn.errors[-1][2]
+    run(ws.ws_kpi_baseline_save(hass, conn, {"id": 2, "type": "sextant/kpi/baseline/save", "name": "geometric", "hours": 12}))
+    assert conn.results[-1][1] == {"name": "geometric", "saved_at": "2026-09-17T05:00:00+00:00", "trackers": 1}
+    assert (tmp_path / ".storage" / "sextant_kpi_baselines").exists() or run(st.load_kpi_baselines(hass))["geometric"]["hours"] == 12
+    run(ws.ws_kpi_baselines(hass, conn, {"id": 3, "type": "sextant/kpi/baselines"}))
+    rows = conn.results[-1][1]["baselines"]
+    assert [r["name"] for r in rows] == ["geometric"] and rows[0]["trackers"] == 1 and rows[0]["hours"] == 12
+    run(ws.ws_kpi(hass, conn, {"id": 4, "type": "sextant/kpi", "hours": 12, "baseline": "nope"}))
+    assert conn.errors[-1][2].startswith("no KPI baseline")
+    run(ws.ws_kpi(hass, conn, {"id": 5, "type": "sextant/kpi", "hours": 12, "baseline": "geometric"}))
+    result = conn.results[-1][1]
+    assert result["baseline"]["name"] == "geometric"
+    assert result["deltas"]["entities"]["sensor.a_sextant_zone"]["changes_per_hour"] == -6.0
+    assert result["deltas"]["summary"]["sextant_zone"]["median_of_median_dwell_s"] == 200.0
+    run(ws.ws_kpi_baseline_delete(hass, conn, {"id": 6, "type": "sextant/kpi/baseline/delete", "name": "geometric"}))
+    assert conn.results[-1][1] == {"deleted": "geometric"}
+    run(ws.ws_kpi_baseline_delete(hass, conn, {"id": 7, "type": "sextant/kpi/baseline/delete", "name": "geometric"}))
+    assert conn.errors[-1][2].startswith("no KPI baseline")
+    assert run(st.load_kpi_baselines(hass)) == {}
+
+
+def test_scanner_ranging_passes_through_and_explains_a_missing_api(tmp_path, monkeypatch):
+    hass = _hass_with_layout(tmp_path, _layout())
+    conn = _Conn()
+    payload = {"stamp": 1.0, "scanners": {"aa": {"bb": {"distance": 3.2, "age": 1.0}}}}
+    monkeypatch.setattr(ws.bermuda_source, "async_get_scanner_ranging", lambda hass, max_age=None: payload)
+    run(ws.ws_bermuda_scanner_ranging(hass, conn, {"id": 1, "type": "sextant/bermuda/scanner_ranging", "max_age": 30}))
+    assert conn.results[-1][1] == payload
+    monkeypatch.setattr(ws.bermuda_source, "async_get_scanner_ranging", lambda hass, max_age=None: None)
+    run(ws.ws_bermuda_scanner_ranging(hass, conn, {"id": 2, "type": "sextant/bermuda/scanner_ranging"}))
+    assert "scanner_ranging" in conn.errors[-1][2]
