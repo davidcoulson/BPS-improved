@@ -1365,3 +1365,49 @@ def test_subzone_probs_come_from_the_election_state():
     sextant._subzone_state["e"] = {"floor": "F", "zone": "Z", "value": ("Couch", "Z"), "probs": {"Couch": 0.66666, "unknown": 0.33334}, "pending": None}
     assert sextant._subzone_probs("e") == {"Couch": 0.667, "unknown": 0.333}
     sextant._subzone_state.pop("e", None)
+
+
+# --- Near-field anchor -----------------------------------------------------------
+
+def test_anchor_snaps_a_tracker_sitting_on_one_proxy_and_releases_with_hysteresis():
+    layout = {"floor": [{"name": "F", "scale": 100.0, "zones": [], "subzones": [], "receivers": []}], "tuning": {"anchor_secs": 20}}
+    def rx(near, far=2.0, third=2.5):
+        return [
+            {"entity_id": "bedside", "cords": {"x": 100.0, "y": 100.0}, "distance": near},
+            {"entity_id": "wall", "cords": {"x": 400.0, "y": 100.0}, "distance": far},
+            {"entity_id": "door", "cords": {"x": 100.0, "y": 500.0}, "distance": third},
+        ]
+    sextant._anchor_state.pop("w", None)
+    t = 1000.0
+    assert sextant._elect_anchor("w", "F", rx(0.5), layout, now=t) is None          # first sighting: pending
+    assert sextant._elect_anchor("w", "F", rx(0.5), layout, now=t + 10) is None     # dwell not met
+    a = sextant._elect_anchor("w", "F", rx(0.6), layout, now=t + 21)
+    assert a == {"slug": "bedside", "x": 100.0, "y": 100.0}
+    # Reads open to 1.2 m (under the 1.5 m release): still anchored.
+    assert sextant._elect_anchor("w", "F", rx(1.2), layout, now=t + 30)["slug"] == "bedside"
+    # Past the release distance, but only for a moment: held.
+    assert sextant._elect_anchor("w", "F", rx(2.0), layout, now=t + 40)["slug"] == "bedside"
+    assert sextant._elect_anchor("w", "F", rx(1.0), layout, now=t + 45)["slug"] == "bedside"
+    # Past the release distance for the whole dwell: released.
+    assert sextant._elect_anchor("w", "F", rx(2.0), layout, now=t + 50)["slug"] == "bedside"
+    assert sextant._elect_anchor("w", "F", rx(2.0), layout, now=t + 71) is None
+    assert "w" not in sextant._anchor_state
+
+
+def test_anchor_needs_a_clear_nearest_and_can_be_disabled():
+    layout = {"floor": [{"name": "F", "scale": 100.0, "zones": [], "subzones": [], "receivers": []}], "tuning": {"anchor_secs": 0}}
+    two_close = [
+        {"entity_id": "a", "cords": {"x": 0.0, "y": 0.0}, "distance": 0.5},
+        {"entity_id": "b", "cords": {"x": 100.0, "y": 0.0}, "distance": 0.8},   # not twice as far: ambiguous
+    ]
+    sextant._anchor_state.pop("w", None)
+    assert sextant._elect_anchor("w", "F", two_close, layout, now=1.0) is None
+    clear = [{"entity_id": "a", "cords": {"x": 0.0, "y": 0.0}, "distance": 0.5}, {"entity_id": "b", "cords": {"x": 100.0, "y": 0.0}, "distance": 1.6}]
+    assert sextant._elect_anchor("w", "F", clear, layout, now=2.0)["slug"] == "a"      # anchor_secs 0: at once
+    # A second proxy earning the anchor takes over immediately.
+    swapped = [{"entity_id": "a", "cords": {"x": 0.0, "y": 0.0}, "distance": 1.6}, {"entity_id": "b", "cords": {"x": 100.0, "y": 0.0}, "distance": 0.4}]
+    assert sextant._elect_anchor("w", "F", swapped, layout, now=3.0)["slug"] == "b"
+    # A floor change forgets the anchor.
+    assert sextant._elect_anchor("w", "G", swapped, layout, now=4.0)["slug"] == "b" and sextant._anchor_state["w"]["floor"] == "G"
+    off = {"floor": layout["floor"], "tuning": {"anchor_max_m": 0}}
+    assert sextant._elect_anchor("w", "G", swapped, off, now=5.0) is None and "w" not in sextant._anchor_state

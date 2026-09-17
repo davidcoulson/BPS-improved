@@ -13,7 +13,8 @@
  */
 
 export const MAP_FRAME_WIDTH = 2000;
-const RECEIVER_SIZE = 9;
+const RECEIVER_SIZE = 10;
+const RECEIVER_SIZE_EDIT = 13;   // proxies are the things people drag: give them a target
 const VERTEX_SIZE = 6;
 const HIT_SLOP = 8;
 const TRACKER_RADIUS = 12;
@@ -74,7 +75,8 @@ export class SextantMap {
     this.trackers = [];
     this.trails = new Map();
     this.offline = new Set();
-    this.options = { circles: false, trails: true, fingerprint: false, grid: "off", labels: true, subzones: true };
+    this.options = { circles: false, trails: true, fingerprint: false, grid: "off", labels: true, subzones: true, image: true, focus: null };
+    this.locks = { zone: false, subzone: false, receiver: false }; // edit mode: locked kinds cannot be selected or dragged
     this.mode = "view";
     this.tool = "select";
     this.selection = null; // {kind:'receiver'|'zone'|'subzone'|'tracker', index, vertex?}
@@ -123,6 +125,7 @@ export class SextantMap {
   setMode(mode) { this.mode = mode; if (mode !== "edit") { this.draft = null; this.tool = "select"; } this.invalidate(); }
   setTool(tool) { this.tool = tool; this.draft = tool === "select" ? null : this.draft; this.invalidate(); }
   setSelection(sel) { this.selection = sel; this.invalidate(); }
+  setLocks(locks) { Object.assign(this.locks, locks || {}); if (this.selection && this.locks[this.selection.kind]) this.selection = null; this.invalidate(); }
   finishDraft() {
     const pts = this.draft;
     this.draft = null;
@@ -209,6 +212,7 @@ export class SextantMap {
       if (this.host.onSelect) this.host.onSelect(hit);
       const m = this.toMap(p);
       this._drag = { kind: "item", hit, start: m, moved: false, origin: this._itemPoints(hit) };
+      if (this.host.onDragStart) this.host.onDragStart(hit);
       this.invalidate();
       return;
     }
@@ -324,9 +328,13 @@ export class SextantMap {
         if (Math.hypot(t.cords[0] - m.x, t.cords[1] - m.y) <= (TRACKER_RADIUS + 4) / this.view.k) return { kind: "tracker", index: i, ent: t.ent };
       }
     }
-    for (let i = (f.receivers || []).length - 1; i >= 0; i--) {
-      const r = f.receivers[i];
-      if (r.cords && Math.abs(r.cords.x - m.x) <= slop + RECEIVER_SIZE / this.view.k && Math.abs(r.cords.y - m.y) <= slop + RECEIVER_SIZE / this.view.k) return { kind: "receiver", index: i, id: r.entity_id };
+    const edit = this.mode === "edit";
+    const rs = ((edit ? RECEIVER_SIZE_EDIT : RECEIVER_SIZE) + (edit ? 6 : 0)) / this.view.k;
+    if (!(edit && this.locks.receiver)) {
+      for (let i = (f.receivers || []).length - 1; i >= 0; i--) {
+        const r = f.receivers[i];
+        if (r.cords && Math.abs(r.cords.x - m.x) <= slop + rs && Math.abs(r.cords.y - m.y) <= slop + rs) return { kind: "receiver", index: i, id: r.entity_id };
+      }
     }
     if (this.mode === "edit") {
       // Vertices and edge midpoints of the selected polygon first.
@@ -345,8 +353,9 @@ export class SextantMap {
         }
       }
     }
-    const subs = this.options.subzones ? f.subzones || [] : [];
+    const subs = this.options.subzones && !(edit && this.locks.subzone) ? f.subzones || [] : [];
     for (let i = subs.length - 1; i >= 0; i--) if ((subs[i].cords || []).length >= 3 && pointInPolygon(m, subs[i].cords)) return { kind: "subzone", index: i, id: subs[i].entity_id };
+    if (edit && this.locks.zone) return null;
     for (let i = (f.zones || []).length - 1; i >= 0; i--) if ((f.zones[i].cords || []).length >= 3 && pointInPolygon(m, f.zones[i].cords)) return { kind: "zone", index: i, id: f.zones[i].entity_id };
     return null;
   }
@@ -373,7 +382,7 @@ export class SextantMap {
     const size = this._mapSize();
     ctx.fillStyle = this._css("--sextant-map-bg", "#ffffff");
     ctx.fillRect(0, 0, size.w, size.h);
-    if (this.image) ctx.drawImage(this.image, 0, 0, size.w, size.h);
+    if (this.image && this.options.image !== false) ctx.drawImage(this.image, 0, 0, size.w, size.h);
     this._drawGrid(ctx, size);
     this._drawPolygons(ctx, f.zones || [], "zone");
     if (this.options.subzones) this._drawPolygons(ctx, f.subzones || [], "subzone");
@@ -419,8 +428,8 @@ export class SextantMap {
         ctx.fillStyle = (item.color || "hsl(175,70%,45%)").replace(/\)$/, ", 0.22)").replace("hsl(", "hsla(");
         ctx.strokeStyle = item.color || "hsl(175,70%,45%)";
       } else if (noGo) {
-        ctx.fillStyle = "rgba(200,40,40,0.16)";
-        ctx.strokeStyle = "rgba(200,40,40,0.9)";
+        ctx.fillStyle = "rgba(110,110,110,0.30)";
+        ctx.strokeStyle = "rgba(70,70,70,0.9)";
       } else {
         ctx.fillStyle = `hsla(${hue}, 60%, 55%, ${selected || hovered ? 0.28 : 0.16})`;
         ctx.strokeStyle = `hsla(${hue}, 60%, 40%, 0.9)`;
@@ -453,8 +462,8 @@ export class SextantMap {
     ctx.clip();
     const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
     const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
-    ctx.strokeStyle = "rgba(200,40,40,0.35)";
-    ctx.lineWidth = 1 / this.view.k;
+    ctx.strokeStyle = "rgba(60,60,60,0.45)";
+    ctx.lineWidth = 1.5 / this.view.k;
     ctx.beginPath();
     const step = 14 / this.view.k;
     for (let x = minX - (maxY - minY); x < maxX; x += step) { ctx.moveTo(x, maxY); ctx.lineTo(x + (maxY - minY), minY); }
@@ -483,24 +492,28 @@ export class SextantMap {
   }
 
   _drawReceivers(ctx, receivers) {
-    const k = this.view.k, s = RECEIVER_SIZE / k;
+    const k = this.view.k, edit = this.mode === "edit";
+    const base = edit ? RECEIVER_SIZE_EDIT : RECEIVER_SIZE;
     receivers.forEach((r, index) => {
       if (!r.cords) return;
       const selected = this.selection && this.selection.kind === "receiver" && this.selection.index === index;
       const hovered = this.hover && this.hover.kind === "receiver" && this.hover.index === index;
       const offline = this.offline.has(r.entity_id);
       const unmatched = r.unmatched;
+      const locked = edit && this.locks.receiver;
+      const s = (hovered || selected ? base * 1.4 : base) / k;
       ctx.save();
       ctx.translate(r.cords.x, r.cords.y);
       ctx.rotate(Math.PI / 4);
+      ctx.globalAlpha = locked ? 0.55 : 1;
       ctx.fillStyle = offline ? "#d9534f" : unmatched ? "#e0a54a" : "#1f7a8c";
       ctx.strokeStyle = selected ? "#ffd166" : "#ffffff";
       ctx.lineWidth = (selected ? 3 : 1.5) / k;
       ctx.fillRect(-s / 2, -s / 2, s, s);
       ctx.strokeRect(-s / 2, -s / 2, s, s);
       ctx.restore();
-      if (this.options.labels && (this.mode === "edit" || hovered || selected || this.options.receiverLabels)) {
-        this._label(ctx, r.entity_id, r.cords.x, r.cords.y + (RECEIVER_SIZE + 9) / k, 10, 0.8);
+      if (this.options.labels && (edit || hovered || selected || this.options.receiverLabels)) {
+        this._label(ctx, r.label || r.entity_id, r.cords.x, r.cords.y + (base + 9) / k, 10, 0.8);
       }
     });
   }
@@ -518,10 +531,14 @@ export class SextantMap {
 
   _drawTrackers(ctx) {
     const k = this.view.k;
+    const focus = this.options.focus || null;
     for (const t of this.trackers) {
       if (!t.cords) continue;
       const hue = t.hue ?? trackerHue(t.ent);
       const color = `hsl(${hue}, 70%, 45%)`;
+      const focused = focus && t.ent === focus;
+      ctx.save();
+      if (focus && !focused) ctx.globalAlpha = 0.28;   // everything but the one you clicked fades back
       const trail = this.options.trails ? this.trails.get(t.ent) : null;
       if (trail && trail.length > 1) {
         ctx.beginPath();
@@ -544,8 +561,13 @@ export class SextantMap {
         ctx.beginPath(); ctx.arc(t.raw[0], t.raw[1], 4 / k, 0, Math.PI * 2);
         ctx.fillStyle = `hsla(${hue}, 70%, 45%, 0.6)`; ctx.fill();
       }
-      const selected = this.selection && this.selection.kind === "tracker" && this.selection.ent === t.ent;
-      const r = TRACKER_RADIUS / k;
+      const selected = focused || (this.selection && this.selection.kind === "tracker" && this.selection.ent === t.ent);
+      const r = (focused ? TRACKER_RADIUS * 1.6 : TRACKER_RADIUS) / k;
+      if (focused) {
+        // A halo that does not scale with zoom, so the focused tracker is findable at any zoom level.
+        ctx.beginPath(); ctx.arc(t.cords[0], t.cords[1], r * 2.6, 0, Math.PI * 2);
+        ctx.strokeStyle = `hsla(${hue}, 80%, 40%, 0.9)`; ctx.lineWidth = 3 / k; ctx.setLineDash([8 / k, 5 / k]); ctx.stroke(); ctx.setLineDash([]);
+      }
       // Confidence ring: the published conf in (0,1] as the ring's alpha.
       ctx.beginPath(); ctx.arc(t.cords[0], t.cords[1], r * 1.9, 0, Math.PI * 2);
       ctx.fillStyle = `hsla(${hue}, 70%, 45%, ${0.08 + 0.22 * (t.conf ?? 0.5)})`; ctx.fill();
@@ -560,7 +582,8 @@ export class SextantMap {
         ctx.textAlign = "center"; ctx.textBaseline = "middle";
         ctx.fillText((t.label || t.ent).slice(0, 2).toUpperCase(), t.cords[0], t.cords[1]);
       }
-      if (this.options.labels) this._label(ctx, t.label || t.ent, t.cords[0], t.cords[1] + r + 9 / k, 11, 0.85);
+      if (this.options.labels || focused) this._label(ctx, t.label || t.ent, t.cords[0], t.cords[1] + r + 9 / k, focused ? 13 : 11, 0.9);
+      ctx.restore();
     }
   }
 }

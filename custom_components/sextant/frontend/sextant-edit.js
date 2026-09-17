@@ -9,18 +9,26 @@
  */
 import { LitElement, html, css, nothing } from "./lit.js";
 import { SextantMap, polygonCentroid } from "./sextant-map.js";
-import { sharedStyles, widgetStyles, toast, callWS, confirmDialog, fmtNum, uiField, uiSelect, uiSwitch, uiButton } from "./sextant-ui.js";
+import { sharedStyles, widgetStyles, toast, callWS, confirmDialog, fmtNum, uiField, uiSelect, uiSwitch, uiButton, proxyName, lenUnit, toDisplayLen, fromDisplayLen, fmtScale, isImperial } from "./sextant-ui.js";
 import { mapUrlFor } from "./sextant-panel.js";
 
 // [id, label under the icon, icon, tooltip]
 const TOOLS = [
-  ["select", "Select", "mdi:cursor-default-outline", "Select and drag receivers, zones and vertices"],
-  ["receiver", "Receiver", "mdi:access-point-plus", "Place a receiver: pick a scanner, then click the map"],
-  ["zone", "Zone", "mdi:vector-polygon", "Draw a room: click corners, close on the first one"],
+  ["select", "Select", "mdi:cursor-default-outline", "Select and drag proxies, rooms and vertices"],
+  ["receiver", "Proxy", "mdi:access-point-plus", "Place a proxy: pick one Bermuda knows, then click the map"],
+  ["zone", "Room", "mdi:vector-polygon", "Draw a room: click corners, close on the first one"],
   ["subzone", "Sub-zone", "mdi:vector-rectangle", "Draw a sub-zone (a couch, a desk) inside a room"],
   ["nogo", "No-go", "mdi:cancel", "Draw an area trackers can never be in (a void, a wall)"],
   ["measure", "Scale", "mdi:ruler", "Set the map scale from a known distance"],
 ];
+// Layers that can be locked against selection and dragging, so a finished
+// room layout is not nudged while proxies are being moved (and vice versa).
+const LOCKS = [
+  ["zone", "Rooms", "mdi:floor-plan"],
+  ["subzone", "Sub-zones", "mdi:vector-rectangle"],
+  ["receiver", "Proxies", "mdi:access-point"],
+];
+const UNDO_DEPTH = 50;
 
 function uid(prefix) { return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`; }
 
@@ -38,6 +46,8 @@ class SextantEdit extends LitElement {
     _measure: { state: true },
     _proposal: { state: true },
     _busy: { state: true },
+    _locks: { state: true },
+    _undo: { state: true },
   };
 
   constructor() {
@@ -51,11 +61,39 @@ class SextantEdit extends LitElement {
     this._proposal = null;
     this._busy = false;
     this._tick = 0;
+    // Rooms start locked: once a floor plan is drawn it rarely changes, and a
+    // slip while moving a proxy must not move a wall.
+    this._locks = { zone: true, subzone: false, receiver: false };
+    this._undo = [];
+  }
+
+  // --- undo ---------------------------------------------------------------------
+
+  _snapshot() {
+    if (!this._draft) return;
+    this._undo = [...this._undo.slice(-(UNDO_DEPTH - 1)), JSON.stringify(this._draft)];
+  }
+
+  _undoLast() {
+    if (!this._undo.length) return;
+    const prev = this._undo[this._undo.length - 1];
+    this._undo = this._undo.slice(0, -1);
+    this._draft = JSON.parse(prev);
+    this._dirty = JSON.stringify(this._draft) !== JSON.stringify(this.data?.layout || { floor: [] });
+    this._proposal = null;
+    this._pushFloor();
+  }
+
+  _setLock(kind, locked) {
+    this._locks = { ...this._locks, [kind]: locked };
+    this._map?.setLocks(this._locks);
+    if (this._selection?.kind === kind && locked) this._selection = null;
   }
 
   firstUpdated() {
     this._map = new SextantMap(this.renderRoot.querySelector("canvas"), {
       onSelect: (hit) => { this._selection = hit; },
+      onDragStart: () => this._snapshot(),
       onChange: () => { this._dirty = true; this._tick++; this.requestUpdate(); },
       onDrawPoint: () => this.requestUpdate(),
       onDrawClose: () => this._closeDraft(),
@@ -63,6 +101,7 @@ class SextantEdit extends LitElement {
     });
     this._map.setMode("edit");
     this._map.setOptions({ labels: true, subzones: true, receiverLabels: true, trails: false });
+    this._map.setLocks(this._locks);
     this._syncDraft(true);
   }
 
@@ -80,6 +119,7 @@ class SextantEdit extends LitElement {
       this._draft = JSON.parse(JSON.stringify(this.data?.layout || { floor: [] }));
       this._dirty = false;
       this._selection = null;
+      this._undo = [];
     }
     this._pushFloor();
   }
@@ -92,7 +132,10 @@ class SextantEdit extends LitElement {
       // Mark placements Bermuda does not know, for the orange marker.
       const known = new Set(Object.keys(this.data?.scanners || {}));
       const knownSlugs = new Set(Object.values(this.data?.scanners || {}).map((s) => s.slug));
-      for (const r of f.receivers || []) r.unmatched = !((r.address && known.has(r.address)) || knownSlugs.has(r.entity_id));
+      for (const r of f.receivers || []) {
+        r.unmatched = !((r.address && known.has(r.address)) || knownSlugs.has(r.entity_id));
+        r.label = proxyName(this.data, r.address || r.entity_id);   // the map shows the friendly name, not the slug
+      }
     }
     this._map?.setFloor(f, mapUrlFor(this.floor, this.data?.maps));
     this._map?.setOffline(this.data?.offline_receivers || []);
@@ -126,6 +169,7 @@ class SextantEdit extends LitElement {
     const p = this._mapPoint(e);
     const info = this.data?.scanners?.[this._placing];
     const slug = info?.slug || this._placing.replace(/:/g, "_");
+    this._snapshot();
     f.receivers = f.receivers || [];
     f.receivers.push({ entity_id: slug, cords: { x: Math.round(p.x * 1000) / 1000, y: Math.round(p.y * 1000) / 1000 }, type: "receiver", address: this._placing });
     this._placing = null;
@@ -142,26 +186,30 @@ class SextantEdit extends LitElement {
     else this._measure = { ...this._measure, b: p };
   }
 
-  _applyMeasure(metres) {
+  _applyMeasure(shown) {
+    const metres = fromDisplayLen(shown, this.hass);
     const m = this._measure, f = this._floorObj();
     if (!m?.b || !f || !(metres > 0)) return;
+    this._snapshot();
     const px = Math.hypot(m.b.x - m.a.x, m.b.y - m.a.y);
     f.scale = Math.round((px / metres) * 10000) / 10000;
     this._dirty = true;
     this._measure = null;
     this._tool = "select";
-    toast(this, `Scale set to ${fmtNum(f.scale, 2)} px/m`);
+    toast(this, `Scale set to ${fmtScale(f.scale, this.hass)}`);
   }
 
   _closeDraft() {
     const pts = this._map.finishDraft();
     const f = this._floorObj();
     if (!pts || !f) return;
+    this._snapshot();
     const tool = this._tool;
     if (tool === "zone" || tool === "nogo") {
       f.zones = f.zones || [];
-      const name = tool === "nogo" ? `No-go ${f.zones.filter((z) => z.no_go).length + 1}` : `Zone ${f.zones.length + 1}`;
+      const name = tool === "nogo" ? `No-go ${f.zones.filter((z) => z.no_go).length + 1}` : `Room ${f.zones.length + 1}`;
       f.zones.push({ zone_id: uid("zone"), entity_id: name, poly: true, cords: pts, type: "zone", ...(tool === "nogo" ? { no_go: true } : {}) });
+      if (this._locks.zone) this._setLock("zone", false);   // you just drew one: you are editing rooms
       this._selection = { kind: "zone", index: f.zones.length - 1 };
     } else if (tool === "subzone") {
       f.subzones = f.subzones || [];
@@ -192,7 +240,7 @@ class SextantEdit extends LitElement {
     if (hit.vertex != null) {
       const f = this._floorObj();
       const list = hit.kind === "zone" ? f.zones : f.subzones;
-      if (list[hit.index].cords.length > 3) { list[hit.index].cords.splice(hit.vertex, 1); this._dirty = true; this._map.invalidate(); }
+      if (list[hit.index].cords.length > 3) { this._snapshot(); list[hit.index].cords.splice(hit.vertex, 1); this._dirty = true; this._map.invalidate(); }
     }
   }
 
@@ -201,7 +249,8 @@ class SextantEdit extends LitElement {
     if (!sel || !f) return;
     const list = sel.kind === "receiver" ? f.receivers : sel.kind === "zone" ? f.zones : f.subzones;
     const item = list[sel.index];
-    if (!confirmDialog(`Delete ${sel.kind} "${item.entity_id}"?`)) return;
+    if (!confirmDialog(`Delete ${sel.kind === "receiver" ? "proxy" : sel.kind === "zone" ? "room" : "sub-zone"} "${item.entity_id}"?`)) return;
+    this._snapshot();
     list.splice(sel.index, 1);
     if (sel.kind === "zone") for (const s of f.subzones || []) if (s.parent === item.zone_id) s.parent = null;
     this._selection = null;
@@ -215,6 +264,7 @@ class SextantEdit extends LitElement {
     if (!sel || !f) return;
     const list = sel.kind === "receiver" ? f.receivers : sel.kind === "zone" ? f.zones : f.subzones;
     const item = list[sel.index];
+    this._snapshot();
     if (field === "height" || field === "correction") item[field] = value === "" || value == null ? undefined : Number(value);
     else if (field === "no_go") item.no_go = !!value;
     else item[field] = value;
@@ -255,7 +305,7 @@ class SextantEdit extends LitElement {
 
   async _removeFloor() {
     const f = this._floorObj();
-    if (!f || !confirmDialog(`Delete floor "${f.name}" with its ${(f.receivers || []).length} receivers and ${(f.zones || []).length} zones?`)) return;
+    if (!f || !confirmDialog(`Delete floor "${f.name}" with its ${(f.receivers || []).length} proxies and ${(f.zones || []).length} rooms?`)) return;
     const maps = this.data?.maps || [];
     const url = mapUrlFor(f.name, maps);
     const mapFile = url ? decodeURIComponent(url.split("/").pop()) : null;
@@ -266,7 +316,7 @@ class SextantEdit extends LitElement {
 
   async _save(removeMap = null) {
     const draft = this._draft;
-    for (const f of draft.floor) for (const r of f.receivers || []) delete r.unmatched;
+    for (const f of draft.floor) for (const r of f.receivers || []) { delete r.unmatched; delete r.label; }
     this._busy = true;
     const r = await callWS(this, this.hass, { type: "sextant/layout/save", layout: draft, ...(removeMap ? { remove_map: removeMap } : {}) });
     this._busy = false;
@@ -290,6 +340,7 @@ class SextantEdit extends LitElement {
   _acceptProposal() {
     const f = this._floorObj(), p = this._proposal;
     if (!f || !p) return;
+    this._snapshot();
     if (p.zones) f.zones = p.zones;
     if (p.subzones) f.subzones = p.subzones;
     this._proposal = null;
@@ -312,31 +363,35 @@ class SextantEdit extends LitElement {
           <span class="sep"></span>
           <button class="tool" title="Fit the whole map into the view" @click=${() => this._map.fit()}><ha-icon icon="mdi:fit-to-screen"></ha-icon><span>Fit</span></button>
           <span class="sep"></span>
+          ${LOCKS.map(([kind, label, icon]) => html`<button class="tool lock ${this._locks[kind] ? "locked" : ""}" title=${this._locks[kind] ? `${label} are locked: click to allow selecting and moving them` : `${label} can be moved: click to lock them`} @click=${() => this._setLock(kind, !this._locks[kind])}>
+            <span class="lockicons"><ha-icon icon=${icon}></ha-icon><ha-icon class="badge" icon=${this._locks[kind] ? "mdi:lock" : "mdi:lock-open-variant-outline"}></ha-icon></span><span>${label}</span></button>`)}
+          <span class="sep"></span>
+          <button class="tool" title="Undo the last change (${this._undo.length} step${this._undo.length === 1 ? "" : "s"})" ?disabled=${!this._undo.length} @click=${() => this._undoLast()}><ha-icon icon="mdi:undo"></ha-icon><span>Undo</span></button>
           ${uiButton({ label: "Save", kind: "primary", disabled: !this._dirty || this._busy, onClick: () => this._save(), title: "Write the floor plan to the store" })}
           ${uiButton({ label: "Discard", kind: "text", disabled: !this._dirty, onClick: () => this._discard() })}
         </div>
         ${this._tool === "receiver" ? html`<div class="hint">
           <select @change=${(e) => { this._placing = e.target.value || null; }}>
-            <option value="">Pick a scanner, then click the map…</option>
+            <option value="">Pick a proxy, then click the map…</option>
             ${scanners.map(([addr, s]) => html`<option value=${addr} ?disabled=${placedAddr.has(addr)}>${s.name || s.slug}${placedAddr.has(addr) ? " (placed)" : ""}${s.area ? ` · ${s.area}` : ""}</option>`)}
           </select></div>` : nothing}
         ${this._tool === "measure" ? html`<div class="hint">
-          ${this._measure?.b ? html`${uiField({ label: "Distance between the two points (m)", type: "number", step: 0.01, min: 0.1, onChange: (v) => { this._metres = Number(v); }, style: "width: 240px" })} ${uiButton({ label: "Set scale", kind: "primary", onClick: () => this._applyMeasure(this._metres) })}`
-            : this._measure ? "Click the second point." : `Click two points a known distance apart. Current scale: ${f?.scale ? fmtNum(f.scale, 2) + " px/m" : "unset"}`}
+          ${this._measure?.b ? html`${uiField({ label: `Distance between the two points (${lenUnit(this.hass)})`, type: "number", step: 0.01, min: 0.1, onChange: (v) => { this._metres = v; }, style: "width: 240px" })} ${uiButton({ label: "Set scale", kind: "primary", onClick: () => this._applyMeasure(this._metres) })}`
+            : this._measure ? "Click the second point." : `Click two points a known distance apart. Current scale: ${fmtScale(f?.scale, this.hass)}`}
         </div>` : nothing}
         ${["zone", "subzone", "nogo"].includes(this._tool) ? html`<div class="hint">Click to add corners; click the first corner or double-click to close. ${uiButton({ label: "Cancel", kind: "text", onClick: () => { this._map.cancelDraft(); } })}</div>` : nothing}
       </div>
       <aside class="side">
         ${f ? html`
           <div class="card">
-            <h4>${f.name} <span class="muted small">${f.scale ? `${fmtNum(f.scale, 1)} px/m` : "no scale"}</span></h4>
-            <div class="row small muted">${(f.receivers || []).length} receivers · ${(f.zones || []).filter((z) => !z.no_go).length} zones · ${(f.zones || []).filter((z) => z.no_go).length} no-go · ${(f.subzones || []).length} sub-zones</div>
+            <h4>${f.name} <span class="muted small">${fmtScale(f.scale, this.hass)}</span></h4>
+            <div class="row small muted">${(f.receivers || []).length} proxies · ${(f.zones || []).filter((z) => !z.no_go).length} rooms · ${(f.zones || []).filter((z) => z.no_go).length} no-go · ${(f.subzones || []).length} sub-zones</div>
             <div class="row small muted">Level: storey number, 0 = ground, -1 = basement; orders the floor picker top-down. Bias: election prior, 1.2 = a 20 % head start every cycle.</div>
             <div class="row">
-              ${uiField({ label: "Scale (px per m)", type: "number", step: 0.01, value: f.scale ?? "", onChange: (v) => { f.scale = Number(v) || null; this._dirty = true; this.requestUpdate(); }, style: "width: 150px" })}
+              ${uiField({ label: "Scale (px per m)", type: "number", step: 0.01, value: f.scale ?? "", onChange: (v) => { this._snapshot(); f.scale = Number(v) || null; this._dirty = true; this.requestUpdate(); }, style: "width: 150px" })}
               ${uiField({ label: "Level", type: "number", step: 1, value: f.level ?? "", placeholder: "0", onChange: (v) => { if (v === "" || v == null) delete f.level; else f.level = Math.round(Number(v)); this._dirty = true; this.requestUpdate(); }, style: "width: 90px" })}
               ${uiField({ label: "Election bias", type: "number", step: 0.05, min: 0.25, max: 4, value: f.bias ?? "", placeholder: "1", onChange: (v) => { if (v === "" || v == null) delete f.bias; else f.bias = Number(v); this._dirty = true; this.requestUpdate(); }, style: "width: 120px" })}
-              ${uiButton({ label: "Adjust zones", disabled: this._busy, onClick: () => this._adjust("zones"), title: "Square up rooms and snap shared walls" })}
+              ${uiButton({ label: "Adjust rooms", disabled: this._busy, onClick: () => this._adjust("zones"), title: "Square up rooms and snap shared walls" })}
               ${uiButton({ label: "Adjust sub-zones", disabled: this._busy, onClick: () => this._adjust("subzones") })}
               ${uiButton({ label: "Delete floor", kind: "danger", disabled: this._busy, onClick: () => this._removeFloor() })}
             </div>
@@ -346,7 +401,7 @@ class SextantEdit extends LitElement {
           <ul class="plain small">${(this._proposal.report || this._proposal.changes || []).slice(0, 12).map((c) => html`<li>${typeof c === "string" ? c : `${c.name || c.zone || ""}: ${c.change || c.note || JSON.stringify(c)}`}</li>`)}</ul>
           <div class="row">${uiButton({ label: "Accept", kind: "primary", onClick: () => this._acceptProposal() })}${uiButton({ label: "Reject", kind: "text", onClick: () => { this._proposal = null; } })}</div>
         </div>` : nothing}
-        ${sel ? this._renderSelection(sel, f) : html`<div class="card muted small">Select a receiver, zone or sub-zone on the map to edit it. Drag to move; drag a vertex or an edge midpoint; right-click a vertex to remove it.</div>`}
+        ${sel ? this._renderSelection(sel, f) : html`<div class="card muted small">Select a proxy, room or sub-zone on the map to edit it. Drag to move; drag a vertex or an edge midpoint; right-click a vertex to remove it. Locked layers (the padlocks in the toolbar) cannot be selected.</div>`}
         <div class="card">
           <h4>Add a floor</h4>
           <form @submit=${(e) => { e.preventDefault(); const fd = new FormData(e.target); this._addFloor(fd.get("name"), fd.get("file")); }}>
@@ -354,7 +409,7 @@ class SextantEdit extends LitElement {
             <div class="row">${uiButton({ label: "Add floor", kind: "primary", disabled: this._busy, onClick: (e) => e.target.closest("form").requestSubmit() })}<span class="muted small">The image is stored as the floor's map.</span></div>
           </form>
         </div>
-        ${(this.data?.scanner_diagnostics?.unplaced_scanners || []).length ? html`<div class="card small"><h4>Reporting, not placed</h4>${this.data.scanner_diagnostics.unplaced_scanners.join(", ")}</div>` : nothing}
+        ${(this.data?.scanner_diagnostics?.unplaced_scanners || []).length ? html`<div class="card small"><h4>Proxies reporting, not placed</h4>${this.data.scanner_diagnostics.unplaced_scanners.map((s) => proxyName(this.data, s)).join(", ")}</div>` : nothing}
       </aside>
     `;
   }
@@ -365,23 +420,23 @@ class SextantEdit extends LitElement {
     if (!item) return nothing;
     const zones = (f.zones || []).filter((z) => !z.no_go);
     return html`<div class="card">
-      <h4>${sel.kind === "receiver" ? "Receiver" : sel.kind === "zone" ? (item.no_go ? "No-go area" : "Zone") : "Sub-zone"}</h4>
+      <h4>${sel.kind === "receiver" ? "Proxy" : sel.kind === "zone" ? (item.no_go ? "No-go area" : "Room") : "Sub-zone"}</h4>
       <div class="row">
         ${uiField({ label: "Name", value: item.entity_id || "", onChange: (v) => this._edit("entity_id", v), style: "flex: 1" })}
       </div>
       ${sel.kind === "receiver" ? html`
         <div class="row">
-          ${uiSelect({ label: "Scanner", value: item.address || "", options: [{ value: "", label: "none" }, ...Object.entries(this.data?.scanners || {}).map(([addr, s]) => ({ value: addr, label: `${s.name || s.slug} · ${addr}` }))], onChange: (v) => this._edit("address", v || undefined), style: "flex: 1" })}
+          ${uiSelect({ label: "Bermuda proxy", value: item.address || "", options: [{ value: "", label: "none" }, ...Object.entries(this.data?.scanners || {}).map(([addr, s]) => ({ value: addr, label: `${s.name || s.slug} · ${addr}` }))], onChange: (v) => this._edit("address", v || undefined), style: "flex: 1" })}
         </div>
         <div class="row">
-          ${uiField({ label: "Mount height (m)", type: "number", step: 0.05, min: 0, max: 10, value: item.height ?? "", onChange: (v) => this._edit("height", v), style: "width: 150px" })}
+          ${uiField({ label: `Mount height (${lenUnit(this.hass)})`, type: "number", step: 0.05, min: 0, max: isImperial(this.hass) ? 33 : 10, value: toDisplayLen(item.height, this.hass), onChange: (v) => this._edit("height", v === "" ? "" : fromDisplayLen(v, this.hass)), style: "width: 150px" })}
           ${uiField({ label: "Correction ×", type: "number", step: 0.001, min: 0.5, max: 2, value: item.correction ?? "", onChange: (v) => this._edit("correction", v), style: "width: 150px" })}
         </div>
-        <div class="muted small">${item.unmatched ? "Bermuda does not report this scanner right now." : "Linked."} x ${fmtNum(item.cords?.x, 0)}, y ${fmtNum(item.cords?.y, 0)}</div>` : nothing}
+        <div class="muted small">${item.unmatched ? "Bermuda does not report this proxy right now." : "Linked."} x ${fmtNum(item.cords?.x, 0)}, y ${fmtNum(item.cords?.y, 0)}</div>` : nothing}
       ${sel.kind === "zone" ? uiSwitch({ label: "No-go area (trackers can never be here)", checked: !!item.no_go, onChange: (v) => this._edit("no_go", v) }) : nothing}
       ${sel.kind === "subzone" ? html`
         <div class="row">
-          ${uiSelect({ label: "Parent zone", value: item.parent || "", options: [{ value: "", label: "none" }, ...zones.map((z) => ({ value: z.zone_id, label: z.entity_id }))], onChange: (v) => this._edit("parent", v || null), style: "flex: 1" })}
+          ${uiSelect({ label: "Parent room", value: item.parent || "", options: [{ value: "", label: "none" }, ...zones.map((z) => ({ value: z.zone_id, label: z.entity_id }))], onChange: (v) => this._edit("parent", v || null), style: "flex: 1" })}
           <label class="field">Colour<input type="color" .value=${this._hex(item.color)} @change=${(e) => this._edit("color", e.target.value)}></label>
         </div>` : nothing}
       <div class="row"><span class="muted small">${(item.cords?.length ?? 1)} point(s)</span><span class="grow"></span>${uiButton({ label: "Delete", kind: "danger", onClick: () => this._deleteSelection() })}</div>
@@ -406,6 +461,10 @@ class SextantEdit extends LitElement {
     .toolbar button.tool { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 62px; padding: 4px 6px; font-size: 11px; line-height: 1.1; }
     .toolbar button.tool ha-icon { --mdc-icon-size: 22px; }
     .toolbar button.active { background: var(--primary-color); color: var(--text-primary-color, #fff); border-color: var(--primary-color); }
+    .toolbar button.lock.locked { background: var(--secondary-background-color); color: var(--secondary-text-color); }
+    .lockicons { position: relative; display: inline-block; }
+    .lockicons .badge { position: absolute; right: -8px; bottom: -4px; --mdc-icon-size: 13px; background: var(--card-background-color); border-radius: 50%; }
+    .toolbar button.lock.locked .lockicons .badge { color: var(--error-color, #b00020); }
     .sep { width: 1px; height: 24px; background: var(--divider-color); margin: 0 4px; }
     .hint { position: absolute; left: 10px; bottom: 10px; right: 10px; padding: 8px 10px; border-radius: 8px; background: var(--card-background-color); box-shadow: var(--ha-card-box-shadow, 0 1px 4px rgba(0,0,0,0.2)); font-size: 13px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
     .hint select { max-width: 100%; }

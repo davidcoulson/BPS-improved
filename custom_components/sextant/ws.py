@@ -65,6 +65,31 @@ def _tuning_spec_json(spec):
     return out
 
 
+def _tracker_names(hass, entities) -> dict:
+    """{slug: display name} for the tracked entities.
+
+    Bermuda's device name first ("Fry", "David's Phone"), then whatever the
+    user renamed the device to in Home Assistant, which wins.
+    """
+    names = {}
+    for info in (bermuda_source.async_get_tracked_devices(hass) or {}).values():
+        slug, name = info.get("slug"), info.get("name")
+        if slug and name:
+            names[slug] = name
+    try:
+        from homeassistant.helpers import device_registry as dr, entity_registry as er  # noqa: PLC0415
+
+        ent_reg, dev_reg = er.async_get(hass), dr.async_get(hass)
+        for ent in entities:
+            entry = ent_reg.async_get(f"sensor.{ent}_sextant_zone")
+            device = dev_reg.async_get(entry.device_id) if entry and entry.device_id else None
+            if device is not None and (device.name_by_user or device.name):
+                names[ent] = device.name_by_user or device.name
+    except Exception:  # noqa: BLE001 - no registries (tests), Bermuda's names stand
+        pass
+    return names
+
+
 # --- layout ----------------------------------------------------------------------
 
 
@@ -99,6 +124,9 @@ async def ws_layout_get(hass, connection, msg):
         "maps": sorted(maps),
         "icons": icons,
         "entities": sorted(tracked),
+        # Display names: what Bermuda calls the device, overridden by the name
+        # the user gave the device in Home Assistant (device registry).
+        "names": _safe(lambda: _tracker_names(hass, tracked), {}),
         "scanners": {
             addr: {"slug": info.get("slug"), "name": info.get("name"), "area": info.get("area_name"),
                    "is_remote": info.get("is_remote")}

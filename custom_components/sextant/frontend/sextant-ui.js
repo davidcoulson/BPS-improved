@@ -35,6 +35,13 @@ export const sharedStyles = css`
   td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   .wrap { overflow-x: auto; }
   .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; background: var(--secondary-background-color); }
+  .pill.quiet { background: rgba(224,165,74,0.22); color: var(--warning-color, #9a5b00); }
+  /* A switch and its label as one bordered chip, so it is obvious which word each switch belongs to. */
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .chips > ha-formfield, .chips > label.inline { border: 1px solid var(--divider-color); border-radius: 999px; padding: 0 12px 0 2px; }
+  .chips > label.inline { padding: 4px 12px 4px 8px; }
+  button.iconbtn { padding: 4px; line-height: 0; border-radius: 50%; }
+  button.iconbtn ha-icon { --mdc-icon-size: 20px; }
   .pill.ok { background: rgba(44,110,73,0.18); color: var(--success-color, #2c6e49); }
   .pill.warn { background: rgba(224,165,74,0.22); color: var(--warning-color, #9a5b00); }
   .pill.bad { background: rgba(217,83,79,0.18); color: var(--error-color, #b00020); }
@@ -191,4 +198,40 @@ export const widgetStyles = css`
 /** Floors top-down by their storey `level` (1 = the floor above ground, 0 = ground, -1 = basement); ties keep file order. */
 export function sortFloors(floors) {
   return [...(floors || [])].map((f, i) => [f, i]).sort((a, b) => ((b[0].level ?? 0) - (a[0].level ?? 0)) || (a[1] - b[1])).map(([f]) => f);
+}
+
+// --- Units and names ------------------------------------------------------------
+
+/** True when Home Assistant's unit system is imperial (miles). Distances are metres inside Sextant. */
+export function isImperial(hass) { return (hass?.config?.unit_system?.length || "km") === "mi"; }
+export function lenUnit(hass) { return isImperial(hass) ? "ft" : "m"; }
+/** Metres as the user's unit: "3.2 m", "10.5 ft", or inches under a foot. */
+export function fmtLen(metres, hass, digits = 1) {
+  if (metres == null || !isFinite(metres)) return "—";
+  if (!isImperial(hass)) return `${Number(metres).toFixed(digits)} m`;
+  const ft = metres * 3.28084;
+  return ft < 1 ? `${Math.round(ft * 12)} in` : `${ft.toFixed(digits)} ft`;
+}
+export function fmtSpeed(mps, hass) {
+  if (mps == null || !isFinite(mps)) return "—";
+  return isImperial(hass) ? `${(mps * 3.28084).toFixed(1)} ft/s` : `${Number(mps).toFixed(2)} m/s`;
+}
+/** Metres -> the number shown in an input field (feet when imperial), and back. */
+export function toDisplayLen(metres, hass) { return metres == null || metres === "" ? "" : isImperial(hass) ? Math.round(metres * 3.28084 * 100) / 100 : metres; }
+export function fromDisplayLen(value, hass) { if (value === "" || value == null) return null; const n = Number(value); return isImperial(hass) ? Math.round((n / 3.28084) * 1000) / 1000 : n; }
+/** px per metre shown as px per foot when imperial. */
+export function fmtScale(pxPerM, hass) { if (!pxPerM) return "no scale"; return isImperial(hass) ? `${fmtNum(pxPerM * 0.3048, 1)} px/ft` : `${fmtNum(pxPerM, 1)} px/m`; }
+
+/** A tracker's display name: the device name Bermuda / Home Assistant knows, else the slug tidied up. */
+export function trackerName(data, ent) {
+  const known = data?.names?.[ent];
+  if (known) return known;
+  return slugLabel(ent).replace(/\b\w/g, (c) => c.toUpperCase());
+}
+/** A proxy's display name from the scanner directory (by address or slug), else the slug. */
+export function proxyName(data, slugOrAddress) {
+  const scanners = data?.scanners || {};
+  if (scanners[slugOrAddress]?.name) return scanners[slugOrAddress].name;
+  for (const info of Object.values(scanners)) if (info.slug === slugOrAddress && info.name) return info.name;
+  return slugOrAddress;
 }

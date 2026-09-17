@@ -883,6 +883,53 @@ to share, `unknown` for "in none of them") and shown next to the sub-zone
 in the Live drawer, like the floor probabilities. Set `zone_hysteresis` to
 false to publish the raw zone as before.
 
+## The panel after the first walkthrough (3.7.0)
+
+What changed from David's first pass through the rebuilt panel:
+
+- **Proxies, not receivers.** The things on the wall are Bermuda proxies
+  and the panel now calls them that everywhere (the layout keys and the
+  websocket commands keep their old names). Rooms are "rooms" in the editor
+  and the tuning groups; the sensors are still `*_sextant_zone`.
+- **Seven pages** instead of four: Live, Edit, Trackers (what Bermuda
+  tracks and what it hears), Bermuda (its global options, FindMy, Tiles),
+  Proxies (health grouped by floor and room with a count of green / quiet /
+  offline / unmatched per group, plus the self-test), Calibration, and
+  Tuning (the stability KPI with baselines, live tuning, history
+  retention). The header carries "Powered by Bermuda" under the name,
+  clicking the name returns to Live, and the GitHub mark links here.
+- **Finding a tracker.** Clicking one in the Live list fades every other
+  tracker back, draws the chosen one half again as large with a dashed halo
+  that stays the same size at any zoom, and follows it to its floor; click
+  the row again to unfocus. The floor-plan drawing itself can be switched
+  off ("Map image"). Each Live switch sits in its own bordered chip so the
+  word and the switch belong together visibly, and "Fingerprint fix"
+  explains itself on hover.
+- **Names.** Trackers show the device name Bermuda / Home Assistant knows
+  ("Fry", "David's Phone"); rename the device in Settings › Devices and the
+  panel follows. Proxies show their Bermuda name on the map and in every
+  table instead of the slug.
+- **Editor.** Undo (fifty steps) next to Save. Three padlocks lock rooms,
+  sub-zones and proxies against selection and dragging; rooms start locked,
+  drawing a new one unlocks them. Proxies are bigger targets and grow under
+  the pointer; no-go areas are grey.
+- **Trackers page.** Tracked rows show the icon left of the name, height and
+  ref trim in one column, and a bin icon to untrack. "Heard, not tracked"
+  lists only what was heard in the last minute (a switch shows everything),
+  filters by kind from a dropdown, puts the maker under the address, and
+  hides the proxies' own probe beacon.
+- **Units.** Distances, heights and speeds display in Home Assistant's unit
+  system (feet and inches, or metres); the store and the solver stay in
+  metres. Tuning values are shown in metres, the solver's own unit.
+- **Near-field anchor.** A tracker one proxy reads inside `anchor_max_m`
+  (0.8 m) with every other proxy at least `anchor_ratio` (2) times farther,
+  for `anchor_secs` (20 s), is placed on that proxy - a watch on the bedside
+  table next to its proxy sat 1.7 m away before, where the farther proxies'
+  errors pulled the fit, and the bedside-table sub-zone never won. The anchor
+  holds until the reading opens past `anchor_release_m` (1.5 m) for the
+  dwell, or another proxy earns it; `anchor` in the cords payload and the
+  Live drawer say which proxy holds it. `anchor_max_m: 0` switches it off.
+
 ## Tiles by identity
 
 Tiles rotate their Bluetooth address, and (it turns out) change it again
@@ -1018,6 +1065,7 @@ Keys: `distance_estimator`, `median_window_secs`, `median_min_samples`,
 `zone_unlock_margin`, `zone_unlock_secs`, `subzone_switch_secs`,
 `floor_switch_secs`, `floor_tenure_bonus`, `floor_tenure_full_secs`,
 `floor_proximity_weight`, `floor_proximity_k`, `fingerprint_auto_gain`,
+`anchor_max_m`, `anchor_ratio`, `anchor_secs`, `anchor_release_m`,
 `calibration_target` (`sextant` or `bermuda`). An
 unknown key or an out-of-range value is refused with the allowed range;
 `reset: true` restores the defaults. Changes apply on the next cycle.

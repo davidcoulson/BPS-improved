@@ -300,6 +300,8 @@ _kf_position_state = {}
 # on prune, like the Kalman state.
 _zone_state = {}
 _subzone_state = {}
+# Near-field anchor per tracker: {"slug", "floor", "since", "pending": (slug, since) | None}
+_anchor_state = {}
 
 # --- Runtime tuning (sextant.set_tuning) ------------------------------------------
 # Knobs for the accuracy work that are safe to flip on a live install without
@@ -381,6 +383,16 @@ TUNING_SPEC = {
     # reference's, and the learned factor (fingerprint.ReferenceDB.learn)
     # multiplies fingerprint_ref_gain. Reported per fix as fp.gain.
     "fingerprint_auto_gain": (True, bool),
+    # Near-field anchor (see _elect_anchor): a tracker one proxy reads at
+    # under anchor_max_m, with every other proxy at least anchor_ratio times
+    # farther, for anchor_secs, is placed AT that proxy - a watch on the
+    # bedside table next to it, not 1.7 m away where the far proxies' errors
+    # pull the fit. Released once the reading opens past anchor_release_m.
+    # anchor_max_m 0 disables it.
+    "anchor_max_m": (0.8, float, 0.0, 5.0),
+    "anchor_ratio": (2.0, float, 1.0, 10.0),
+    "anchor_secs": (20.0, float, 0.0, 600.0),
+    "anchor_release_m": (1.5, float, 0.1, 10.0),
 }
 
 # Reference fingerprints: receiver-to-receiver ranges, refreshed on a slow
@@ -2011,6 +2023,7 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
         _kf_position_state.pop(entity, None)
         _zone_state.pop(entity, None)
         _subzone_state.pop(entity, None)
+        _anchor_state.pop(entity, None)
         _floor_since[entity] = now
         update_trilateration_and_zone.last_floor[entity] = lowest_floor_name
 
@@ -2025,6 +2038,11 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
     floor_bounds = elected["bounds"]
     scale = elected["scale"]
     tricords = elected["fix"]
+    # A tracker sitting on a proxy is placed on the proxy (see _elect_anchor).
+    anchor = _elect_anchor(entity, lowest_floor_name, _floor_receivers(layout, lowest_floor_name), layout, now=now)
+    if anchor is not None and tricords is not None:
+        tricords = (anchor["x"], anchor["y"])
+        elected["conf"] = max(elected["conf"], ANCHOR_CONF)
 
     if tricords is not None:
         # Constant-velocity Kalman smoothing of the published position. The RAW
@@ -2079,6 +2097,8 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
                 # Smoothed sub-zone membership shares (name -> share, plus
                 # "unknown"), the sub-zone counterpart of "floors" below.
                 "sub_zones": _subzone_probs(entity),
+                # The proxy the tracker is anchored to (near-field), or None.
+                "anchor": None if anchor is None else anchor["slug"],
                 "speed": None if zone_speed is None else round(zone_speed, 2),
                 "floor": lowest_floor_name,
                 # The exact solver input (post-correction, post-filter), for
@@ -2244,6 +2264,7 @@ async def prune_stale_positions(hass):
         _kf_position_state.pop(ent, None)
         _zone_state.pop(ent, None)
         _subzone_state.pop(ent, None)
+        _anchor_state.pop(ent, None)
         _floor_probability.pop(ent, None)
         _floor_challenge.pop(ent, None)
         _floor_dark_cycles.pop(ent, None)
@@ -2722,6 +2743,114 @@ def _subzone_membership(sub_polys, samples):
         shares[hit] = shares.get(hit, 0.0) + w
     total = sum(shares.values())
     return {s: v / total for s, v in shares.items()} if total > 0 else {}
+
+
+ANCHOR_CONF = 0.9   # an anchored fix is as sure as a fix gets
+
+
+def _floor_receivers(layout, floor_name):
+    floors = layout.get("floor") if isinstance(layout, dict) else None
+    for floor in floors or []:
+        if isinstance(floor, dict) and floor.get("name") == floor_name:
+            return floor.get("receivers") or []
+    return []
+
+
+def _elect_anchor(entity, floor_name, receivers, layout, now=None):
+    """The proxy this tracker sits on, if any: {"slug", "x", "y"} or None.
+
+    Trilateration is a compromise between every proxy's range, so a watch
+    20 cm from one proxy still lands a metre or two away when the farther
+    proxies read a little short. When ONE proxy reads the tracker inside
+    anchor_max_m and every other proxy reads it at least anchor_ratio times
+    farther, the tracker is on that proxy: after anchor_secs of that the fix
+    becomes the proxy's own position. The anchor holds until that proxy's
+    reading opens past anchor_release_m (or vanishes) for anchor_secs, or
+    another proxy earns the anchor instead. A stationary phone on the
+    counter, the keys on the hook by their proxy, the watch on the bedside
+    table: exactly the things sub-zones exist for.
+    """
+    max_m = _tuning(layout, "anchor_max_m")
+    if not max_m or max_m <= 0:
+        _anchor_state.pop(entity, None)
+        return None
+    now = time.time() if now is None else now
+    ratio = _tuning(layout, "anchor_ratio")
+    dwell = _tuning(layout, "anchor_secs")
+    release_m = _tuning(layout, "anchor_release_m")
+    ranked = []
+    by_slug = {}
+    for rx in receivers:
+        d = rx.get("distance")
+        cords = rx.get("cords") or {}
+        if not isinstance(d, (int, float)) or isinstance(d, bool) or not d > 0 or cords.get("x") is None:
+            continue
+        ranked.append((float(d), rx))
+        by_slug[rx.get("entity_id")] = (float(d), rx)
+    ranked.sort(key=lambda t: t[0])
+    candidate = None
+    if ranked and ranked[0][0] <= max_m and (len(ranked) < 2 or ranked[0][0] * ratio <= ranked[1][0]):
+        candidate = ranked[0][1]
+    st = _anchor_state.get(entity)
+    if st is not None and st.get("floor") != floor_name:
+        st = None
+        _anchor_state.pop(entity, None)
+
+    def _place(rx):
+        return {"slug": rx.get("entity_id"), "x": float(rx["cords"]["x"]), "y": float(rx["cords"]["y"])}
+
+    if st is None:
+        # Not anchored: a candidate must persist for the dwell.
+        if candidate is None:
+            _anchor_state.pop(entity, None)
+            return None
+        slug = candidate.get("entity_id")
+        pending = _anchor_state.get(entity, {}).get("pending")
+        if pending is None or pending[0] != slug:
+            _anchor_state[entity] = {"floor": floor_name, "slug": None, "since": None, "pending": (slug, now)}
+            return None if dwell > 0 else _adopt_anchor(entity, floor_name, candidate, now)
+        if now - pending[1] >= dwell:
+            return _adopt_anchor(entity, floor_name, candidate, now)
+        return None
+
+    if st.get("slug") is None:
+        # pending state stored under st (floor matched)
+        if candidate is None:
+            _anchor_state.pop(entity, None)
+            return None
+        slug = candidate.get("entity_id")
+        pending = st.get("pending")
+        if pending is None or pending[0] != slug:
+            st["pending"] = (slug, now)
+            return None
+        if now - pending[1] >= dwell:
+            return _adopt_anchor(entity, floor_name, candidate, now)
+        return None
+
+    # Anchored. Another proxy earning the anchor takes it over at once.
+    if candidate is not None and candidate.get("entity_id") != st["slug"]:
+        return _adopt_anchor(entity, floor_name, candidate, now)
+    current = by_slug.get(st["slug"])
+    if current is not None and current[0] <= release_m:
+        st["away_since"] = None
+        return _place(current[1])
+    # Reading gone or opened past the release distance: let go after the dwell.
+    st["away_since"] = st.get("away_since") or now
+    if now - st["away_since"] >= dwell:
+        _anchor_state.pop(entity, None)
+        return None
+    if current is not None:
+        return _place(current[1])
+    # No reading at all: hold the last known position of the anchor.
+    return {"slug": st["slug"], "x": st["x"], "y": st["y"]}
+
+
+def _adopt_anchor(entity, floor_name, rx, now):
+    _anchor_state[entity] = {
+        "floor": floor_name, "slug": rx.get("entity_id"), "since": now, "pending": None, "away_since": None,
+        "x": float(rx["cords"]["x"]), "y": float(rx["cords"]["y"]),
+    }
+    return {"slug": rx.get("entity_id"), "x": float(rx["cords"]["x"]), "y": float(rx["cords"]["y"])}
 
 
 def _subzone_probs(entity):
