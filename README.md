@@ -32,8 +32,10 @@ room** when the fix sits between two.
   flip back and forth every few seconds.
 - 🎯 **Teach it.** If something shows in the wrong place, click where it
   really is and Sextant works out which settings fit that tracker best.
-- 🤖 **Built with AI.** Sextant was developed with Claude as a coding
-  partner, tested in a real house full of proxies, pets and phones. See
+- 🤖 **Built with AI, tested in a real house.** Sextant was developed with
+  Claude as a coding partner, and every change runs in the author's home
+  before it ships: more than 60 Bluetooth proxies, 16 tracked people, pets
+  and things, 21 rooms on three floors. See
   [AI-assisted development](#ai-assisted-development).
 
 ## Docs
@@ -95,13 +97,16 @@ token, in Home Assistant's own theme and unit system. Seven pages:
 ## AI-assisted development
 
 Sextant was written with [Claude](https://claude.ai) as a pair programmer,
-through Claude Code. The author sets the direction, runs every change
-against a real house with dozens of proxies, four floors, pets, phones and
-watches, and decides what ships. Claude wrote most of the code, the tests
-and these docs in that loop. Expect the codebase to read that way: long
-comments explaining why, a consistent shape from file to file, and a test
-for nearly everything. Bugs are still bugs, whoever typed them; issues and
-pull requests are welcome on
+through Claude Code. Claude wrote most of the code, the tests and these
+docs. What keeps that honest is the test bed: every change runs in the
+author's house before it ships, with more than 60 Bluetooth proxies
+(ESPHome and Shelly), 16 tracked people, pets, phones, watches and Tiles,
+and 21 rooms with 12 spots across three floors. The author sets the
+direction, watches what the trackers do on the real floor plan, and
+decides what ships. Expect the codebase to read the way an AI writes it:
+long comments explaining why, a consistent shape from file to file, and a
+test for nearly everything. Bugs are still bugs, whoever typed them;
+issues and pull requests are welcome on
 [davidcoulson/sextant](https://github.com/davidcoulson/sextant).
 
 ## Credits
