@@ -240,4 +240,5 @@ def test_tracker_names_come_from_bermuda_tidied_and_user_renames_win(tmp_path, m
     })
     names = ws._tracker_names(hass, ["fry", "private_ble_device_david_s_phone", "private_ble_jack_watch"])
     assert names == {"fry": "Fry", "private_ble_device_david_s_phone": "David's Phone", "private_ble_jack_watch": "Jack Watch"}
-    assert ws._tidy_device_name("Private BLE Device ") == "Private BLE Device "   # never empty
+    assert ws._tidy_device_name("Private BLE Device ").strip()   # a prefix alone never tidies to nothing
+    assert ws._tidy_device_name("Fry") == "Fry"
