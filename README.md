@@ -762,6 +762,28 @@ troubleshooting) is in the [upstream wiki](https://github.com/Hogster/BPS/wiki/L
 
 ---
 
+## Measuring room stability
+
+Positional error is hard to measure on a live install, but the thing
+automations actually suffer from is easy to measure: a tracker that is not
+moving must not change room. `tools/flap_kpi.py` reads the recorder history
+for every `*_bps_zone` and `*_bps_floor` sensor and reports, per sensor, the
+change rate per tracker-hour, the share of changes that are an A → B → A
+round trip (boundary flapping), the median dwell time, and how often the
+sensor went `unknown`.
+
+```bash
+export HASS_URL=https://home.example HASS_TOKEN=...   # long-lived access token
+python tools/flap_kpi.py --hours 12 --json before.json
+# ...change something, wait a comparable window...
+python tools/flap_kpi.py --hours 12 --baseline before.json
+```
+
+Run it before and after any positioning change on the same window length.
+That number is what every accuracy change should move; `tools/bps_eval.py`
+and the self-test sensor are the second opinion. `tools/kpi/` keeps saved
+runs from the reference install for comparison.
+
 ## Feedback & contributions
 
 Issues and pull requests for these additions are welcome on
