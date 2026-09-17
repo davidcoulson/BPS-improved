@@ -153,7 +153,8 @@ set_tuning:
     floor_proximity_weight, calibration_target ("sextant" or "bermuda"),
     position_estimator ("geometric", "fingerprint" or "fused"),
     fingerprint_weight, fingerprint_floor_weight, fingerprint_k,
-    fingerprint_missing_m, fingerprint_ref_gain. An
+    fingerprint_missing_m, fingerprint_ref_gain, subzone_enter_prob,
+    subzone_unlock_margin. An
     unknown key or an out-of-range value is refused with the allowed range.
   fields:
     settings:

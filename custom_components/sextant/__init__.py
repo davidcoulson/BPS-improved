@@ -339,6 +339,11 @@ TUNING_SPEC = {
     "zone_unlock_margin": (1.0, float, 0.0, 20.0),      # m outside the locked zone...
     "zone_unlock_secs": (30.0, float, 0.0, 600.0),      # ...for this long -> unlocked
     "subzone_switch_secs": (20.0, float, 0.0, 600.0),
+    # Sub-zone election (see _elect_subzone): the smoothed share of the fix's
+    # uncertainty that must fall inside a sub-zone before it is entered, and
+    # how far (m) outside its polygon the fix must sit before it is left.
+    "subzone_enter_prob": (0.5, float, 0.1, 0.95),
+    "subzone_unlock_margin": (1.0, float, 0.0, 5.0),
     # Floor election dwell (see _elect_floor).
     "floor_switch_secs": (FLOOR_SWITCH_SECS, float, 0.0, 3600.0),
     "floor_tenure_bonus": (0.05, float, 0.0, 0.5),      # extra margin at full tenure
@@ -2033,16 +2038,13 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
             entity, lowest_floor_name, instant_zone, test_point,
             _kf_position_state.get(entity), zone_polys, scale, layout, now=now,
         )
-        sub_zone, sub_parent = find_sub_zone_for_point(hass, new_global_data, entity, lowest_floor_name, test_point)
-        # A sub-zone belongs to its parent zone: while the election holds a
-        # different zone than the point sits in, no sub-zone of the other
-        # room can be published against it.
-        if sub_zone != "unknown" and sub_parent != zone:
-            sub_zone, sub_parent = "unknown", None
-        # parent_zone always names the enclosing main zone: the sub-zone's
-        # declared parent when inside one, otherwise the current main zone.
-        parent_zone = sub_parent if sub_parent else zone
-        sub_zone, parent_zone = _subzone_with_dwell(entity, (sub_zone, parent_zone), layout, now=now)
+        # Sub-zone: only the elected zone's own sub-zones are eligible, with
+        # membership smoothing, exit hysteresis, dwell and the zone lock (see
+        # _elect_subzone). parent_zone always names the enclosing main zone.
+        sub_zone, parent_zone = _elect_subzone(
+            entity, lowest_floor_name, zone, zone_locked, test_point, _kf_position_state.get(entity),
+            _floor_sub_zone_polygons(hass, new_global_data, entity, lowest_floor_name), scale, layout, now=now,
+        )
         apitricords = update_or_add_entry(
             apitricords,
             {
@@ -2051,6 +2053,7 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
                 "zone": zone,
                 "zone_raw": instant_zone,
                 "zone_locked": zone_locked,
+                "sub_zone": sub_zone,
                 "speed": None if zone_speed is None else round(zone_speed, 2),
                 "floor": lowest_floor_name,
                 # The exact solver input (post-correction, post-filter), for
@@ -2654,6 +2657,99 @@ def _subzone_with_dwell(entity, candidate, layout, now=None):
         st["pending"] = None
         return candidate
     return st["value"]
+
+def _subzone_membership(sub_polys, samples):
+    """sub-zone id -> share of sample weight inside it; samples in no
+    sub-zone count toward "unknown". Unlike zones, sub-zones do not tile the
+    room, so a sample outside every one of them is evidence of NO sub-zone,
+    never of the nearest."""
+    shares = {}
+    for x, y, w in samples:
+        pt = Point(x, y)
+        hit = next((sid for sid, _parent, poly in sub_polys if poly.covers(pt)), "unknown")
+        shares[hit] = shares.get(hit, 0.0) + w
+    total = sum(shares.values())
+    return {s: v / total for s, v in shares.items()} if total > 0 else {}
+
+
+def _elect_subzone(entity, floor_name, zone, zone_locked, point, kf_state, sub_polys, scale, layout, now=None):
+    """The (sub_zone, parent_zone) pair to publish. parent_zone is always the
+    elected main zone; sub_zone is one of its sub-zones or "unknown".
+
+    Sub-zones are a couch, a desk, a key hook: a metre or two across, which
+    is the size of the positioning error itself, so a strict point-in-polygon
+    test flickered. This is the zone election scaled down:
+
+    1. Membership: the fix's 1-sigma error ellipse is sampled and the share
+       inside each sub-zone smoothed over cycles; entering needs a share of
+       subzone_enter_prob, and a sample in no sub-zone is evidence of none.
+    2. Hysteresis on the way out: an occupied sub-zone is only left once the
+       fix sits more than subzone_unlock_margin metres outside its polygon
+       (or another sub-zone clearly wins).
+    3. Dwell: any change must persist for subzone_switch_secs, wall clock.
+    4. The zone lock carries over: a tracker the zone election holds still
+       (the phone on the table) keeps its sub-zone too.
+    """
+    now = time.time() if now is None else now
+    polys = [(sid, parent, poly) for sid, parent, poly in sub_polys if parent == zone]
+    st = _subzone_state.get(entity)
+    if st is None or st.get("floor") != floor_name or st.get("zone") != zone:
+        st = _subzone_state[entity] = {
+            "floor": floor_name, "zone": zone, "value": ("unknown", zone), "probs": {}, "pending": None,
+        }
+    if not polys:
+        st["value"], st["pending"] = ("unknown", zone), None
+        return st["value"]
+    center = (point.x, point.y) if isinstance(point, Point) else (float(point[0]), float(point[1]))
+    if kf_state is not None and kf_state.get("floor") == floor_name:
+        samples = _covariance_samples(center, kf_state["P"][:2, :2])
+    else:
+        samples = [(center[0], center[1], 1.0)]
+    shares = _subzone_membership(polys, samples)
+    alpha = _tuning(layout, "zone_prob_smoothing")
+    probs = st["probs"]
+    for s in set(probs) | set(shares):
+        probs[s] = alpha * probs.get(s, 0.0) + (1.0 - alpha) * shares.get(s, 0.0)
+    for s in [s for s, p in probs.items() if p < 0.01]:
+        del probs[s]
+    enter = _tuning(layout, "subzone_enter_prob")
+    current = st["value"][0]
+    contenders = {s: p for s, p in probs.items() if s != "unknown"}
+    best = max(contenders, key=contenders.get) if contenders else None
+
+    if current != "unknown" and zone_locked:
+        st["pending"] = None
+        return st["value"]  # a still tracker stays on its couch / table / hook
+
+    if current != "unknown":
+        cur_poly = next((poly for sid, _p, poly in polys if sid == current), None)
+        if cur_poly is None:
+            candidate = ("unknown", zone)  # the sub-zone was deleted or renamed
+        else:
+            pt = Point(*center)
+            margin_px = _tuning(layout, "subzone_unlock_margin") * (scale if isinstance(scale, (int, float)) and scale > 0 else 0.0)
+            still_near = cur_poly.distance(pt) <= margin_px
+            if best is not None and best != current and contenders[best] >= enter and contenders[best] > probs.get(current, 0.0):
+                candidate = (best, zone)
+            elif still_near or probs.get(current, 0.0) >= enter:
+                candidate = st["value"]
+            else:
+                candidate = ("unknown", zone)
+    else:
+        candidate = (best, zone) if best is not None and contenders[best] >= enter else ("unknown", zone)
+
+    if candidate == st["value"]:
+        st["pending"] = None
+        return candidate
+    pending = st["pending"]
+    if pending is None or pending[0] != candidate:
+        st["pending"] = (candidate, now)
+        return st["value"]
+    if now - pending[1] >= _tuning(layout, "subzone_switch_secs"):
+        st["value"], st["pending"] = candidate, None
+        return candidate
+    return st["value"]
+
 
 # Compiled zone/sub-zone polygons for a floor, keyed by (cache kind, floor_name)
 # -> (layout_version, [result tuples]). A zone's geometry only changes when the

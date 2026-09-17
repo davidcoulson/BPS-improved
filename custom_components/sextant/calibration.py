@@ -40,7 +40,7 @@ import numpy as np
 from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.util import slugify
-from scipy.optimize import least_squares
+from .solver_numpy import least_squares_bounded
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -553,7 +553,11 @@ def solve(cal: dict, floor_name: str):
             res = np.append(res, DIFF_WEIGHT * (pred_diff - meas_diff))
         return np.append(res, GAUGE_WEIGHT * np.mean(tx))
 
-    fit = least_squares(
+    # Pure numpy (solver_numpy): the same bounded Levenberg-Marquardt descent
+    # the trilateration uses, with a linear loss and a forward-difference
+    # Jacobian - exactly what the scipy call here used to do, without the
+    # dependency.
+    fit = least_squares_bounded(
         residuals,
         np.zeros(2 * n),
         bounds=(-1.0, 1.0),  # each side capped at a 10x factor

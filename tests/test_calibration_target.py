@@ -2,6 +2,8 @@
 (tuning calibration_target = "bermuda"), and the reset path back."""
 
 import asyncio
+
+import pytest
 import math
 
 import sextant
@@ -151,3 +153,57 @@ def test_calibration_target_reads_pre_rename_bps_value():
     assert _calibration_target({"tuning": {"calibration_target": "bps"}}) == "sextant"
     assert _calibration_target({"tuning": {"calibration_target": "bermuda"}}) == "bermuda"
     assert _calibration_target({}) == "sextant"
+
+
+def test_calibration_solve_matches_scipy_without_needing_it():
+    """The receiver-correction solve now runs on solver_numpy; against a
+    synthetic house it must land on the same corrections scipy found."""
+    import math
+    import random
+    from collections import deque
+    import numpy as np
+    from sextant import calibration as cal_mod
+
+    rng = random.Random(7)
+    # Eight receivers on a 12 m square, 100 px/m; receiver r2 reads 30% long,
+    # r5 reads 15% short, the rest are honest; a little noise on every pair.
+    slugs = [f"r{i}" for i in range(8)]
+    pos = {s: (rng.uniform(0, 12), rng.uniform(0, 12)) for s in slugs}
+    bias = {s: 1.0 for s in slugs}
+    bias["r2"], bias["r5"] = 1.3, 0.85
+    receivers = {s: {"x": x * 100, "y": y * 100, "scale": 100.0, "floor": "F", "height": None,
+                     "address": None, "uid": None} for s, (x, y) in pos.items()}
+    samples = {}
+    for tx in slugs:
+        for rx in slugs:
+            if tx == rx:
+                continue
+            true = math.hypot(pos[tx][0] - pos[rx][0], pos[tx][1] - pos[rx][1])
+            dq = deque(maxlen=50)
+            for _ in range(12):
+                dq.append(true * bias[rx] * rng.uniform(0.95, 1.05))
+            samples[f"{tx}|{rx}"] = dq
+    cal = {"receivers": receivers, "samples": samples, "all_placed_slugs": set(slugs)}
+    result = cal_mod.solve(cal, "F")
+    corr = result["receivers"]
+    # The long-reading receiver gets a factor below 1, the short one above.
+    assert corr["r2"] < 0.9 and corr["r5"] > 1.05
+    honest = [corr[s] for s in slugs if s not in ("r2", "r5")]
+    assert max(honest) - min(honest) < 0.12
+    # Same problem through scipy, when it happens to be installed: same answer.
+    scipy_opt = pytest.importorskip("scipy.optimize")
+    from sextant import solver_numpy
+
+    def via_scipy(fun, x0, bounds, **_kw):
+        fit = scipy_opt.least_squares(fun, x0, bounds=bounds)
+        return solver_numpy.SolverResult(x=fit.x, success=True, nfev=fit.nfev, cost=fit.cost)
+
+    original = cal_mod.least_squares_bounded
+    cal_mod.least_squares_bounded = via_scipy
+    try:
+        ref_result = cal_mod.solve(cal, "F")
+        ref = ref_result["receivers"]
+    finally:
+        cal_mod.least_squares_bounded = original
+    for s in slugs:
+        assert abs(corr[s] - ref[s]) < 0.02, (s, corr[s], ref[s])

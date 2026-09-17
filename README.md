@@ -8,7 +8,7 @@ position on your floor plan: a room, a floor, a sub-zone, and a dot on a map.
 It began life as a fork of [Hogster/BPS](https://github.com/Hogster/BPS) via
 [maxi1134/BPS-improved](https://github.com/maxi1134/BPS-improved) and has since
 been rebuilt around Bermuda's snapshot API, a wall-clock stability model and a
-numpy solver. The name changed with version 3.0.0; see
+numpy solver (no scipy since 3.2.0). The name changed with version 3.0.0; see
 [Upgrading from BPS](#upgrading-from-bps) if you ran the old integration.
 
 **New here?** The upstream project's docs still describe the model well:
@@ -889,6 +889,22 @@ exposes RSSI history (the `rssi_history` feature; this fork's
 `0.8.7-fork-testing.9` or later); without it every reading silently keeps
 Bermuda's own distance. It is off by default so it can be A/B'd against the
 [stability KPI](#measuring-room-stability) on a live install.
+
+## Sub-zone election
+
+Sub-zones are a couch, a desk, a key hook: a metre or two across, the size of
+the positioning error itself, so the old strict point-in-polygon test
+flickered between the sub-zone and "unknown". Sub-zones now get the zone
+election scaled down: the fix's 1-sigma error ellipse is sampled and the
+share inside each sub-zone smoothed over cycles (`zone_prob_smoothing`);
+entering needs a smoothed share of `subzone_enter_prob` (default 0.5), and a
+sample in no sub-zone counts as evidence of none. An occupied sub-zone is only
+left once the fix sits more than `subzone_unlock_margin` metres (default 1.0)
+outside its polygon, or another sub-zone of the same zone clearly wins. Every
+change still waits `subzone_switch_secs`, and a tracker the zone election
+holds still (the phone on the table) keeps its sub-zone for as long as the
+zone lock holds. Only the elected zone's own sub-zones are eligible, and
+`parent_zone` always names that zone.
 
 ## Fingerprint fusion (opt-in)
 

@@ -50,7 +50,9 @@ def _soft_l1_weights(f, f_scale):
 
 
 def _soft_l1_cost(f, f_scale):
-    """scipy's reported cost: 0.5 * sum(f_scale^2 * rho(z))."""
+    """scipy's reported cost: 0.5 * sum(f_scale^2 * rho(z)); plain least squares at f_scale = inf."""
+    if not np.isfinite(f_scale):
+        return 0.5 * float(np.sum(f * f))
     z = (f / f_scale) ** 2
     return 0.5 * float(np.sum(f_scale**2 * 2.0 * (np.sqrt(1.0 + z) - 1.0)))
 
@@ -187,3 +189,42 @@ def _solve_from(fun, x0, jac, lo, hi, f_scale, max_iter, xtol, ftol):
             success = False
 
     return SolverResult(x=x, success=success, nfev=nfev, cost=cost)
+
+
+def numeric_jacobian(fun, x, f=None, eps=1e-6):
+    """Forward-difference Jacobian of ``fun`` at ``x`` (rows: residuals, cols: parameters)."""
+    x = np.asarray(x, dtype=float)
+    f0 = np.asarray(fun(x), dtype=float) if f is None else np.asarray(f, dtype=float)
+    J = np.empty((f0.size, x.size))
+    for i in range(x.size):
+        step = eps * max(1.0, abs(x[i]))
+        xi = x.copy()
+        xi[i] += step
+        J[:, i] = (np.asarray(fun(xi), dtype=float) - f0) / step
+    return J
+
+
+def least_squares_bounded(fun, x0, bounds, jac=None, max_iter=200, xtol=1e-8, ftol=1e-8):
+    """
+    Plain (linear-loss) bounded least squares: minimise ``0.5 * ||fun(x)||^2`` over a box.
+
+    Drop-in for ``scipy.optimize.least_squares(fun, x0, bounds=(lo, hi))`` as
+    the receiver calibration used it. Same Levenberg-Marquardt descent as the
+    robust solver above; the soft_l1 scale is sent to infinity, where its
+    weights are identically 1 and its cost is the ordinary sum of squares.
+    ``jac`` defaults to a forward-difference Jacobian, which is what scipy
+    used there too (no analytic Jacobian was ever supplied); with a few
+    dozen parameters and a few thousand residuals that is milliseconds.
+    """
+    lo, hi = bounds
+    lo = np.asarray(lo, dtype=float)
+    hi = np.asarray(hi, dtype=float)
+    x0 = np.asarray(x0, dtype=float)
+    if lo.ndim == 0:
+        lo = np.full(x0.shape, float(lo))
+    if hi.ndim == 0:
+        hi = np.full(x0.shape, float(hi))
+    if jac is None:
+        def jac(x):  # noqa: E306
+            return numeric_jacobian(fun, x)
+    return _solve_from(fun, x0, jac, lo, hi, float("inf"), max_iter, xtol, ftol)

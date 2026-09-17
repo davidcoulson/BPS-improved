@@ -346,7 +346,8 @@ def _linear_fit(points):
     """A plain (non-robust) weighted least-squares fit with trilaterate's exact
     objective, to prove soft_l1 does better on the SAME points."""
     import numpy as np
-    from scipy.optimize import least_squares
+    import pytest
+    least_squares = pytest.importorskip("scipy.optimize").least_squares
 
     def obj(X):
         x, y = X
@@ -1252,3 +1253,73 @@ def test_sensors_are_created_for_a_tracker_added_after_setup(monkeypatch):
     hass.data.pop("sextant_add_entities")
     sensor_mod.ensure_sensors_for_trackers(hass, ["other"])
     assert "sensor.other_sextant_zone" not in hass.data["sextant_sensors"]
+
+
+# ---------------------------------------------------------------------------
+# Sub-zone election: smoothed membership, exit hysteresis, dwell, zone lock
+# ---------------------------------------------------------------------------
+
+
+def _sofa_polys():
+    from shapely.geometry import Polygon
+    # Living room 0..10 m; the sofa is a 2 m x 1 m box at (2..4, 2..3); the
+    # desk is at (7..9, 7..8). 100 px/m.
+    sofa = Polygon([(200, 200), (400, 200), (400, 300), (200, 300)])
+    desk = Polygon([(700, 700), (900, 700), (900, 800), (700, 800)])
+    return [("Sofa", "Living", sofa), ("Desk", "Living", desk), ("Hook", "Hall", Polygon([(0, 0), (10, 0), (10, 10)]))]
+
+
+def _sub(entity, point, now, *, zone="Living", locked=False, layout=None, scale=100.0):
+    from shapely.geometry import Point
+    layout = layout or {"tuning": {"subzone_switch_secs": 20.0, "zone_prob_smoothing": 0.6}}
+    return sextant._elect_subzone(entity, "F", zone, locked, Point(*point), None, _sofa_polys(), scale, layout, now=now)
+
+
+def test_subzone_needs_smoothed_membership_and_dwell_to_enter():
+    sextant._subzone_state.clear()
+    t = 1000.0
+    assert _sub("e", (300, 250), t) == ("unknown", "Living")        # share 0.4 after one cycle: not yet
+    assert _sub("e", (300, 250), t + 10) == ("unknown", "Living")   # 0.64 >= 0.5: pending
+    assert _sub("e", (300, 250), t + 29) == ("unknown", "Living")   # dwell not served
+    assert _sub("e", (300, 250), t + 31) == ("Sofa", "Living")      # 20 s after the challenge began
+
+
+def test_subzone_is_left_only_beyond_the_margin_and_after_the_dwell():
+    sextant._subzone_state.clear()
+    t = 1000.0
+    for dt in (0, 10, 30, 31):
+        out = _sub("e", (300, 250), t + dt)
+    assert out == ("Sofa", "Living")
+    # Half a metre outside the sofa polygon: within the 1 m margin, hold.
+    for dt in range(40, 200, 10):
+        assert _sub("e", (300, 350), t + dt) == ("Sofa", "Living")
+    # Two metres away: leaves, but only after the dwell.
+    assert _sub("e", (300, 500), t + 200) == ("Sofa", "Living")
+    assert _sub("e", (300, 500), t + 210) == ("Sofa", "Living")
+    assert _sub("e", (300, 500), t + 221) == ("unknown", "Living")
+
+
+def test_subzone_holds_while_the_zone_is_locked_and_follows_the_zone():
+    sextant._subzone_state.clear()
+    t = 1000.0
+    for dt in (0, 10, 30, 31):
+        _sub("e", (300, 250), t + dt)
+    # The tracker is declared still by the zone election: even a fix that
+    # wandered off keeps the sub-zone.
+    assert _sub("e", (300, 600), t + 100, locked=True) == ("Sofa", "Living")
+    assert _sub("e", (300, 600), t + 200, locked=True) == ("Sofa", "Living")
+    # A different elected zone: its sub-zones only, state starts over.
+    assert _sub("e", (300, 250), t + 300, zone="Hall") == ("unknown", "Hall")
+    # A zone with no sub-zones at all publishes unknown immediately.
+    assert _sub("e", (300, 250), t + 310, zone="Kitchen") == ("unknown", "Kitchen")
+
+
+def test_subzone_switches_to_a_clearly_better_neighbour():
+    sextant._subzone_state.clear()
+    t = 1000.0
+    for dt in (0, 10, 30, 31):
+        _sub("e", (300, 250), t + dt)
+    # Straight onto the desk: the desk's share overtakes and, after the
+    # dwell, wins outright without passing through unknown.
+    seen = [_sub("e", (800, 750), t + 40 + dt)[0] for dt in range(0, 80, 10)]
+    assert seen[0] == "Sofa" and seen[-1] == "Desk" and "unknown" not in seen
