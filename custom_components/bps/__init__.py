@@ -339,6 +339,10 @@ TUNING_SPEC = {
     "floor_switch_secs": (FLOOR_SWITCH_SECS, float, 0.0, 3600.0),
     "floor_tenure_bonus": (0.05, float, 0.0, 0.5),      # extra margin at full tenure
     "floor_tenure_full_secs": (600.0, float, 1.0, 86400.0),
+    # How much a floor's confidence is scaled by how near its nearest receiver
+    # is, relative to the nearest receiver on any competing floor (see
+    # _proximity_weighted_scores). 0 = pure fit-quality election.
+    "floor_proximity_weight": (0.5, float, 0.0, 1.0),
 }
 
 
@@ -1688,9 +1692,17 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
             return
         incumbent = None  # dark beyond grace: incumbency lapses
     _floor_dark_cycles.pop(entity, None)
-    probs = _update_floor_probabilities(
-        entity, {f: s["conf"] for f, s in solved.items()}, valid_floors
+    # Fit quality alone cannot separate floors joined by an open space: a
+    # phone in the office below a catwalk is explained about as well by the
+    # upstairs receivers around the void as by the office ones (measured
+    # live at 0.54 / 0.46, incumbent never challenged). The floor whose
+    # receivers are physically nearest gets the benefit of the doubt.
+    scores = _proximity_weighted_scores(
+        {f: s["conf"] for f, s in solved.items()},
+        {c["name"]: c.get("nearest_m") for c in candidates},
+        _tuning(layout, "floor_proximity_weight"),
     )
+    probs = _update_floor_probabilities(entity, scores, valid_floors)
     now = time.time()
     # The incumbent's required lead grows with how long it has held the floor
     # (up to floor_tenure_bonus at floor_tenure_full_secs), so a floor that
@@ -2025,6 +2037,38 @@ def _score_floor_fit(fix, weighted, scale):
     # must not out-cover a floor with 6 of 8 receivers reporting.
     coverage = min(1.0, n / COVERAGE_TARGET_N)
     return 0.5 * coverage + 0.5 * quality, rms_m, coverage
+
+
+def _proximity_weighted_scores(scores, nearest_by_floor, weight):
+    """Scale each solved floor's confidence by receiver proximity.
+
+    ``prox`` for a floor is the nearest measured distance on ANY competing
+    floor divided by this floor's own nearest, so the floor with the nearest
+    receiver scores 1 and a floor whose closest receiver is twice as far
+    scores 0.5; the confidence is then multiplied by
+    ``(1 - weight) + weight * prox``. With one solved floor, an unusable
+    distance, or weight 0, the scores pass through unchanged. Distances are
+    the raw slants (metres) the candidate ranking already uses, so a
+    through-slab reading directly below a tracker counts against the floor
+    below it just as it did in the old nearest-receiver election - but now
+    as one weighted term inside the fit competition, behind the same margin
+    and dwell, rather than as the whole answer.
+    """
+    if not scores or not weight or weight <= 0:
+        return dict(scores)
+    usable = {
+        f: float(d) for f, d in nearest_by_floor.items()
+        if f in scores and isinstance(d, (int, float)) and not isinstance(d, bool)
+        and d > 0 and math.isfinite(d)
+    }
+    if len(usable) < 2:
+        return dict(scores)
+    best = min(usable.values())
+    out = {}
+    for floor, conf in scores.items():
+        prox = best / usable[floor] if floor in usable else 1.0
+        out[floor] = conf * ((1.0 - weight) + weight * prox)
+    return out
 
 
 def _update_floor_probabilities(entity, scores, valid_floors=None):

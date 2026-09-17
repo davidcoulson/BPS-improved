@@ -1095,3 +1095,61 @@ def test_full_cycle_with_hysteresis_off_publishes_instantly(monkeypatch):
     # The Kalman filter lags the raw fix, so the published point may still be
     # near the line on this cycle; what matters is that zone == zone_raw.
     assert entry["zone"] == entry["zone_raw"]
+
+
+def test_proximity_weighting_favours_the_floor_with_the_nearest_receiver():
+    scores = {"Ground": 0.85, "Second": 0.86}
+    nearest = {"Ground": 1.5, "Second": 3.5}
+    out = bps._proximity_weighted_scores(scores, nearest, 0.5)
+    assert out["Ground"] == 0.85                       # nearest floor: unchanged
+    assert abs(out["Second"] - 0.86 * (0.5 + 0.5 * 1.5 / 3.5)) < 1e-12
+    assert out["Ground"] > out["Second"]
+    # Weight 0, a single floor, or unusable distances pass straight through.
+    assert bps._proximity_weighted_scores(scores, nearest, 0.0) == scores
+    assert bps._proximity_weighted_scores({"Ground": 0.85}, nearest, 0.5) == {"Ground": 0.85}
+    assert bps._proximity_weighted_scores(scores, {"Ground": None, "Second": float("inf")}, 0.5) == scores
+    # A floor with no usable distance is not penalised, only the others are ranked.
+    out = bps._proximity_weighted_scores(scores, {"Ground": 2.0, "Second": None}, 0.5)
+    assert out == scores
+
+
+def test_full_cycle_floor_switches_on_proximity_when_fits_tie(monkeypatch):
+    """Two floors explain the receivers equally well (open foyer); the one
+    whose receivers are nearest must win the election within the dwell."""
+    _reset_tracker_state()
+    hass = make_hass()
+    hass.data["bps_sensors"] = {f"sensor.e_bps_{k}": _Sensor() for k in ("zone", "nearest_zone", "floor", "sub_zone")}
+    import copy
+    layout = _square_layout({"stationary_secs": 600.0, "floor_switch_secs": 60.0})
+    # Second floor: same geometry, same zone names suffixed, placed 3 m "above".
+    up = copy.deepcopy(layout["floor"][0]); up["name"] = "U"
+    for z in up["zones"]:
+        z["entity_id"] += " Up"; z["zone_id"] += "u"
+    layout["floor"].append(up)
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(bps.time, "time", lambda: clock["t"])
+
+    def cycle(x_m, y_m, near_floor):
+        data = copy.deepcopy(layout)
+        for fl in data["floor"]:
+            for rx in fl["receivers"]:
+                d = math.hypot(rx["cords"]["x"] / 100.0 - x_m, rx["cords"]["y"] / 100.0 - y_m)
+                if fl["name"] != near_floor:
+                    d = math.hypot(d, 3.0)   # through-slab: 3 m of extra slant
+                rx["distance"] = d
+                rx["cords"]["r"] = d * 100.0
+        run(bps.update_trilateration_and_zone(hass, [{"entity": "e", "data": data}], "e"))
+        return next(i for i in bps.apitricords if i["ent"] == "e")
+
+    # Start upstairs, settle there.
+    for _ in range(3):
+        clock["t"] += 10
+        entry = cycle(2.0, 5.0, "U")
+    assert entry["floor"] == "U"
+    # Move to the floor below: the incumbent keeps solving (all its receivers
+    # still hear the tracker through the slab), so only proximity separates them.
+    seen = []
+    for _ in range(12):
+        clock["t"] += 10
+        seen.append(cycle(2.0, 5.0, "F")["floor"])
+    assert seen[-1] == "F", seen

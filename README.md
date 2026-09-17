@@ -682,6 +682,13 @@ per-floor scenarios) instead of on a single loudest reading:
   instead of handing the tracker to whoever else was solvable that
   instant. A single blip no longer flaps the floor, the published zone, or
   the position filter.
+- Fit quality alone cannot separate floors joined by an open space: a
+  phone in the office below the catwalk is explained about as well by the
+  upstairs receivers around the void as by the office ones. Each floor's
+  confidence is therefore scaled by **receiver proximity** — the nearest
+  measured distance on any competing floor divided by this floor's own
+  nearest — weighted by `floor_proximity_weight` (0.5 by default, 0 for a
+  pure fit-quality election).
 - The probabilities are published per tracker (`floors` in
   `/api/bps/cords`), so "why did it pick this floor" is now inspectable.
 - Bonus: a tracker heard by too few receivers on the nearest floor but by
@@ -844,7 +851,8 @@ Keys: `distance_estimator`, `median_window_secs`, `median_min_samples`,
 `zone_hysteresis`, `zone_prob_smoothing`, `zone_switch_margin`,
 `zone_switch_secs`, `stationary_speed`, `stationary_secs`,
 `zone_unlock_margin`, `zone_unlock_secs`, `subzone_switch_secs`,
-`floor_switch_secs`, `floor_tenure_bonus`, `floor_tenure_full_secs`. An
+`floor_switch_secs`, `floor_tenure_bonus`, `floor_tenure_full_secs`,
+`floor_proximity_weight`. An
 unknown key or an out-of-range value is refused with the allowed range;
 `reset: true` restores the defaults. Changes apply on the next cycle.
 
