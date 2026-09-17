@@ -240,7 +240,12 @@ def _build_receiver_map(coords, floor_name=None) -> dict:
             if receiver.get("entity_id") and cords.get("x") is not None and cords.get("y") is not None:
                 uid = receiver.get("scanner_uid")
                 height = receiver.get("height")
+                address = receiver.get("address")
                 receivers[str(receiver["entity_id"])] = {
+                    # Scanner address: the placement's identity (see
+                    # __init__._resolve_receiver_addresses); an exact match
+                    # in _match_scanners, ahead of any name heuristics.
+                    "address": address.lower() if isinstance(address, str) and address else None,
                     "x": float(cords["x"]),
                     "y": float(cords["y"]),
                     "scale": float(scale),
@@ -283,8 +288,19 @@ def _match_scanners(cal: dict, devices: dict) -> dict:
         scanners.append((address, slugify(str(dev.get("name") or ""))))
 
     scanner_slug_by_mac = {}
+    # Tier 0: the placement carries the scanner's address. Exact, and immune
+    # to renames; a placement matched here is never re-guessed by name.
+    by_address = {
+        info["address"]: slug for slug, info in cal["receivers"].items()
+        if info.get("address")
+    }
+    for address, _name_slug in scanners:
+        if address in by_address:
+            scanner_slug_by_mac[address] = by_address[address]
     for address, name_slug in scanners:
-        if name_slug in cal["receivers"]:
+        if address in scanner_slug_by_mac:
+            continue
+        if name_slug in cal["receivers"] and name_slug not in scanner_slug_by_mac.values():
             scanner_slug_by_mac[address] = name_slug
 
     matched_slugs = set(scanner_slug_by_mac.values())

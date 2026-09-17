@@ -1021,8 +1021,125 @@ def _suggest_scanner(placement_slug, stored_uid, candidates):
     return best if best_score >= 0.55 else None
 
 
+def _mac_tail_matches(token, mac):
+    """True when a placed slug's hex token is the tail of a MAC/uid."""
+    if not token or not mac:
+        return False
+    return str(mac).lower().replace(":", "").endswith(str(token).lower())
+
+
+def _resolve_receiver_addresses(layout, directory):
+    """Give every placed receiver its scanner ADDRESS as identity.
+
+    Receivers used to be identified by their Bermuda slug alone, which is a
+    slugified DEVICE NAME: rename the device (or let Bermuda append a MAC to
+    disambiguate it) and the placement silently unlinked, while the
+    calibration and linking views grew heuristics to guess the match back.
+    A scanner's address never changes, so it is the identity and the slug is
+    just the label.
+
+    For each receiver in ``layout`` (mutated in place):
+      - a stored ``address`` present in ``directory`` is trusted, and the
+        receiver's ``entity_id`` label is refreshed to that scanner's CURRENT
+        slug, so a rename follows through everywhere the label is shown or
+        used as a key;
+      - otherwise the address is resolved by exact slug, then by the
+        hardware token in the slug / ``scanner_uid`` against the scanners'
+        BLE address, wifi mac and unique_id; only a unique candidate that no
+        other placement already claims is taken.
+
+    Returns ``(changed, unresolved)``: whether anything was written, and the
+    slugs that could not be resolved (left as they were; slug lookups still
+    work for them).
+    """
+    changed = False
+    unresolved = []
+    if not isinstance(layout, dict) or not isinstance(directory, dict):
+        return changed, unresolved
+    claimed = set()
+    receivers = [
+        r for fl in layout.get("floor") or [] if isinstance(fl, dict)
+        for r in fl.get("receivers") or [] if isinstance(r, dict)
+    ]
+    for receiver in receivers:
+        address = receiver.get("address")
+        if isinstance(address, str) and address.lower() in directory:
+            claimed.add(address.lower())
+    for receiver in receivers:
+        slug = str(receiver.get("entity_id") or "")
+        address = receiver.get("address")
+        address = address.lower() if isinstance(address, str) else None
+        if address in directory:
+            live_slug = directory[address].get("slug")
+            if live_slug and live_slug != slug:
+                receiver["entity_id"] = live_slug
+                changed = True
+            if receiver.get("address") != address:
+                receiver["address"] = address
+                changed = True
+            continue
+        if not slug:
+            continue
+        candidates = [a for a, s in directory.items() if s.get("slug") == slug and a not in claimed]
+        if not candidates:
+            token = receiver.get("scanner_uid") or _scanner_token(slug)
+            if token:
+                candidates = [
+                    a for a, s in directory.items()
+                    if a not in claimed and (
+                        _mac_tail_matches(token, a)
+                        or _mac_tail_matches(token, s.get("address_wifi_mac"))
+                        or _mac_tail_matches(token, s.get("unique_id"))
+                        or _scanner_token(s.get("slug") or "") == token
+                    )
+                ]
+        if len(candidates) == 1:
+            found = candidates[0]
+            receiver["address"] = found
+            claimed.add(found)
+            live_slug = directory[found].get("slug")
+            if live_slug and live_slug != slug:
+                receiver["entity_id"] = live_slug
+            changed = True
+        else:
+            unresolved.append(slug)
+    return changed, unresolved
+
+
+async def async_resolve_receiver_addresses(hass) -> bool:
+    """Resolve/refresh receiver addresses against Bermuda and persist changes.
+
+    Cheap when nothing changed (a dict walk over the placements), so it runs
+    at startup and again every liveness tick: Bermuda may not have known a
+    scanner yet at boot, and a rename should be picked up within seconds.
+    """
+    directory = bermuda_source.async_get_scanner_directory(hass)
+    if not directory:
+        return False
+    layout = get_bps_data(hass)
+    if not isinstance(layout, dict):
+        return False
+    probe = copy.deepcopy(layout)
+    changed, _unresolved = _resolve_receiver_addresses(probe, directory)
+    if not changed:
+        return False
+    async with BPS_FILE_LOCK:
+        data = get_bps_data_for_edit(hass)
+        if not isinstance(data, dict):
+            return False
+        changed, unresolved = _resolve_receiver_addresses(data, directory)
+        if not changed:
+            return False
+        await save_bps_data(hass, data)
+    _LOGGER.info(
+        "Receiver identities refreshed from Bermuda (%s unresolved: %s)",
+        len(unresolved), ", ".join(unresolved) if unresolved else "none",
+    )
+    return True
+
+
 def _placed_receivers(coordinates_json):
-    """Placed receivers as (floor_name, entity_id slug, stored scanner_uid).
+    """Placed receivers as (floor_name, entity_id slug, stored scanner_uid, address).
 
     Parsed defensively: a malformed or hand-edited bpsdata.txt yields [] rather
     than raising into a caller (diagnostics must never break read_text). Each
@@ -1039,7 +1156,9 @@ def _placed_receivers(coordinates_json):
             receivers_ = fl.get("receivers")
             for rec in receivers_ if isinstance(receivers_, list) else []:
                 if isinstance(rec, dict) and isinstance(rec.get("entity_id"), str) and rec["entity_id"]:
-                    placed.append((fl.get("name"), rec["entity_id"], rec.get("scanner_uid")))
+                    address = rec.get("address")
+                    placed.append((fl.get("name"), rec["entity_id"], rec.get("scanner_uid"),
+                                   address.lower() if isinstance(address, str) else None))
     except Exception:
         return []
     return placed
@@ -1061,10 +1180,13 @@ def _scanner_diagnostics(hass, coordinates_json):
     slugs, with_reading = _scanner_slugs_and_readings(hass)
     placed = _placed_receivers(coordinates_json)
     placed_slugs = {p[1] for p in placed}
+    directory = bermuda_source.async_get_scanner_directory(hass) or {}
     # Candidates for a re-link: live scanner slugs not already correctly placed.
     free = [s for s in slugs if s not in placed_slugs]
     unmatched = []
-    for fname, slug, uid in placed:
+    for fname, slug, uid, address in placed:
+        if address and address in directory:
+            continue  # identified by address: linked whatever its label says
         if slug in slugs:
             continue  # a real sensor exists (offline is a separate concern)
         unmatched.append({
@@ -1124,10 +1246,14 @@ def _scanner_linking(hass, coordinates_json):
     placed = _placed_receivers(coordinates_json)
     placed_slugs = {p[1] for p in placed}
     rows = []
-    for fname, slug, uid in placed:
-        sensors = sorted(by_slug.get(slug, []), key=lambda s: s["device"])
+    directory = bermuda_source.async_get_scanner_directory(hass) or {}
+    for fname, slug, uid, address in placed:
+        # Identified by address: read the sensors under the scanner's CURRENT
+        # slug, so a placement whose label lags a rename still shows as linked.
+        live_slug = directory.get(address, {}).get("slug") if address else None
+        sensors = sorted(by_slug.get(live_slug or slug) or by_slug.get(slug, []), key=lambda s: s["device"])
         reporting = _reporting(sensors)
-        if not sensors:
+        if not sensors and not (address and address in directory):
             status = "unmatched"
         elif reporting:
             status = "live"
@@ -1137,6 +1263,7 @@ def _scanner_linking(hass, coordinates_json):
             "entity_id": slug,
             "floor": fname,
             "scanner_uid": uid,
+            "address": address,
             "token": _scanner_token(slug),
             "status": status,
             "sensor_count": len(sensors),
@@ -1316,6 +1443,13 @@ async def update_receiver_liveness(hass):
     A receiver no tier can resolve at all is left ONLINE (never flagged).
     """
     dom = hass.data.setdefault(DOMAIN, {})
+    # Receivers are identified by scanner address; keep the placements'
+    # addresses and labels in step with Bermuda (a rename, or a scanner
+    # Bermuda only learned about after BPS started).
+    try:
+        await async_resolve_receiver_addresses(hass)
+    except Exception as e:  # identity upkeep must never stop liveness
+        _LOGGER.debug("Receiver identity refresh failed: %s", e)
     # Tier 1's ages come straight from Bermuda's scanner set when its API
     # exposes them: one small dict, already relative to "now", no service
     # call. The dump_devices path below is the fallback for a Bermuda build
@@ -1352,6 +1486,18 @@ async def update_receiver_liveness(hass):
 
     receivers, with_reading = _scanner_slugs_and_readings(hass)
     slug_to_device, device_entities = _build_device_availability(hass)
+    # Placed receivers by address: the placement's own label is what the
+    # panel and card match on, so the offline list stays keyed by it, but
+    # the liveness lookup goes through the address when there is one.
+    directory = bermuda_source.async_get_scanner_directory(hass) or {}
+    placed_address = {}
+    layout = get_bps_data(hass)
+    if isinstance(layout, dict):
+        for fl in layout.get("floor") or []:
+            for rec in (fl.get("receivers") or []) if isinstance(fl, dict) else []:
+                if isinstance(rec, dict) and isinstance(rec.get("entity_id"), str) and isinstance(rec.get("address"), str):
+                    placed_address[rec["entity_id"]] = rec["address"].lower()
+        receivers = set(receivers) | set(placed_address)
 
     def device_online(slug):
         device_id = slug_to_device.get(slug)
@@ -1378,6 +1524,11 @@ async def update_receiver_liveness(hass):
         return False if saw_state else None
 
     def is_online(slug):
+        address = placed_address.get(slug)
+        if address and address in directory:
+            age = directory[address].get("last_seen_age")
+            if isinstance(age, (int, float)):
+                return age <= RECEIVER_OFFLINE_SECS
         age = ages.get(slug)
         if age is not None:
             return (age + elapsed) <= RECEIVER_OFFLINE_SECS
@@ -1408,14 +1559,18 @@ async def update_receiver_radii(hass, eids):
     # when Bermuda is absent or too old, in which case we scrape entities as
     # before. Fetched once per call, not per receiver.
     readings = bermuda_source.async_get_readings(hass, include_history=use_median)
+    # Address-keyed readings need no slug map and cannot drift on a rename;
+    # the slug-keyed dict remains for placements not yet resolved.
+    by_address = bermuda_source.async_get_readings_by_address(hass, include_history=use_median)
     for floor in (f for f in eids["data"]["floor"] if f["scale"] is not None):
         for receiver in floor["receivers"]:
             entity_id = "sensor." + eids["entity"] + "_distance_to_" + receiver["entity_id"]
-            reading = (
-                readings.get((eids["entity"], receiver["entity_id"]))
-                if readings is not None
-                else None
-            )
+            reading = None
+            address = receiver.get("address")
+            if by_address is not None and isinstance(address, str) and address:
+                reading = by_address.get((eids["entity"], address.lower()))
+            if reading is None and readings is not None:
+                reading = readings.get((eids["entity"], receiver["entity_id"]))
             # Per-point reliability of this reading in (0, 1]; only the
             # median estimator has a basis to rate one below 1.
             quality = 1.0
@@ -2977,6 +3132,12 @@ async def async_setup(hass, config):
         # a crash can no longer leave a 0-byte layout (issue #104).
         await migrate_legacy(hass)
         await load_bps_data(hass)
+        # One-time (and thereafter incremental) migration: identify placed
+        # receivers by scanner address rather than by slug alone.
+        try:
+            await async_resolve_receiver_addresses(hass)
+        except Exception as e:
+            _LOGGER.debug("Receiver identity migration deferred: %s", e)
         # Layout is loaded, so the history settings are readable: bring the
         # retained window back before the tracking loop starts appending.
         await restore_position_history(hass)

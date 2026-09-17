@@ -42,6 +42,7 @@ The setup panel
 - [Debugging tab](#debugging-tab) — a live view of how every receiver and beacon links to Bermuda, to untangle naming mismatches and quiet nodes.
 
 Accuracy
+- [Receivers identified by scanner address](#receivers-identified-by-scanner-address) — a renamed proxy can no longer unlink its placement.
 - [Zone stability](#zone-stability) — the published room is elected with membership, dwell and a stationary lock instead of re-tested every cycle.
 - [Nearest-receiver cap](#nearest-receiver-cap) — far receivers no longer pull the fit.
 - [Median RSSI estimator](#median-rssi-estimator-opt-in) — an opt-in, symmetric per-receiver distance from raw samples.
@@ -796,6 +797,22 @@ The full card guide (all options, per-floor behavior, labels/icons/zones,
 troubleshooting) is in the [upstream wiki](https://github.com/Hogster/BPS/wiki/Lovelace-map-card).
 
 ---
+
+## Receivers identified by scanner address
+
+A placed receiver used to be identified by its Bermuda slug alone, which is
+a slugified *device name*: rename the device, or let Bermuda append a MAC to
+disambiguate it, and the placement silently unlinked while the linking and
+calibration views guessed the match back. Each placement now also carries
+the scanner's Bluetooth **address** as its identity; the slug is just the
+label. On startup and every liveness tick BPS resolves any placement without
+an address (by exact slug, then by the hardware token in the slug against
+the scanner's BLE address, wifi MAC and unique id) and refreshes the label
+of any placement whose scanner was renamed, so the panel, the map card,
+liveness and calibration all follow the rename with nothing to re-link.
+Distances are looked up by address, with the slug kept as a fallback for a
+placement that could not be resolved (a scanner Bermuda has never seen).
+The migration is one-time and in place; nothing changes in the panel.
 
 ## Zone stability
 

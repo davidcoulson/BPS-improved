@@ -63,6 +63,7 @@ _EMPTY_CACHE = {
     "slug_map_at": 0.0, "slug_map": None,
     "snapshot_at": 0.0, "snapshot": None, "snapshot_history": False,
     "tracked_at": 0.0, "tracked": None,
+    "readings_addr_at": 0.0, "readings_addr": None, "readings_addr_history": False,
 }
 
 
@@ -513,3 +514,81 @@ def async_get_scanner_addresses_by_slug(hass) -> dict[str, str] | None:
         for address, scanner in scanners.items()
         if scanner.get("slug") and address
     }
+
+
+# --- receivers identified by scanner ADDRESS --------------------------------
+
+
+def async_get_scanner_directory(hass) -> dict[str, dict] | None:
+    """
+    ``{scanner address: {"slug", "name", "unique_id", "address_wifi_mac",
+    "last_seen_age"}}`` for every scanner Bermuda knows (the ``scanners``
+    feature), lower-cased addresses. None when unsupported.
+
+    This is the join table for placements keyed by address: a placement's
+    label (its slug) can follow a rename, its identity cannot.
+    """
+    api = _bermuda_api()
+    if api is None or "scanners" not in _features(api):
+        return None
+    scanners = api.async_get_scanners(hass)
+    if scanners is None:
+        return None
+    out = {}
+    for address, scanner in scanners.items():
+        if not address:
+            continue
+        out[str(address).lower()] = {
+            "slug": scanner.get("slug") or "",
+            "name": scanner.get("name") or "",
+            "unique_id": (scanner.get("unique_id") or "") or None,
+            "address_wifi_mac": (scanner.get("address_wifi_mac") or "") or None,
+            "last_seen_age": scanner.get("last_seen_age"),
+        }
+    return out
+
+
+def async_get_readings_by_address(hass, include_history=False) -> dict[tuple[str, str], dict] | None:
+    """
+    Current distances keyed by ``(device_prefix, scanner_address)``.
+
+    Same values as ``async_get_readings``, built straight from the tracked
+    devices' adverts with no slug map at all: the scanner address IS the key
+    Bermuda stores the advert under, so nothing here can drift when a scanner
+    is renamed. Returns None when Bermuda's API is unavailable.
+    """
+    cache = _cache_for(hass)
+    now = time.monotonic()
+    if (
+        cache is not None
+        and cache.get("readings_addr") is not None
+        and now - cache.get("readings_addr_at", 0.0) <= _READINGS_TTL
+        and (cache.get("readings_addr_history") or not include_history)
+    ):
+        return cache["readings_addr"]
+
+    snapshot = _snapshot(hass, include_history=include_history)
+    if snapshot is None:
+        return None
+    readings: dict[tuple[str, str], dict] = {}
+    for device in snapshot["devices"].values():
+        if not device.get("tracked"):
+            continue
+        prefix = device.get("slug") or ""
+        if not prefix:
+            continue
+        for address, scanner in device["scanners"].items():
+            if not address:
+                continue
+            reading = {"distance": scanner.get("distance"), "age": scanner.get("age")}
+            for key in ("ref_power", "attenuation", "rssi_offset"):
+                if key in scanner:
+                    reading[key] = scanner[key]
+            if include_history and "history" in scanner:
+                reading["history"] = scanner["history"]
+            readings[(prefix, str(address).lower())] = reading
+    if cache is not None:
+        cache["readings_addr"] = readings
+        cache["readings_addr_at"] = now
+        cache["readings_addr_history"] = bool(include_history)
+    return readings
