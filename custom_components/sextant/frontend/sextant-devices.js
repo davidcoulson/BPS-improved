@@ -380,8 +380,8 @@ class SextantDevices extends LitElement {
         <div class="wrap"><table class="compact">
           <tr><th>Device</th><th>Maker</th><th class="num">Proxies</th><th class="num">Best dBm</th><th>Seen</th><th></th></tr>
           ${candidates.slice(0, 200).map((c) => html`<tr>
-            <td><b>${c.name}</b><br><span class="muted small">${c.address}</span>${c.area_name ? html`<br><span class="muted small">${c.area_name}</span>` : nothing}</td>
-            <td>${c.kind === "tile" ? html`<span class="pill">Tile</span>` : c.kind === "ibeacon" ? html`<span class="pill">iBeacon</span>` : nothing} ${c.manufacturer || (c.kind === "device" ? html`<span class="muted">unknown</span>` : "")}</td>
+            <td><b>${c.name}</b> ${c.kind === "tile" ? html`<span class="pill">Tile</span>` : c.kind === "ibeacon" ? html`<span class="pill">iBeacon</span>` : nothing}<br><span class="muted small">${c.address}</span>${c.area_name ? html`<br><span class="muted small">${c.area_name}</span>` : nothing}</td>
+            <td>${c.manufacturer || html`<span class="muted">unknown</span>`}</td>
             <td class="num">${c.scanners}</td>
             <td class="num">${c.best_rssi ?? "—"}</td>
             <td class="small">${fmtAge(c.last_seen_age)} ago<br><span class="muted">first ${fmtAge(c.first_seen_age)}</span></td>
