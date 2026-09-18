@@ -62,6 +62,7 @@ class SextantHealth extends LitElement {
     _receivers: { state: true },
     _cal: { state: true },
     _selftest: { state: true },
+    _advice: { state: true },
     _kpi: { state: true },
     _accuracy: { state: true },
     _kpiHours: { state: true },
@@ -212,6 +213,8 @@ class SextantHealth extends LitElement {
         return html`<div class="page"><div class="cols">${this._renderCalibration()}</div></div>`;
       case "tuning":
         return html`<div class="page"><div class="cols">${this._renderKpi()}${this._renderAccuracy()}${this._renderTuning()}${this._renderHistory()}</div></div>`;
+      case "advice":
+        return html`<div class="page"><div class="cols">${this._renderAdvice()}</div></div>`;
       default:
         return html`<div class="page"><div class="cols">${this._renderReceivers()}${this._renderSelftest()}</div></div>`;
     }
@@ -341,6 +344,41 @@ class SextantHealth extends LitElement {
 
   _accPill(m) {
     return html`<span class="pill ${m < 2 ? "ok" : m < 4 ? "warn" : "bad"}">${fmtLen(m, this.hass, 2)}</span>`;
+  }
+
+  async _runAdvice() {
+    this._busy = "advice";
+    const r = await callWS(this, this.hass, { type: "sextant/advice" });
+    this._busy = null;
+    if (r) this._advice = r;
+  }
+
+  _showSpots(floor, spots) {
+    this.dispatchEvent(new CustomEvent("show-spots", { detail: { floor, spots: spots.map((s) => ({ floor, room: s.room, x: s.x, y: s.y })) }, bubbles: true, composed: true }));
+  }
+
+  _renderAdvice() {
+    const a = this._advice;
+    const issuePill = (issue) => html`<span class="pill ${issue === "ok" ? "ok" : issue === "noisy" || issue === "coverage" || issue === "one-sided" ? "warn" : "bad"}">${issue}</span>`;
+    return html`<section class="card wide">
+      <h3>Where a proxy would help</h3>
+      <p class="small muted">Every room is judged two ways: how far its proxies land from where they are placed in the self-test, and whether any point in the room has three proxies near enough and around it. Rooms come worst first. A suggested spot is on a wall, where an outlet or a switch is; <b>Show on plan</b> marks it on the Edit page.</p>
+      <div class="row">${uiButton({ label: this._busy === "advice" ? "Analysing…" : "Analyse the house", kind: "primary", disabled: this._busy === "advice", onClick: () => this._runAdvice() })}
+        ${a ? html`<span class="muted small">${a.summary.rooms} rooms · ${a.summary.to_add ? `${a.summary.to_add} proxies to add` : "nothing to add"}${Object.entries(a.summary.issues || {}).filter(([k]) => k !== "ok").map(([k, n]) => ` · ${n} ${k}`).join("")}</span>` : nothing}</div>
+      ${a?.unplaced?.length ? html`<div class="row"><b>Heard but not placed:</b>
+        ${a.unplaced.map((u) => html`<span class="chips">${u.name}${u.suggest ? html` <span class="muted small">→ ${u.suggest.room} (${u.suggest.floor})</span> ${uiButton({ label: "Show on plan", kind: "text", onClick: () => this._showSpots(u.suggest.floor, [{ room: u.suggest.room, x: u.suggest.x, y: u.suggest.y }]) })}` : nothing}</span>`)}</div>` : nothing}
+      ${a ? html`<div class="wrap"><table>
+        <tr><th>Floor</th><th>Room</th><th>Issue</th><th class="num">Proxies</th><th class="num">Median</th><th class="num">Add</th><th>What to do</th><th></th></tr>
+        ${a.rooms.map((r) => html`<tr>
+          <td>${r.floor}</td><td>${r.room}</td><td>${issuePill(r.issue)}</td>
+          <td class="num">${r.proxies}${r.solved < r.proxies ? html` <span class="muted small">(${r.solved} solved)</span>` : nothing}</td>
+          <td class="num">${r.median_m != null ? fmtLen(r.median_m, this.hass, 2) : "—"}</td>
+          <td class="num">${r.add || ""}</td>
+          <td class="small">${r.note ? r.note.replace(/[a-z0-9_]+_(rrn00|s2224|eth|shelly)[a-z0-9_]*/g, (m) => proxyName(this.data, m)) : html`<span class="muted">fine</span>`}</td>
+          <td>${r.spots?.length ? uiButton({ label: "Show on plan", kind: "text", onClick: () => this._showSpots(r.floor, r.spots.map((s) => ({ ...s, room: r.room }))) }) : nothing}</td>
+        </tr>`)}
+      </table></div>` : html`<p class="muted small">Runs the self-test (a few seconds) and reads the plan.</p>`}
+    </section>`;
   }
 
   _renderSelftest() {

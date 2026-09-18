@@ -38,6 +38,7 @@ class SextantEdit extends LitElement {
     data: { attribute: false },
     floor: { type: String },
     narrow: { type: Boolean },
+    spots: { attribute: false },   // advised proxy spots to show: [{floor, room, x, y}]
     _draft: { state: true },
     _dirty: { state: true },
     _tool: { state: true },
@@ -111,6 +112,7 @@ class SextantEdit extends LitElement {
     if (!this._map) return;
     if (changed.has("data")) this._syncDraft(!this._dirty);
     if (changed.has("floor")) this._pushFloor();
+    if (changed.has("spots") || changed.has("floor")) this._map.setSuggestions((this.spots || []).filter((s) => s.floor === this.floor).map((s) => ({ x: s.x, y: s.y, label: `add a proxy here · ${s.room}` })));
     if (changed.has("_tool")) { this._map.setTool(this._tool === "measure" || this._tool === "receiver" ? "select" : this._tool); }
   }
 

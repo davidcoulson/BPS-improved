@@ -203,6 +203,7 @@ export class SextantMap {
     this.trails = new Map();
     this.offline = new Set();
     this.marks = [];   // truth marks of the focused tracker on this floor: [{x, y, label}]
+    this.suggestions = [];  // advised proxy spots on this floor: [{x, y, label}]
     this.options = { circles: false, trails: true, fingerprint: false, grid: "off", labels: true, subzones: true, image: true, focus: null };
     this.locks = { zone: false, subzone: false, receiver: false }; // edit mode: locked kinds cannot be selected or dragged
     this.mode = "view";
@@ -250,6 +251,7 @@ export class SextantMap {
   clearTrails() { this.trails.clear(); this.invalidate(); }
   setOffline(slugs) { this.offline = new Set(slugs || []); this.invalidate(); }
   setMarks(list) { this.marks = list || []; this.invalidate(); }
+  setSuggestions(list) { this.suggestions = list || []; this.invalidate(); }
   setOptions(opts) { Object.assign(this.options, opts); this.invalidate(); }
   setMode(mode) { this.mode = mode; if (mode !== "edit") { this.draft = null; this.tool = "select"; } this.invalidate(); }
   setTool(tool) { this.tool = tool; this.draft = tool === "select" ? null : this.draft; this.invalidate(); }
@@ -532,6 +534,7 @@ export class SextantMap {
     this._drawDraft(ctx);
     if (this._snap) this._drawSnap(ctx);
     this._drawReceivers(ctx, f.receivers || []);
+    if (this.suggestions.length) this._drawSuggestions(ctx);
     if (this.mode !== "edit") { this._drawTrackers(ctx); this._drawMarks(ctx); }
     ctx.restore();
   }
@@ -690,6 +693,17 @@ export class SextantMap {
   }
 
   /** Truth marks: a pin where the user said the focused tracker really was. */
+  _drawSuggestions(ctx) {
+    // Where the Advice page says a proxy would help: a magenta ring, in both modes.
+    const k = this.view.k;
+    for (const s of this.suggestions) {
+      ctx.beginPath(); ctx.arc(s.x, s.y, 14 / k, 0, Math.PI * 2);
+      ctx.strokeStyle = "#c800b4"; ctx.lineWidth = 3 / k; ctx.setLineDash([5 / k, 4 / k]); ctx.stroke(); ctx.setLineDash([]);
+      ctx.beginPath(); ctx.arc(s.x, s.y, 4 / k, 0, Math.PI * 2); ctx.fillStyle = "#c800b4"; ctx.fill();
+      this._label(ctx, s.label || "add a proxy here", s.x, s.y - 22 / k, 11, 0.9);
+    }
+  }
+
   _drawMarks(ctx) {
     const k = this.view.k;
     for (const m of this.marks) {

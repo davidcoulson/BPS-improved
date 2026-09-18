@@ -37,6 +37,7 @@ const MODES = [
   ["proxies", "Proxies", "mdi:access-point-network"],
   ["calibration", "Calibration", "mdi:tune-vertical"],
   ["tuning", "Tuning", "mdi:chart-timeline-variant"],
+  ["advice", "Advice", "mdi:lightbulb-on-outline"],
 ];
 const FLOOR_MODES = new Set(["live", "edit", "proxies", "calibration"]);
 // Modes from before the page split (3.7.0) still stored in the browser.
@@ -53,6 +54,7 @@ export function mapUrlFor(floorName, maps) {
 
 class SextantPanel extends LitElement {
   static properties = {
+    _spots: { state: true },
     hass: { attribute: false },
     narrow: { type: Boolean },
     panel: { attribute: false },
@@ -121,6 +123,7 @@ class SextantPanel extends LitElement {
 
   _setMode(mode) {
     this._mode = mode;
+    if (mode !== "edit") this._spots = [];
     try { localStorage.setItem("sextant.mode", mode); } catch { /* private mode */ }
   }
 
@@ -163,7 +166,7 @@ class SextantPanel extends LitElement {
     if (!this._data && !this._error) return html`<div class="empty">Loading…</div>`;
     switch (this._mode) {
       case "edit":
-        return html`<sextant-edit .hass=${this.hass} .data=${this._data} .floor=${this._floor} .narrow=${this.narrow}
+        return html`<sextant-edit .hass=${this.hass} .data=${this._data} .floor=${this._floor} .narrow=${this.narrow} .spots=${this._spots || []}
                                   @layout-changed=${() => this._onLayoutChanged()} @floor-changed=${(e) => { this._floor = e.detail; }}></sextant-edit>`;
       case "trackers":
       case "bermuda":
@@ -172,8 +175,10 @@ class SextantPanel extends LitElement {
       case "proxies":
       case "calibration":
       case "tuning":
+      case "advice":
         return html`<sextant-health .hass=${this.hass} .data=${this._data} .positions=${this._positions} .floor=${this._floor} .section=${this._mode}
-                                    @layout-changed=${() => this._onLayoutChanged()}></sextant-health>`;
+                                    @layout-changed=${() => this._onLayoutChanged()}
+                                    @show-spots=${(e) => { this._spots = e.detail.spots; this._floor = e.detail.floor; this._setMode("edit"); this._spots = e.detail.spots; }}></sextant-health>`;
       default:
         return html`<sextant-live .hass=${this.hass} .data=${this._data} .positions=${this._positions} .floor=${this._floor}
                                   @layout-changed=${() => this._onLayoutChanged()} @floor-changed=${(e) => { this._floor = e.detail; }}></sextant-live>`;

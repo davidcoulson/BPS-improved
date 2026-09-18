@@ -354,3 +354,31 @@ def test_layout_save_on_a_fresh_install_takes_the_editor_layout_whole(tmp_path):
     conn = _Conn()
     run(ws.ws_layout_save(hass, conn, {"id": 10, "type": "sextant/layout/save", "layout": _layout()}))
     assert st.get_layout(hass)["floor"][0]["receivers"][0]["entity_id"] == "r0"
+
+
+def test_advice_reports_rooms_and_unplaced_scanners(tmp_path, monkeypatch):
+    from sextant import bermuda_source
+    layout = {"floor": [{"name": "F", "scale": 100.0, "subzones": [],
+                         "zones": [{"zone_id": "z1", "entity_id": "Hall", "poly": True, "cords": [{"x": 0, "y": 0}, {"x": 400, "y": 0}, {"x": 400, "y": 400}, {"x": 0, "y": 400}]},
+                                   {"zone_id": "z2", "entity_id": "Far", "poly": True, "cords": [{"x": 1200, "y": 0}, {"x": 1600, "y": 0}, {"x": 1600, "y": 400}, {"x": 1200, "y": 400}]}],
+                         "receivers": [{"entity_id": "a", "address": "aa:aa:aa:aa:aa:01", "cords": {"x": 20, "y": 20}},
+                                       {"entity_id": "b", "cords": {"x": 380, "y": 20}}, {"entity_id": "c", "cords": {"x": 200, "y": 380}}]}]}
+    hass = _hass_with_layout(tmp_path, layout)
+    monkeypatch.setattr(bermuda_source, "async_get_scanner_directory", lambda _h: {
+        "aa:aa:aa:aa:aa:01": {"slug": "a", "name": "A", "last_seen_age": 3.0},          # placed by address
+        "bb:bb:bb:bb:bb:02": {"slug": "b", "name": "B", "last_seen_age": 3.0},          # placed by slug
+        "cc:cc:cc:cc:cc:03": {"slug": "spare", "name": "Spare S3", "last_seen_age": 40.0},
+        "dd:dd:dd:dd:dd:04": {"slug": "gone", "name": "Gone", "last_seen_age": 90000.0},  # not heard for a day
+    })
+    conn = _Conn()
+    run(ws.ws_advice(hass, conn, {"id": 30, "type": "sextant/advice"}))
+    assert not conn.errors, conn.errors
+    out = conn.results[-1][1]
+    assert [u["name"] for u in out["unplaced"]] == ["Spare S3"] and out["unplaced"][0]["suggest"]["room"] == "Far"
+    rooms = {r["room"]: r for r in out["rooms"]}
+    assert rooms["Far"]["issue"] == "no proxy" and rooms["Far"]["add"] >= 1 and out["rooms"][0]["room"] == "Far"
+    assert rooms["Hall"]["proxies"] == 3 and out["summary"]["rooms"] == 2
+    # No plan at all is a clear error, not a traceback.
+    empty = _hass_with_layout(tmp_path / "empty")
+    run(ws.ws_advice(empty, conn, {"id": 31, "type": "sextant/advice"}))
+    assert conn.errors and "floor plan" in conn.errors[-1][2]

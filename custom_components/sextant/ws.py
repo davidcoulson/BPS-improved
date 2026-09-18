@@ -1036,7 +1036,47 @@ async def ws_bermuda_tiles(hass, connection, msg):
     _bermuda_result(connection, msg, None if diag is None else {"tiles": diag}, feature="tile")
 
 
+def _unplaced_scanners(hass, layout):
+    """Scanners Bermuda hears (in the last hour) that sit on no floor of the layout."""
+    placed_addresses, placed_slugs = set(), set()
+    for floor in layout.get("floor", []):
+        for r in floor.get("receivers", []):
+            if r.get("address"):
+                placed_addresses.add(str(r["address"]).lower())
+            if r.get("entity_id"):
+                placed_slugs.add(str(r["entity_id"]))
+    out = []
+    for address, info in (bermuda_source.async_get_scanner_directory(hass) or {}).items():
+        age = info.get("last_seen_age")
+        if isinstance(age, (int, float)) and age > 3600:
+            continue
+        if address in placed_addresses or (info.get("slug") and info["slug"] in placed_slugs):
+            continue
+        out.append({"slug": info.get("slug") or address, "name": info.get("name") or info.get("slug") or address, "address": address})
+    return sorted(out, key=lambda u: u["name"].lower())
+
+
+
+@websocket_api.websocket_command({vol.Required("type"): "sextant/advice"})
+@websocket_api.async_response
+async def ws_advice(hass, connection, msg):
+    """Which rooms the proxies serve worst and where a proxy would help (sextant.advice)."""
+    from .advice import advise  # noqa: PLC0415
+    from .calibration import get_calibration_state  # noqa: PLC0415
+
+    core = _core()
+    layout = get_layout(hass)
+    if not isinstance(layout, dict) or not layout.get("floor"):
+        return _error(connection, msg, "No floor plan yet: add a floor and place proxies first")
+    samples = {k: list(v) for k, v in get_calibration_state(hass).get("samples", {}).items()}
+    selftest = await hass.async_add_executor_job(core.run_selftest, hass, samples)
+    unplaced = _unplaced_scanners(hass, layout)
+    out = await hass.async_add_executor_job(advise, layout, selftest, unplaced)
+    connection.send_result(msg["id"], out)
+
+
 COMMANDS = (
+    ws_advice,
     ws_layout_get, ws_layout_save, ws_tuning_set, ws_tracker_tune,
     ws_history_index, ws_history_get, ws_history_clear,
     ws_calibration_status, ws_calibration_action, ws_selftest, ws_scanner_linking, ws_receivers, ws_beacon_links,

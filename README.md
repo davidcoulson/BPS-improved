@@ -42,7 +42,7 @@ room** when the fix sits between two.
 
 | Install | Configure | Tune | Automate |
 |---|---|---|---|
-| [Installing](docs/install.md) · [What you need](docs/install.md#what-you-need) · [Upgrading from BPS](docs/install.md#upgrading-from-bps-or-bps-improved) | [Edit](docs/edit.md) · [Trackers](docs/trackers.md) · [Bermuda](docs/bermuda.md) · [Proxies](docs/proxies.md) | [Live](docs/live.md) · [Calibration](docs/calibration.md) · [Tuning](docs/tuning.md) · [How positioning works](docs/positioning.md) | [Sensors, card, services and API](docs/automation.md) |
+| [Installing](docs/install.md) · [What you need](docs/install.md#what-you-need) · [Upgrading from BPS](docs/install.md#upgrading-from-bps-or-bps-improved) | [Edit](docs/edit.md) · [Trackers](docs/trackers.md) · [Bermuda](docs/bermuda.md) · [Proxies](docs/proxies.md) | [Live](docs/live.md) · [Calibration](docs/calibration.md) · [Tuning](docs/tuning.md) · [Advice](docs/advice.md) · [How positioning works](docs/positioning.md) | [Sensors, card, services and API](docs/automation.md) |
 
 Also [Where Sextant fits](docs/compared.md) (Bermuda, BPS, BPS-improved and
 Sextant side by side) and [Data and development](docs/development.md).
@@ -66,7 +66,7 @@ the beacon block, are in [What you need](docs/install.md#what-you-need).
 ## The panel
 
 A native Home Assistant panel at `/sextant`, no iframe and no pasted
-token, in Home Assistant's own theme and unit system. Seven pages:
+token, in Home Assistant's own theme and unit system. Eight pages:
 
 | Page | For |
 |---|---|
@@ -77,6 +77,7 @@ token, in Home Assistant's own theme and unit system. Seven pages:
 | [Proxies](docs/proxies.md) | proxy health by floor and room, what each proxy hears, the self-test |
 | [Calibration](docs/calibration.md) | proxies calibrate each other; apply into Sextant or into Bermuda |
 | [Tuning](docs/tuning.md) | the stability KPI, accuracy from truth marks, every knob live |
+| [Advice](docs/advice.md) | which rooms the proxies serve worst and where one more would help |
 
 ## What Sextant adds to Bermuda
 
