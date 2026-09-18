@@ -30,8 +30,9 @@ Tiles keep a stable ID. Ringing a Tile needs the Tile account's
 authentication and is not possible from here. Name a Tile from the
 Things page ("Kitchen keys") so the map does not show an address.
 
-**Find My accessories** (AirTags, licensed tags, AirPods and the Find My
-Siri Remote) rotate on a key schedule. Export the accessory's pairing keys
+**Find My accessories** (AirTags, licensed tags and AirPods - not the Siri
+Remote, which despite tvOS's "find my remote" is not a Find My accessory and
+needs a tag stuck to it) rotate on a key schedule. Export the accessory's pairing keys
 (`master_key`, `skn`, `sks`, `paired_at`) and paste them in the walkthrough
 on the Bermuda page; Bermuda then derives the addresses the tag can be using
 and tracks it like an IRK device. Getting those keys is the awkward part and
