@@ -25,8 +25,11 @@ removes its four Sextant sensors and its device with it; a device untracked
 while Home Assistant was down is cleaned up on the next cycle.
 
 Below is everything Bermuda hears but does not track, with the kind of
-device (iBeacon, Tile, Apple, IRK, plain address), where it is (the room of
-the loudest placed proxy) and the signal there in dBm, and for Apple
+device (iBeacon, Tile, Apple, IRK, plain address), what it appears to be
+(the Bermuda fork names families the Bluetooth SIG's lists cannot — a Govee
+sensor, a Samsung SmartTag — and says when that kind rotates its address,
+which is why some of them cannot be followed at all), where it is (the room
+of the loudest placed proxy) and the signal there in dBm, and for Apple
 adverts what they are (AirPods and accessories, an iPhone, Watch or Mac
 nearby, a Find My tag). Search by name, address, room, floor, proxy, kind
 or maker. Adverts heard only by unplaced proxies are ignored, and the

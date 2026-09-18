@@ -650,7 +650,11 @@ class SextantDevices extends LitElement {
           <tr><th>Device</th><th>Maker</th><th>Where</th><th class="num">Proxies</th><th class="num">Signal</th><th>Seen</th><th></th></tr>
           ${candidates.slice(0, 200).map((c) => { const w = this._heardWhere(c, index); return html`<tr>
             <td><b>${c.name}</b> ${c.kind === "tile" ? html`<span class="pill">Tile</span>` : c.kind === "ibeacon" ? html`<span class="pill">iBeacon</span>` : nothing}<br><span class="muted small">${c.address}</span></td>
-            <td>${c.manufacturer || html`<span class="muted">unknown</span>`}${c.apple_summary ? html`<br><span class="small muted">${c.apple_summary}</span>` : c.address_type === "bd_addr_random_resolvable" ? html`<br><span class="small muted">rotating address (IRK)</span>` : nothing}</td>
+            <td>${c.family || c.manufacturer || html`<span class="muted">unknown</span>`}
+              ${c.family && c.manufacturer && c.manufacturer !== c.family ? html`<br><span class="small muted">${c.manufacturer}</span>` : nothing}
+              ${c.apple_summary ? html`<br><span class="small muted">${c.apple_summary}</span>`
+                : c.family_rotates ? html`<br><span class="small muted" title="Its address changes, so it cannot be followed by address alone">rotating address</span>`
+                : c.address_type === "bd_addr_random_resolvable" ? html`<br><span class="small muted">rotating address (IRK)</span>` : nothing}</td>
             <td>${w ? html`${w.room || w.floor}${w.room ? html`<br><span class="muted small">${w.floor}</span>` : nothing}<br><span class="muted small">${w.proxy}</span>` : c.area_name ? html`${c.area_name}` : html`<span class="muted">—</span>`}</td>
             <td class="num" title="placed proxies hearing it">${placed.size ? placedHearing(c) : c.scanners}</td>
             <td class="num" title="strongest reading (RSSI)">${w ? w.rssi : c.best_rssi ?? "—"} dBm</td>
