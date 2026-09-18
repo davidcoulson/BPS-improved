@@ -275,6 +275,7 @@ class SextantLive extends LitElement {
     _marks: { state: true },
     _blend: { state: true },
     _optionsOpen: { state: true },
+    _mapOpen: { state: true },
   };
 
   constructor() {
@@ -291,6 +292,13 @@ class SextantLive extends LitElement {
     this._scrub = null;   // seconds, absolute
     this._icons = new Map();
     this._optionsOpen = false; // the map-options sheet, phone-width only
+    // On a phone the map starts collapsed below the tracker list - "where is
+    // everything" reads faster as text than as a floor plan on a small
+    // screen. Selecting a tracker opens it (that's when the spatial view
+    // earns its space); the list header also offers it as a plain toggle,
+    // for a look at the whole floor without focusing any one tracker.
+    // Meaningless above 720px, where the map and the list sit side by side.
+    this._mapOpen = false;
   }
 
   /** Whether this hass user may reach an admin-only page - mirrors the
@@ -317,6 +325,13 @@ class SextantLive extends LitElement {
   _select(ent) {
     if (ent !== this._selected) { this._truth = null; this._marking = false; this._blend = null; }
     this._selected = ent;
+    if (ent) {
+      this._mapOpen = true; // a phone: the map opens under this tracker's details
+      // On a phone the list (13+ rows) is taller than the space it is given
+      // and scrolls on its own; without this the detail card lands below
+      // the fold of that scroller and the tap looks like it did nothing.
+      this.updateComplete.then(() => this.renderRoot.querySelector(".card.detail")?.scrollIntoView({ block: "start", behavior: "smooth" }));
+    }
     this._map?.setOptions({ focus: ent });
     if (ent) { this._loadLinks(); this._loadMarks(ent); } else { this._links = null; this._marks = []; this._map?.setMarks([]); }
   }
@@ -490,7 +505,7 @@ class SextantLive extends LitElement {
           ${uiButton({ label: "New tracker", kind: "outline", icon: "mdi:plus-circle-outline", onClick: () => this._goto("trackers") })}
           ${uiButton({ label: "Calibrate", kind: "outline", icon: "mdi:tune-vertical", onClick: () => this._goto("calibration") })}` : nothing}
       </div>
-      <div class="stage"><canvas></canvas>
+      <div class="stage ${this._mapOpen ? "" : "collapsed"}"><canvas></canvas>
         <div class="overlay">
           <div class="chips wide-only" title="A switch and its label share a border: the word is on the right of its switch.">
             ${switches.map(([k, l, tip]) => html`<span title=${tip} class="chipwrap">${uiSwitch({ label: l, checked: !!this._options[k], onChange: (v) => this._setOption(k, v) })}</span>`)}
@@ -520,7 +535,14 @@ class SextantLive extends LitElement {
           </div>` : nothing}
       </div>
       <aside class="side">
-        <h3>Trackers <span class="muted">${rows.length}</span></h3>
+        <h3>Trackers <span class="muted">${rows.length}</span>
+          <span class="narrow-only maptoggle">${uiButton({
+            label: this._mapOpen ? "Hide map" : "Show map",
+            icon: this._mapOpen ? "mdi:map-minus" : "mdi:map-outline",
+            kind: "text",
+            onClick: () => { this._mapOpen = !this._mapOpen; },
+          })}</span>
+        </h3>
         <ul class="list">
           ${rows.map((p) => html`
             <li class=${p.ent === this._selected ? "selected" : ""} @click=${() => { this._select(p.ent === this._selected ? null : p.ent); if (p.floor && p.floor !== this.floor) this.dispatchEvent(new CustomEvent("floor-changed", { detail: p.floor })); }}>
@@ -667,10 +689,20 @@ class SextantLive extends LitElement {
        tabs. Calibration and adding a tracker are admin actions - offered
        only when this user could reach those pages at all. */
     .quick-actions button { display: flex; align-items: center; gap: 6px; }
+    .side h3 { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .maptoggle { margin-left: auto; }
     @media (max-width: 720px) {
-      :host { grid-template-columns: 1fr; grid-template-rows: auto 1fr auto; }
-      .quick-actions { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 10px; background: var(--card-background-color); border-bottom: 1px solid var(--divider-color); }
-      .side { border-left: 0; border-top: 1px solid var(--divider-color); max-height: 40vh; }
+      /* Flex, not grid: a collapsed .stage (display:none) then simply takes
+         no space, and the list gets the room back - a grid track sized for
+         it would stay reserved even once nothing is in it. The list comes
+         first ("where is everything", read as text) and the map - fixed at
+         about half the screen so it is worth looking at once open - sits
+         below it, above the selected tracker's own detail card. */
+      :host { display: flex; flex-direction: column; }
+      .quick-actions { order: 0; display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 10px; background: var(--card-background-color); border-bottom: 1px solid var(--divider-color); }
+      .side { order: 1; flex: 1 1 auto; min-height: 0; overflow: auto; border-left: 0; border-top: 1px solid var(--divider-color); max-height: none; }
+      .stage { order: 2; flex: 0 0 48vh; }
+      .stage.collapsed { display: none; }
       .wide-only { display: none; }
       .narrow-only { display: flex; }
     }
