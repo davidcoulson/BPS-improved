@@ -23,26 +23,38 @@ Assistant is lost on the next save.
 Every release runs in the author's house before it ships, which is where most
 of the odd cases in this codebase came from. It is three floors: 21 rooms and
 12 spots over a Ground Floor, a Second Floor and a Basement, with 58 placed
-proxies, a mix of ESPHome and Shelly.
+proxies. They are a mix of bare ESP boards and Shelly hardware, but the
+distinction is only in the casing: the Shellys run ESPHome too, so every
+proxy in the house speaks the same firmware.
 
 What is tracked is mostly animals, and they are the hard case. A phone sits
 on a table at chest height and stays there; a cat sleeps in a cardboard box
 under a sideboard, moves three metres in a second, and spends the evening on
 a landing that is open to the room below. The pets:
 
-| Name | | Wears |
-|---|---|---|
-| Meg | he/him, short for Megatron | iBeacon tag |
-| Socks | he/him | iBeacon tag |
-| Fry | he/him | iBeacon tag |
-| Leela | she/her | iBeacon tag |
-| Lilibet | she/her | iBeacon tag |
-| Willow | she/her | iBeacon tag |
-| Primrose | she/her, the dog | iBeacon tag |
+| Name | |
+|---|---|
+| Meg | he/him, short for Megatron |
+| Socks | he/him |
+| Fry | he/him |
+| Leela | she/her |
+| Lilibet | she/her |
+| Willow | she/her |
+| Primrose | she/her, the dog |
 
-**They all wear iBeacons.** The single tracked Tile in the layout is there to
-exercise the rotation-following code and is not on an animal, so a change that
-only works for Tiles has not been tested on anything that moves like a cat.
+**Every one of them wears the same collar tag: a
+[Holyiot beacon built on a Nordic nRF54L15](https://www.aliexpress.com/i/1005009152214994.html),
+advertising as an iBeacon.** That matters for reading any
+result from this house. One hardware model across seven animals means a
+fixed advertising interval and transmit power, and a reference power that is
+right for all of them at once - so a per-thing difference in the numbers is
+the animal, the collar's position on its neck, or the room, and not the tag.
+It also means the house cannot tell you how the code behaves with a tag that
+advertises more slowly or weakly.
+
+The single tracked Tile in the layout is there to exercise the
+rotation-following code and is not on an animal, so a change that only works
+for Tiles has not been tested on anything that moves like a cat.
 
 The phones and watches come in as Private BLE Devices by their Identity
 Resolving Key, and the Find My accessories (two AirTags, a wallet tag and

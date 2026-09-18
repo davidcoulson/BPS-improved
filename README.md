@@ -101,9 +101,10 @@ token, in Home Assistant's own theme and unit system. Eight pages:
 Sextant was written with [Claude](https://claude.ai) as a pair programmer,
 through Claude Code. Claude wrote most of the code, the tests and these
 docs. What keeps that honest is the test bed: every change runs in the
-author's house before it ships, with more than 60 Bluetooth proxies
-(ESPHome and Shelly), 16 tracked people, pets, phones, watches and Tiles,
-and 21 rooms with 12 spots across three floors. The author sets the
+author's house before it ships, with more than 60 Bluetooth proxies (bare
+ESP boards and Shellys, all running ESPHome), 21 rooms with 12 spots across
+three floors, and a tracked mix of people, phones, watches, Find My
+accessories and seven animals on iBeacon collar tags. The author sets the
 direction, watches what the things do on the real floor plan, and
 decides what ships. Expect the codebase to read the way an AI writes it:
 long comments explaining why, a consistent shape from file to file, and a
