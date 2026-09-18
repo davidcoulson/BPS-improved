@@ -391,7 +391,10 @@ class SextantEdit extends LitElement {
             <div class="row small muted">${(f.receivers || []).length} proxies · ${(f.zones || []).filter((z) => !z.no_go).length} rooms · ${(f.zones || []).filter((z) => z.no_go).length} no-go · ${(f.subzones || []).length} spots</div>
             <div class="row small muted">Level: storey number, 0 = ground, -1 = basement; orders the floor picker top-down. Bias: election prior, 1.2 = a 20 % head start every cycle.</div>
             <div class="row">
-              ${uiField({ label: "Scale (px per m)", type: "number", step: 0.01, value: f.scale ?? "", onChange: (v) => { this._snapshot(); f.scale = Number(v) || null; this._dirty = true; this.requestUpdate(); }, style: "width: 150px" })}
+              ${/* Measuring two points gives a float with a dozen decimals; a
+                    hundredth of a pixel per metre is already far finer than any
+                    measurement behind it, so show and store it rounded. */ ""}
+              ${uiField({ label: "Scale (px per m)", type: "number", step: 0.01, value: f.scale == null ? "" : Math.round(f.scale * 100) / 100, onChange: (v) => { this._snapshot(); f.scale = Number(v) || null; this._dirty = true; this.requestUpdate(); }, style: "width: 150px" })}
               ${uiField({ label: "Level", type: "number", step: 1, value: f.level ?? "", placeholder: "0", onChange: (v) => { if (v === "" || v == null) delete f.level; else f.level = Math.round(Number(v)); this._dirty = true; this.requestUpdate(); }, style: "width: 90px" })}
               ${uiField({ label: "Election bias", type: "number", step: 0.05, min: 0.25, max: 4, value: f.bias ?? "", placeholder: "1", onChange: (v) => { if (v === "" || v == null) delete f.bias; else f.bias = Number(v); this._dirty = true; this.requestUpdate(); }, style: "width: 120px" })}
               ${uiButton({ label: "Adjust rooms", disabled: this._busy, onClick: () => this._adjust("zones"), title: "Square up rooms and snap shared walls" })}
@@ -444,25 +447,43 @@ class SextantEdit extends LitElement {
         </div>
         <div class="classes">
           <div class="muted small">Takes which things? None picked means any of them. A bedside table is for a phone, a watch and keys; a cat bed is for the cat.</div>
-          <div class="classpick">
-            ${THING_CLASSES.filter(([k]) => k).map(([k, label, icon]) => {
-              const picked = (item.classes || []).includes(k);
-              // Person stands for man, woman and child; Pet for the dog and the
-              // cat. Picking the family lights its members here too, outlined
-              // rather than solid, so the spot's real reach is on the screen
-              // instead of hidden behind a tooltip.
-              const implied = !picked && (item.classes || []).some((c) => (CLASS_FAMILIES[c] || []).includes(k));
-              const title = implied ? `${label} — included by the family above` : label;
-              return html`<button class="cls ${picked ? "on" : implied ? "implied" : ""}" title=${title} aria-label=${title} aria-pressed=${picked || implied}
-                                  @click=${() => this._edit("classes", this._toggleClass(item.classes, k, !picked))}>
-                <ha-icon icon=${icon}></ha-icon>
-              </button>`;
-            })}
-          </div>
-          ${(item.classes || []).some((c) => CLASS_FAMILIES[c]) ? html`<div class="muted small">Outlined ones come with the family you picked.</div>` : nothing}
+          <div class="classpick">${this._classPicker(item)}</div>
+          <div class="muted small">A ringed group goes together: pick Person or Pet and its kinds count too, shown without the grey background.</div>
         </div>` : nothing}
       <div class="row"><span class="muted small">${(item.cords?.length ?? 1)} point(s)</span><span class="grow"></span>${uiButton({ label: "Delete", kind: "danger", onClick: () => this._deleteSelection() })}</div>
     </div>`;
+  }
+
+  /** The class icons for a spot: each family (Person with man, woman, child;
+   * Pet with the dog and the cat) inside its own dotted ring so it is obvious
+   * which icons travel together, then the rest on their own. Picking the
+   * family lights its members too, so the spot's reach is on the screen. */
+  _classPicker(item) {
+    const chosen = item.classes || [];
+    const members = new Set(Object.values(CLASS_FAMILIES).flat());
+    const byKey = Object.fromEntries(THING_CLASSES.filter(([k]) => k).map((c) => [c[0], c]));
+    const icon = (key) => {
+      const [k, label, mdi] = byKey[key];
+      const picked = chosen.includes(k);
+      const implied = !picked && chosen.some((c) => (CLASS_FAMILIES[c] || []).includes(k));
+      const title = implied ? `${label} — comes with the family` : label;
+      return html`<button class="cls ${picked ? "on" : implied ? "implied" : ""}" title=${title}
+                          aria-label=${title} aria-pressed=${picked || implied}
+                          @click=${() => this._edit("classes", this._toggleClass(chosen, k, !picked))}>
+        <ha-icon icon=${mdi}></ha-icon>
+      </button>`;
+    };
+    // The families on their own line and the rest on the next: a ring cannot
+    // break across lines, so mixing them left a ragged hole in the row.
+    return html`
+      <div class="picked-row">
+        ${Object.entries(CLASS_FAMILIES).map(([parent, kin]) => html`
+          <span class="family">${[parent, ...kin].map(icon)}</span>`)}
+      </div>
+      <div class="picked-row">
+        ${THING_CLASSES.filter(([k]) => k && !CLASS_FAMILIES[k] && !members.has(k)).map(([k]) => icon(k))}
+      </div>
+    `;
   }
 
   /** The spot's class list with `cls` added or removed; undefined when empty,
@@ -487,11 +508,16 @@ class SextantEdit extends LitElement {
     .classes { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
     /* One icon per class rather than seventeen labelled switches: picked is
        the page's own ink, the rest sit back in grey. The name is on hover. */
-    .classpick { display: flex; flex-wrap: wrap; gap: 2px; }
-    .classpick .cls { padding: 5px; border: 1px solid transparent; border-radius: 8px; background: transparent; line-height: 0; cursor: pointer; color: var(--disabled-text-color, #c4c4c4); }
-    .classpick .cls ha-icon { --mdc-icon-size: 22px; }
+    .classpick { display: flex; flex-direction: column; gap: 6px; }
+    .picked-row { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+    .family { display: inline-flex; gap: 1px; padding: 2px; border: 1.5px solid var(--divider-color); border-radius: 11px; }
+    /* Sized so both family rings sit on one line of the 320px side panel. */
+    .classpick .cls { padding: 3px; border: 1px solid transparent; border-radius: 7px; background: transparent; line-height: 0; cursor: pointer; color: var(--disabled-text-color, #c4c4c4); }
+    .classpick .cls ha-icon { --mdc-icon-size: 20px; }
     .classpick .cls.on { color: var(--primary-text-color); background: var(--secondary-background-color); border-color: var(--divider-color); }
-    .classpick .cls.implied { color: var(--secondary-text-color); border-style: dashed; border-color: var(--divider-color); }
+    /* Pulled in by a family: the same ink as a picked one, but no fill, so it
+       reads as "counts, though you did not pick it yourself". */
+    .classpick .cls.implied { color: var(--primary-text-color); background: transparent; }
     .classpick .cls:hover { border-color: var(--primary-color); }
     :host { display: grid; grid-template-columns: 1fr 320px; min-height: 0; }
     .stage { position: relative; min-width: 0; }
