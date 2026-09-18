@@ -84,6 +84,8 @@ good one a metre off. On the plan, a grey ring marks where the *other*
 floors put each pin; a pin that disagrees is joined to its ring by a red
 line, so a wrong corner shows as a long red line rather than a number. Move
 the pin to its ring's corner, or to whatever point really is straight above.
+Pins sit on corners, where proxies and walls also are, so they have their
+own padlock in the toolbar: lock them to reach a proxy underneath one.
 With fewer than five shared pins nothing can be set aside with any
 confidence, which is one more reason to place more than two.
 

@@ -181,3 +181,24 @@ def test_with_few_pins_only_one_may_be_set_aside():
     pins["SW"]["cords"]["y"] += 310
     frame = reg.solve(layout)["floors"]["Second"]
     assert frame["suspects"] == [] and frame["ok"] is False
+
+
+def test_pins_that_agree_at_the_wrong_scale_are_not_blamed_for_it():
+    """At 15 % out the floor cannot be lined up - but the report must make it
+    possible to say WHY: the pins agree with each other, the scale does not."""
+    layout = {"floor": [_floor("Ground", 0, 100.0), _floor("Second", 1, 109.0, drawn_scale=127.8)]}
+    rep = reg.report(layout)["floors"]["Second"]
+    assert rep["ok"] is False and rep["rms_m"] > 0.75          # rigid fit at the set scale: unusable
+    assert rep["agree_rms_m"] < 0.01 and rep["suspects"] == []  # the pins themselves: fine
+    assert rep["implied_scale"] == pytest.approx(109.0, abs=0.01)
+
+
+def test_a_densely_pinned_floor_keeps_the_suspect_search_cheap():
+    import time
+    many = {f"P{i}": (float(i % 10) * 2.0, float(i // 10) * 2.0) for i in range(60)}
+    layout = {"floor": [_floor("Ground", 0, 100.0, pins=many), _floor("Second", 1, 100.0, pins=many)]}
+    next(p for p in layout["floor"][1]["pins"] if p["name"] == "P7")["cords"]["x"] += 400
+    started = time.perf_counter()
+    frame = reg.solve(layout)["floors"]["Second"]
+    assert time.perf_counter() - started < 1.0
+    assert frame["suspects"] == ["P7"]                      # a single bad pin is still found

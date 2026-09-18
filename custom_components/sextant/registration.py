@@ -56,6 +56,11 @@ AGREE_RMS_M = 0.3
 # choosing the answer.
 MAX_SUSPECTS = 3
 MIN_AGREEING = 4
+# The suspect search tries every subset, which is nothing at eight pins and
+# a million fits at two hundred. Past this many pins only single suspects are
+# looked for: a floor pinned that densely has redundancy to spare, and the
+# search must stay cheap enough to run while a pin is being dragged.
+FULL_SEARCH_MAX_PINS = 16
 
 
 def _number(value) -> float | None:
@@ -166,7 +171,8 @@ def _agreeing(pairs):
 
     if len(pairs) < MIN_AGREEING + 1 or _similarity_rms(pairs)[0] <= AGREE_RMS_M:
         return pairs, []
-    for k in range(1, min(MAX_SUSPECTS, len(pairs) - MIN_AGREEING) + 1):
+    deepest = MAX_SUSPECTS if len(pairs) <= FULL_SEARCH_MAX_PINS else 1
+    for k in range(1, min(deepest, len(pairs) - MIN_AGREEING) + 1):
         best = None
         for out in combinations(range(len(pairs)), k):
             keep = [p for i, p in enumerate(pairs) if i not in out]
@@ -246,6 +252,11 @@ def solve(layout) -> dict:
                 "pins": len(pins[name]), "shared": len(pairs),
                 "rms_m": rms, "max_m": misses[worst], "worst": worst,
                 "misses": misses, "spread_m": spread, "suspects": suspects,
+                # How well the agreeing pins fit with the scale FREE. When this
+                # is small and rms_m is not, nothing is wrong with the pins:
+                # the floor's scale is, and saying "check Pin 3" would send
+                # the user hunting for a mistake they did not make.
+                "agree_rms_m": free_rms if math.isfinite(free_rms) else None,
                 # What this floor's px/m would be if the pins, not the tape
                 # measure, had set it. Offered only when at least four pins
                 # agree with the scale free: a number drawn from pins that do
@@ -298,6 +309,8 @@ def report(layout) -> dict:
         row["elevation"] = round(frame.get("elevation", 0.0), 3)
         if "rms_m" in frame:
             row["rms_m"] = round(frame["rms_m"], 3)
+            agree = frame.get("agree_rms_m")
+            row["agree_rms_m"] = None if agree is None else round(agree, 3)
             row["max_m"] = round(frame["max_m"], 3)
             row["rotation_deg"] = round(math.degrees(frame["theta"]), 2)
             row["misses"] = {pin: round(m, 3) for pin, m in frame["misses"].items()}

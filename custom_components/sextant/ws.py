@@ -780,7 +780,9 @@ async def ws_registration(hass, connection, msg):
     from . import registration  # noqa: PLC0415
 
     layout = msg.get("layout") or get_layout(hass) or {}
-    connection.send_result(msg["id"], registration.report(layout))
+    # Off the loop: the suspect search is combinatorial in the pin count, and
+    # this is called with whatever draft the editor holds, on every drag.
+    connection.send_result(msg["id"], await hass.async_add_executor_job(registration.report, layout))
 
 
 # --- KPI --------------------------------------------------------------------------

@@ -100,3 +100,25 @@ def test_describe_tells_flat_from_shaped():
     ff.paint(floor, [(0, 0), (100, 0), (100, 100), (0, 100)], 1.5)
     d = ff.describe(floor)
     assert d["flat"] is False and d["shaped_cells"] == 1 and d["max"] == 1.5 and math.isclose(d["min"], 1.0)
+
+
+def test_correcting_the_floors_scale_does_not_slide_the_painted_cells():
+    """Found in use: alignment pins showed a floor's scale was 15 % out and it
+    was corrected. The plan's pixels did not move and neither did the rooms,
+    so a cell painted under the catwalk has to stay under the catwalk."""
+    floor = {"name": "F", "scale": 127.8}
+    floor["bias_field"] = ff.flat((0, 0, 1600, 1200), 127.8)
+    catwalk = [(900, 600), (1300, 600), (1300, 900), (900, 900)]
+    assert ff.paint(floor, catwalk, 1.5) > 0
+    inside, outside = (1100, 750), (300, 300)
+    before = (ff.sample(floor, inside), ff.sample(floor, outside))
+    floor["scale"] = 107.4                                  # the correction
+    assert (ff.sample(floor, inside), ff.sample(floor, outside)) == before == (1.5, 1.0)
+    assert ff.paint(floor, catwalk, 2.0) > 0                # and painting still lands on the same cells
+    assert ff.sample(floor, inside) == 2.0 and ff.sample(floor, outside) == 1.0
+
+
+def test_a_field_laid_before_cell_px_was_recorded_still_reads():
+    legacy = {"name": "F", "scale": 100.0, "bias_field": {"cell_m": 1.0, "x0": 0, "y0": 0, "values": [[1.0, 2.0]]}}
+    assert ff.sample(legacy, (150, 50)) == 2.0
+    assert ff.flat((0, 0, 300, 200), 100.0, cell_m=0.5)["cell_px"] == 50.0

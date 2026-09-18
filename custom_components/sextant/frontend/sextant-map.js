@@ -241,7 +241,7 @@ export class SextantMap {
     this.suggestions = [];  // advised proxy spots on this floor: [{x, y, label}]
     this.options = { circles: false, trails: true, fingerprint: false, grid: "off", labels: true, subzones: true, image: true, focus: null };
     this.authFetch = host.fetch || null; // (url) => Promise<Response>, e.g. hass.fetchWithAuth
-    this.locks = { zone: false, subzone: false, receiver: false }; // edit mode: locked kinds cannot be selected or dragged
+    this.locks = { zone: false, subzone: false, receiver: false, pin: false }; // edit mode: locked kinds cannot be selected or dragged
     this.mode = "view";
     this.tool = "select";
     this.selection = null; // {kind:'receiver'|'zone'|'subzone'|'pin'|'thing', index, vertex?}
@@ -523,9 +523,10 @@ export class SextantMap {
       }
     }
     const edit = this.mode === "edit";
-    if (edit) {
+    if (edit && !this.locks.pin) {
       // Pins first: they sit on corners, where walls and proxies also are,
-      // and a pin under a proxy would otherwise be unreachable.
+      // and a pin under a proxy would otherwise be unreachable. The reverse
+      // is what the Pins padlock is for: lock them and the proxy is reachable.
       for (let i = (f.pins || []).length - 1; i >= 0; i--) {
         const q = f.pins[i].cords;
         if (q && Math.hypot(q.x - m.x, q.y - m.y) <= slop + PIN_SIZE / this.view.k) return { kind: "pin", index: i, id: f.pins[i].name };
@@ -775,6 +776,7 @@ export class SextantMap {
       const r = (selected || hovered ? PIN_SIZE * 1.3 : PIN_SIZE) / k;
       const colour = pin.miss != null && pin.miss > 0.3 ? "#d9534f" : pin.linked ? "#2e9d5b" : "#e0a54a";
       ctx.save();
+      ctx.globalAlpha = this.locks.pin ? 0.5 : 1;
       ctx.translate(pin.cords.x, pin.cords.y);
       ctx.lineCap = "round";
       for (const [stroke, width] of [["#ffffff", 5], [colour, 2.5]]) {

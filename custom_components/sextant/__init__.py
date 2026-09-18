@@ -3793,6 +3793,10 @@ def _register_calibration_services(hass) -> None:
                                 raise ValueError(f"no room or spot named {area!r} on {floor_name}. Known: {names}")
                             points = [(pt["x"], pt["y"]) for pt in shape.get("cords") or []]
                         touched = floor_field.paint(floor, points, call.data.get("value", 1.0), call.data.get("mode", "set"))
+            except (KeyError, TypeError) as err:
+                raise HomeAssistantError(
+                    f"sextant.set_floor_bias_field: {floor_name} has a room, spot or proxy without usable coordinates ({err!r})"
+                ) from err
             except ValueError as err:
                 raise HomeAssistantError(f"sextant.set_floor_bias_field: {err}") from err
             await save_layout(hass, data)

@@ -23,13 +23,18 @@ stays the global knob and the field is local relief on top of it.
 
 Stored on the floor as::
 
-    "bias_field": {"cell_m": 1.0, "x0": 120.0, "y0": 80.0,
+    "bias_field": {"cell_m": 1.0, "cell_px": 102.0, "x0": 120.0, "y0": 80.0,
                    "values": [[1.0, 1.0, ...], ...]}
 
 ``values[row][col]``; rows run down the plan (y), columns across (x). ``x0`` /
-``y0`` are the pixel position of the grid's top-left corner and ``cell_m`` is
-the cell edge in metres, converted through the floor's own scale so the grid
-means the same thing on a plan drawn at any resolution.
+``y0`` are the pixel position of the grid's top-left corner. ``cell_m`` is the
+cell edge asked for, in metres, so a grid means the same thing on a plan drawn
+at any resolution; ``cell_px`` is what that came to on the day it was laid,
+and is what the grid is actually drawn with. The distinction matters the
+moment a floor's scale is corrected: the plan's pixels do not move, the rooms
+drawn on it do not move, and a cell painted under the catwalk must stay under
+the catwalk. A grid re-derived from the new scale would slide every painted
+cell across the plan by the size of the correction.
 
 Pure Python on purpose: the grid is tens of cells a side and is touched four
 cells at a time, so there is nothing for numpy to speed up, and the module can
@@ -93,13 +98,16 @@ def parse(floor) -> dict | None:
         return None
     if not isinstance(values, list) or not 1 <= len(values) <= MAX_CELLS_PER_SIDE:
         return None
+    cell_px = _number(raw.get("cell_px"))
+    if cell_px is None or cell_px <= 0:
+        cell_px = cell_m * scale   # a field laid before cell_px was recorded
     cols = len(values[0]) if isinstance(values[0], list) else 0
     if not 1 <= cols <= MAX_CELLS_PER_SIDE:
         return None
     if any(not isinstance(row, list) or len(row) != cols for row in values):
         return None
     return {
-        "cell_px": cell_m * scale, "x0": x0, "y0": y0,
+        "cell_px": cell_px, "x0": x0, "y0": y0,
         "rows": len(values), "cols": cols, "values": values,
     }
 
@@ -159,7 +167,7 @@ def flat(bounds_px, scale, cell_m=1.0, value=1.0) -> dict:
         )
     fill = _cell_value(value)
     return {
-        "cell_m": cell_m, "x0": round(minx, 3), "y0": round(miny, 3),
+        "cell_m": cell_m, "cell_px": round(cell_px, 4), "x0": round(minx, 3), "y0": round(miny, 3),
         "values": [[fill] * cols for _ in range(rows)],
     }
 

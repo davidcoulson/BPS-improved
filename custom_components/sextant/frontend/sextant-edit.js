@@ -28,6 +28,7 @@ const LOCKS = [
   ["zone", "Rooms", "mdi:floor-plan"],
   ["subzone", "Spots", "mdi:vector-rectangle"],
   ["receiver", "Proxies", "mdi:access-point"],
+  ["pin", "Pins", "mdi:crosshairs-gps"],
 ];
 const UNDO_DEPTH = 50;
 
@@ -66,7 +67,7 @@ class SextantEdit extends LitElement {
     this._tick = 0;
     // Rooms start locked: once a floor plan is drawn it rarely changes, and a
     // slip while moving a proxy must not move a wall.
-    this._locks = { zone: true, subzone: false, receiver: false };
+    this._locks = { zone: true, subzone: false, receiver: false, pin: false };
     this._undo = [];
     this._alignment = null; // how the floors stack, graded by the backend against this draft
   }
@@ -212,6 +213,18 @@ class SextantEdit extends LitElement {
     this.requestUpdate();
   }
 
+  /** The draft as it should be stored: without the marks the map draws with.
+   * Both save paths go through here - adding a floor posts the draft too, and
+   * used to send `unmatched`, `label` and the pin marks along with it. */
+  _cleanDraft() {
+    const draft = this._draft;
+    for (const f of draft.floor) {
+      for (const r of f.receivers || []) { delete r.unmatched; delete r.label; }
+      for (const q of f.pins || []) { delete q.linked; delete q.miss; delete q.missLabel; }
+    }
+    return draft;
+  }
+
   _listFor(kind, f) { return kind === "receiver" ? f.receivers : kind === "zone" ? f.zones : kind === "pin" ? f.pins : f.subzones; }
 
   // --- tools -------------------------------------------------------------------
@@ -221,6 +234,7 @@ class SextantEdit extends LitElement {
     this._measure = null;
     if (tool !== "receiver") this._placing = null;
     if (["receiver", "measure", "pin"].includes(tool)) this._map.setTool("select");
+    if (tool === "pin" && this._locks.pin) this._setLock("pin", false);   // you are placing pins: they must be reachable
   }
 
   _onCanvasClick(e) {
@@ -353,7 +367,7 @@ class SextantEdit extends LitElement {
 
   async _addFloor(name, file) {
     if (!name || !file) return toast(this, "A floor needs a name and a map image");
-    const draft = this._draft;
+    const draft = this._cleanDraft();
     const ext = file.name.includes(".") ? file.name.slice(file.name.lastIndexOf(".")) : ".png";
     const filename = `${name}${ext}`;
     draft.floor.push({ name, scale: null, receivers: [], zones: [], subzones: [] });
@@ -389,9 +403,7 @@ class SextantEdit extends LitElement {
   }
 
   async _save(removeMap = null) {
-    const draft = this._draft;
-    for (const f of draft.floor) for (const r of f.receivers || []) { delete r.unmatched; delete r.label; }
-    for (const f of draft.floor) for (const q of f.pins || []) { delete q.linked; delete q.miss; delete q.missLabel; }
+    const draft = this._cleanDraft();
     this._busy = true;
     const r = await callWS(this, this.hass, { type: "sextant/layout/save", layout: draft, ...(removeMap ? { remove_map: removeMap } : {}) });
     this._busy = false;
@@ -503,13 +515,14 @@ class SextantEdit extends LitElement {
     if (!pins.length && !waiting.length) {
       return html`<div class="card small muted"><h4>Alignment</h4>Floors are drawn separately and nothing says how they stack. Pin two or more points that line up through the house (the Pin tool), with the same names on each floor.</div>`;
     }
-    const useScale = (px) => { this._snapshot(); f.scale = px; this._dirty = true; this._refreshAlignment(); this.requestUpdate(); toast(this, `Scale set to ${fmtScale(px, this.hass)}`); };
+    const useScale = (px) => { this._snapshot(); f.scale = px; this._dirty = true; this._refreshAlignment(); this.requestUpdate(); toast(this, `Scale set to ${fmtScale(px, this.hass)}. Save, then re-run calibration for this floor: its corrections were learned at the old scale`, 8000); };
     const off = row?.implied_scale && row.scale ? Math.abs(row.implied_scale / row.scale - 1) : 0;
     return html`<div class="card small">
       <h4>Alignment <span class="muted small">${pins.length} pin${pins.length === 1 ? "" : "s"}</span></h4>
       ${!row ? html`<div class="muted">Checking…</div>`
         : row.reference ? html`<div>This is the reference floor: the others are lined up against it.</div>`
         : row.ok ? html`${(row.suspects || []).length ? html`<div class="warn"><b>${row.suspects.join(" and ")}</b> ${row.suspects.length === 1 ? "does" : "do"} not line up with the rest (${row.suspects.map((n) => fmtLen(row.misses?.[n], this.hass, 1)).join(", ")} off) and ${row.suspects.length === 1 ? "was" : "were"} left out of the fit. Most often the corner clicked here is not above the one on the other floor: a room that is longer upstairs, a wall set in from the one below. The grey rings on the plan show where the other floors put each pin.</div>` : nothing}<div>Lined up on ${row.shared - (row.suspects || []).length} agreeing pins, typically within <b>${fmtLen(row.rms_m, this.hass, 2)}</b>${row.worst && row.max_m >= 0.05 ? html`; worst is <b>${row.worst}</b> at ${fmtLen(row.max_m, this.hass, 2)}` : nothing}${Math.abs(row.rotation_deg) >= 0.5 ? html`. This plan is turned ${fmtNum(row.rotation_deg, 1)}° against the reference` : nothing}.</div>`
+        : row.rms_m != null && row.implied_scale && row.agree_rms_m != null && row.agree_rms_m <= 0.3 ? html`<div class="warn">The pins agree with each other (within ${fmtLen(row.agree_rms_m, this.hass, 2)}) but not at this floor's scale, so the floor cannot be lined up yet. That points at the scale, not at any pin.</div>`
         : row.rms_m != null ? html`<div class="warn">The pins disagree by ${fmtLen(row.rms_m, this.hass, 2)} - too much to use. Check <b>${row.worst}</b> first (${fmtLen(row.max_m, this.hass, 2)} off), or pins that sit very close together.</div>`
         : html`<div class="muted">Not lined up yet: ${row.why}.</div>`}
       ${off >= 0.01 ? html`<div class="row">The pins fit best at <b>${fmtScale(row.implied_scale, this.hass)}</b>; this floor is set to ${fmtScale(row.scale, this.hass)} (${fmtNum(off * 100, 1)} % apart). ${uiButton({ label: "Use the pins' scale", onClick: () => useScale(row.implied_scale), title: "Set this floor's scale from its pins. Four or more well-spread pins usually beat one tape measurement" })}</div>` : nothing}
