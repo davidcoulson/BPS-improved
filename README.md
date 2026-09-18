@@ -45,7 +45,8 @@ room** when the fix sits between two.
 |---|---|---|---|
 | [Installing](docs/install.md) · [What you need](docs/install.md#what-you-need) · [Upgrading from BPS](docs/install.md#upgrading-from-bps-or-bps-improved) | [Edit](docs/edit.md) · [Things](docs/things.md) · [Bermuda](docs/bermuda.md) · [Proxies](docs/proxies.md) | [Live](docs/live.md) · [Calibration](docs/calibration.md) · [Tuning](docs/tuning.md) · [Advice](docs/advice.md) · [How positioning works](docs/positioning.md) | [Sensors, card, services and API](docs/automation.md) |
 
-Also [Where Sextant fits](docs/compared.md) (Bermuda, BPS, BPS-improved and
+Also [Hardware](docs/hardware.md) (turning outlets and switches into
+proxies, with the pin maps), [Where Sextant fits](docs/compared.md) (Bermuda, BPS, BPS-improved and
 Sextant side by side) and [Data and development](docs/development.md).
 
 ## Quick start
