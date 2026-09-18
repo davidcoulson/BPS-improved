@@ -52,6 +52,8 @@ from .calibration import (
     start_calibration,
 )
 from .storage import (
+    maps_dir,
+    migrate_maps_out_of_www,
     LAYOUT_LOCK,
     get_layout,
     get_layout_for_edit,
@@ -183,6 +185,27 @@ _ALLOWED_MAP_EXTS = {
     ".png", ".jpg", ".jpeg", ".jfif", ".jpe", ".gif", ".webp", ".bmp", ".svg", ".avif",
 }
 MAX_MAP_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB
+# Tracker icons are served from www/ (public, unauthenticated): raster
+# images only — an .svg or .html there would run script on HA's own origin.
+_ALLOWED_ICON_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+MAX_ICON_UPLOAD_BYTES = 2 * 1024 * 1024  # 2 MB
+
+
+def _is_admin_request(request) -> bool:
+    """Whether the authenticated user behind a view request is an administrator.
+
+    Home Assistant's views only check for a valid login; anything that
+    changes the layout or writes files under www/ is an administrator's job.
+    """
+    user = request.get("hass_user")
+    return bool(user is not None and getattr(user, "is_admin", False))
+
+
+def _admin_only(request):
+    """A 403 response for a non-admin caller, or None."""
+    if _is_admin_request(request):
+        return None
+    return web.Response(status=403, text="Administrators only")
 # Non-map files that live in www/sextant_maps and must never be deletable via the
 # save_text "remove" field (that field is only meant to drop an old map image).
 _PROTECTED_MAPS_FILES = {"bpsdata.txt", "sextant_calibration_state.json"}
@@ -3611,6 +3634,7 @@ async def async_setup(hass, config):
 
         if "sextant_views_registered" not in hass.data:
             hass.http.register_view(SextantFrontendView())
+            hass.http.register_view(SextantMapImageView())
             hass.http.register_view(SextantSaveAPIText())
             hass.http.register_view(SextantUploadTrackerIconAPI())
             hass.http.register_view(SextantCordsAPI(hass))
@@ -3623,7 +3647,7 @@ async def async_setup(hass, config):
         _register_websocket(hass)
 
         config_path = hass.config.path()
-        target_dir = os.path.join(config_path, "www", "sextant_maps")
+        target_dir = maps_dir(hass)
         tracker_icons_dir = os.path.join(config_path, "www", "sextant_icons")
 
         try:
@@ -3632,6 +3656,8 @@ async def async_setup(hass, config):
         except Exception as e:
             _LOGGER.error(f"Could not create the folder {target_dir}: {e}")
             return
+        # Up to 3.11.10 the images sat under www/ and were public at /local/.
+        await migrate_maps_out_of_www(hass)
 
         try:
             await aiofiles.os.makedirs(tracker_icons_dir, exist_ok=True)
@@ -3870,6 +3896,29 @@ class SextantFrontendView(HomeAssistantView):
             response.headers["Content-Type"] = "text/javascript"
         return response
 
+class SextantMapImageView(HomeAssistantView):
+    """Serve a floor-plan image to a signed-in user.
+
+    The images used to live under www/ and were fetchable by anyone who
+    could reach the port. They now live in config/sextant_maps and come
+    through here: a login is required, the name is pinned inside the folder
+    and only image extensions are served.
+    """
+
+    url = "/api/sextant/map/{file_name}"
+    name = "api:sextant:map"
+    requires_auth = True
+
+    async def get(self, request, file_name):
+        hass = request.app["hass"]
+        target = _safe_maps_child(maps_dir(hass), file_name, _ALLOWED_MAP_EXTS)
+        if target is None or not target.is_file():
+            return web.Response(status=404, text="No such map")
+        response = web.FileResponse(path=str(target))
+        response.headers["Cache-Control"] = "private, no-cache"
+        return response
+
+
 class SextantSaveAPIText(HomeAssistantView):
     """Handle saving of Sextant coordinates to a text file."""
 
@@ -3879,6 +3928,8 @@ class SextantSaveAPIText(HomeAssistantView):
 
     async def post(self, request):
         """Handle saving coordinates to a text file."""
+        if (denied := _admin_only(request)) is not None:
+            return denied
         hass = request.app["hass"]
         data = await request.post()
 
@@ -3892,7 +3943,7 @@ class SextantSaveAPIText(HomeAssistantView):
         except (ValueError, TypeError):
             return web.Response(status=400, text="Coordinates must be valid JSON")
 
-        maps_path = hass.config.path("www/sextant_maps")
+        maps_path = maps_dir(hass)
 
         try: # Persist the layout to the store + handle map upload/removal
             # Serialized with the calibration writers so read-modify-write
@@ -3905,7 +3956,13 @@ class SextantSaveAPIText(HomeAssistantView):
             # edited placements so a re-linked/added receiver starts matching
             # on the next dump instead of after the next window/solve cycle.
             refresh_receivers_from_coords(hass, coordinates)
-            _LOGGER.info(f"Saved coordinates to bpsdata: {coordinates}")
+            floors = coords_obj.get("floor", []) if isinstance(coords_obj, dict) else []
+            _LOGGER.info(
+                "Saved layout: %d floor(s), %d proxies, %d rooms",
+                len(floors),
+                sum(len(f.get("receivers") or []) for f in floors if isinstance(f, dict)),
+                sum(len(f.get("zones") or []) for f in floors if isinstance(f, dict)),
+            )
             return web.Response(status=200, text="Coordinates saved successfully")
 
         except Exception as e:
@@ -4002,6 +4059,8 @@ class SextantUploadTrackerIconAPI(HomeAssistantView):
     requires_auth = True
 
     async def post(self, request):
+        if (denied := _admin_only(request)) is not None:
+            return denied
         hass = request.app["hass"]
         data = await request.post()
         icon_file = data.get("icon")
@@ -4009,15 +4068,18 @@ class SextantUploadTrackerIconAPI(HomeAssistantView):
             return web.Response(status=400, text="Missing icon")
 
         safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", Path(icon_file.filename).name)
-        if not safe_name:
-            return web.Response(status=400, text="Invalid filename")
+        if not safe_name or Path(safe_name).suffix.lower() not in _ALLOWED_ICON_EXTS:
+            return web.Response(status=400, text="Icons must be png, jpg, webp or gif")
+        icon_bytes = icon_file.file.read()
+        if len(icon_bytes) > MAX_ICON_UPLOAD_BYTES:
+            return web.Response(status=413, text="Icon file too large (2 MB max)")
 
         icons_path = hass.config.path("www/sextant_icons")
         try:
             await aiofiles.os.makedirs(icons_path, exist_ok=True)
             target_path = Path(icons_path) / safe_name
             async with aiofiles.open(target_path, "wb") as f:
-                await f.write(icon_file.file.read())
+                await f.write(icon_bytes)
         except Exception as e:
             _LOGGER.error(f"Failed to upload tracker icon: {e}")
             return web.Response(status=500, text="Failed to upload icon")

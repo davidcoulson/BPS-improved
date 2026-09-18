@@ -12,7 +12,7 @@
 | Truth marks with their samples | `config/.storage/sextant_truth` |
 | Learned fingerprint gains, saved every five minutes so a restart starts warm | `config/.storage/sextant_fingerprint_gains` |
 | Position history, one NDJSON segment per day, pruned to the retention | `config/.storage/sextant_history/` |
-| Floor-plan images | `config/www/sextant_maps/` |
+| Floor-plan images, served only to a signed-in user via `/api/sextant/map/<file>` | `config/sextant_maps/` |
 
 Nothing under `.storage` is served over HTTP. Edit the layout from the
 panel or the services, not the file: a hand edit under a running Home

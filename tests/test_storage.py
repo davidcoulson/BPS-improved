@@ -175,7 +175,7 @@ def test_migrate_from_bps_copies_everything(tmp_path):
 
     assert st.get_layout(hass) == layout
     assert hass._store_backing["sextant_calibration_state"] == {"auto_enabled": True}
-    assert (Path(hass.config.path("www", "sextant_maps")) / "ground.png").read_bytes() == b"png"
+    assert (Path(hass.config.path("sextant_maps")) / "ground.png").read_bytes() == b"png"
     assert (Path(hass.config.path(".storage", "sextant_history")) / "primrose.jsonl").exists()
     # Copied, never moved: a rollback to bps must still find its data.
     assert hass._store_backing["bps"] == layout
@@ -187,7 +187,7 @@ def test_migrate_from_bps_never_overwrites_sextant_data(tmp_path):
     hass._store_backing["sextant"] = {"floor": [{"name": "New"}]}
     hass._store_backing["bps"] = {"floor": [{"name": "Old"}]}
     _bps_dirs(hass)
-    new_maps = Path(hass.config.path("www", "sextant_maps"))
+    new_maps = Path(hass.config.path("sextant_maps"))
     new_maps.mkdir(parents=True)
     (new_maps / "keep.png").write_bytes(b"keep")
 
@@ -205,7 +205,7 @@ def test_migrate_from_bps_is_a_noop_on_a_fresh_install(tmp_path):
     run(st.load_layout(hass))
     assert st.get_layout(hass) == []
     assert "sextant_calibration_state" not in hass._store_backing
-    assert not Path(hass.config.path("www", "sextant_maps")).exists()
+    assert not Path(hass.config.path("sextant_maps")).exists()
 
 
 def test_migrate_from_bps_survives_a_corrupt_old_store(tmp_path):
@@ -220,8 +220,33 @@ def test_migrate_from_bps_survives_a_corrupt_old_store(tmp_path):
 def test_migrate_from_bps_fills_a_target_dir_setup_already_created(tmp_path):
     hass = make_hass(tmp_path)
     _bps_dirs(hass)
-    Path(hass.config.path("www", "sextant_maps")).mkdir(parents=True)     # empty, as setup leaves it
+    Path(hass.config.path("sextant_maps")).mkdir(parents=True)     # empty, as setup leaves it
     Path(hass.config.path(".storage", "sextant_history")).mkdir(parents=True)
     run(st.migrate_from_bps(hass))
-    assert (Path(hass.config.path("www", "sextant_maps")) / "ground.png").exists()
+    assert (Path(hass.config.path("sextant_maps")) / "ground.png").exists()
     assert (Path(hass.config.path(".storage", "sextant_history")) / "primrose.jsonl").exists()
+
+
+def test_maps_move_out_of_www_and_stay_out(tmp_path):
+    """3.11.11: floor plans left www/ (public at /local/) for config/sextant_maps."""
+    hass = make_hass(tmp_path)
+    old = Path(hass.config.path("www", "sextant_maps"))
+    old.mkdir(parents=True)
+    (old / "Ground.png").write_bytes(b"old")
+    (old / "Loft.jpg").write_bytes(b"loft")
+    (old / "notes.txt").write_text("keep me")  # not an image: untouched
+    new = Path(hass.config.path("sextant_maps"))
+    new.mkdir()
+    (new / "Ground.png").write_bytes(b"new")  # already migrated copy wins
+
+    assert run(st.migrate_maps_out_of_www(hass)) == 1
+    assert (new / "Ground.png").read_bytes() == b"new"
+    assert (new / "Loft.jpg").read_bytes() == b"loft"
+    assert not (old / "Ground.png").exists() and not (old / "Loft.jpg").exists()
+    assert (old / "notes.txt").exists()  # so the old folder stays for it
+    assert run(st.migrate_maps_out_of_www(hass)) == 0  # idempotent
+
+    (old / "notes.txt").unlink()
+    assert run(st.migrate_maps_out_of_www(hass)) == 0
+    assert not old.exists()  # empty old folder removed
+    assert run(st.migrate_maps_out_of_www(hass)) == 0  # and nothing to do without it

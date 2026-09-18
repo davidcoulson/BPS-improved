@@ -93,6 +93,7 @@ class SextantEdit extends LitElement {
 
   firstUpdated() {
     this._map = new SextantMap(this.renderRoot.querySelector("canvas"), {
+      fetch: (url) => this.hass.fetchWithAuth(url),
       onSelect: (hit) => { this._selection = hit; },
       onDragStart: () => this._snapshot(),
       onChange: () => { this._dirty = true; this._tick++; this.requestUpdate(); },

@@ -36,11 +36,56 @@ def test_selftest_answers_even_with_nothing_to_solve(tmp_path):
     assert response.status == 200 and isinstance(response.json_body, dict)
 
 
-def _upload(hass, field):
-    async def post():
-        return {"icon": field} if field is not None else {}
-    request = types.SimpleNamespace(app={"hass": hass}, post=post)
+class _Request(dict):
+    """An aiohttp request stand-in: a mapping (hass_user lives there) with app and post."""
+
+    def __init__(self, hass, form, admin=True):
+        super().__init__(hass_user=types.SimpleNamespace(is_admin=admin))
+        self.app = {"hass": hass}
+        self._form = form
+
+    async def post(self):
+        return self._form
+
+
+def _upload(hass, field, admin=True):
+    request = _Request(hass, {"icon": field} if field is not None else {}, admin)
     return run(sextant.SextantUploadTrackerIconAPI().post(request))
+
+
+def test_icon_upload_is_for_admins_and_raster_images_under_2mb(tmp_path):
+    hass = _hass(tmp_path)
+    ok = types.SimpleNamespace(filename="cat.png", file=io.BytesIO(b"PNGDATA"))
+    assert _upload(hass, ok, admin=False).status == 403
+    svg = types.SimpleNamespace(filename="cat.svg", file=io.BytesIO(b"<svg onload=alert(1)/>"))
+    assert _upload(hass, svg).status == 400  # would run script on HA's own origin from /local/
+    big = types.SimpleNamespace(filename="cat.png", file=io.BytesIO(b"x" * (sextant.MAX_ICON_UPLOAD_BYTES + 1)))
+    assert _upload(hass, big).status == 413
+    assert not (tmp_path / "www" / "sextant_icons" / "cat.svg").exists()
+
+
+def test_map_image_view_serves_only_images_inside_the_maps_folder(tmp_path, monkeypatch):
+    hass = _hass(tmp_path)
+    maps = tmp_path / "sextant_maps"
+    maps.mkdir()
+    (maps / "Ground.png").write_bytes(b"PNG")
+    (tmp_path / "secrets.yaml").write_text("token: x")
+    view = sextant.SextantMapImageView()
+    request = _Request(hass, {})
+    served = []
+    monkeypatch.setattr(sextant.web, "FileResponse", lambda path: served.append(path) or types.SimpleNamespace(status=200, headers={}))
+    assert run(view.get(request, "Ground.png")).status == 200
+    assert served == [str(maps / "Ground.png")]
+    assert run(view.get(request, "missing.png")).status == 404
+    assert run(view.get(request, "../secrets.yaml")).status == 404
+    assert run(view.get(request, "secrets.yaml")).status == 404
+    assert view.requires_auth is True
+
+
+def test_save_text_is_for_admins(tmp_path):
+    hass = _hass(tmp_path)
+    request = _Request(hass, {"coordinates": "{}"}, admin=False)
+    assert run(sextant.SextantSaveAPIText().post(request)).status == 403
 
 
 def test_icon_upload_stores_a_sanitised_name_under_www(tmp_path):

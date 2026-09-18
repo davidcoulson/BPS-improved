@@ -88,7 +88,8 @@ def test_setup_and_unload_round_trip(tmp_path, monkeypatch):
     assert run(sextant.async_setup_entry(hass, entry)) is True
     assert entry.forwarded == [["sensor"]]
     assert {v.__class__.__name__ for v in hass.http.views} == {
-        "SextantFrontendView", "SextantSaveAPIText", "SextantUploadTrackerIconAPI", "SextantCordsAPI", "SextantSelfTestAPI"}
+        "SextantFrontendView", "SextantMapImageView", "SextantSaveAPIText", "SextantUploadTrackerIconAPI",
+        "SextantCordsAPI", "SextantSelfTestAPI"}
     assert sorted(name for domain, name in hass.services.registered if domain == "sextant") == _service_names()
     handlers = [n for n in dir(ws) if n.startswith("ws_")]
     assert len(hass.data["_ws_commands"]) == len(handlers) + 1  # + the subscription
@@ -97,11 +98,11 @@ def test_setup_and_unload_round_trip(tmp_path, monkeypatch):
     assert st.get_layout(hass)["floor"][0]["name"] == "F"
     assert hass.data["sextant_update_task"] is hass.tasks[-1] and not hass.tasks[-1].cancelled
     assert "homeassistant_stop" in hass.bus.listeners
-    assert (tmp_path / "www" / "sextant_maps").is_dir() and (tmp_path / "www" / "sextant_icons").is_dir()
+    assert (tmp_path / "sextant_maps").is_dir() and (tmp_path / "www" / "sextant_icons").is_dir()
 
     # A second setup on a running instance is a no-op, not a double registration.
     assert run(sextant.async_setup(hass, {})) is True
-    assert len(hass.http.views) == 5 and len(hass.data["_ws_commands"]) == len(handlers) + 1
+    assert len(hass.http.views) == 6 and len(hass.data["_ws_commands"]) == len(handlers) + 1
 
     assert run(sextant.async_unload_entry(hass, entry)) is True
     assert entry.unloaded == [["sensor"]] and len(entry.on_unload) == 1

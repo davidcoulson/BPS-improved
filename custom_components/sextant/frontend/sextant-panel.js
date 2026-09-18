@@ -40,6 +40,10 @@ const MODES = [
   ["advice", "Advice", "mdi:lightbulb-on-outline"],
 ];
 const FLOOR_MODES = new Set(["live", "edit", "proxies", "calibration"]);
+// Pages that change the layout, the trackers or Bermuda, or expose every
+// address the house hears: administrators only (the backend refuses the
+// commands too; this just keeps the tabs out of a non-admin's way).
+const ADMIN_MODES = new Set(["edit", "trackers", "bermuda", "calibration", "tuning"]);
 // Modes from before the page split (3.7.0) still stored in the browser.
 const MODE_ALIASES = { devices: "trackers", health: "proxies" };
 const REPO_URL = "https://github.com/davidcoulson/sextant";
@@ -49,7 +53,7 @@ export function mapUrlFor(floorName, maps) {
   const norm = (s) => String(s).toLowerCase().replace(/\.[a-z0-9]+$/, "").replace(/[\s_-]+/g, "");
   const want = norm(floorName);
   const hit = maps.find((m) => norm(m) === want) || maps.find((m) => norm(m).startsWith(want));
-  return hit ? `/local/sextant_maps/${encodeURIComponent(hit)}` : null;
+  return hit ? `/api/sextant/map/${encodeURIComponent(hit)}` : null;
 }
 
 class SextantPanel extends LitElement {
@@ -121,7 +125,12 @@ class SextantPanel extends LitElement {
     this._unsub.catch((e) => { this._unsub = null; this._error = `live updates: ${e?.message || e}`; });
   }
 
+  _isAdmin() { return this.hass?.user?.is_admin !== false; }
+
+  _modes() { return this._isAdmin() ? MODES : MODES.filter(([id]) => !ADMIN_MODES.has(id)); }
+
   _setMode(mode) {
+    if (!this._modes().some(([id]) => id === mode)) mode = "live";
     this._mode = mode;
     if (mode !== "edit") this._spots = [];
     try { localStorage.setItem("sextant.mode", mode); } catch { /* private mode */ }
@@ -139,7 +148,7 @@ class SextantPanel extends LitElement {
           <span class="brand-text"><span class="brand-name">Sextant</span><span class="brand-sub">Powered by Bermuda</span></span>
         </a>
         <nav class="modes" role="tablist">
-          ${MODES.map(([id, label, icon]) => html`
+          ${this._modes().map(([id, label, icon]) => html`
             <button role="tab" class=${this._mode === id ? "active" : ""} aria-selected=${this._mode === id}
                     @click=${() => this._setMode(id)} title=${label}>
               <ha-icon icon=${icon}></ha-icon><span class="mode-label">${label}</span>
@@ -252,6 +261,7 @@ class SextantLive extends LitElement {
 
   firstUpdated() {
     this._map = new SextantMap(this.renderRoot.querySelector("canvas"), {
+      fetch: (url) => this.hass.fetchWithAuth(url),
       onSelect: (hit) => { this._select(hit?.kind === "tracker" ? hit.ent : null); },
       onMapClick: (m) => this._placeMark(m),
     });

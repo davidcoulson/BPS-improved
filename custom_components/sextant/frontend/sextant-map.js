@@ -186,6 +186,19 @@ export function snapToWall(p, rooms, scale, prev) {
   return { point: p, snap: null };
 }
 
+const OBJECT_URLS = new Map(); // authenticated image path -> object URL, per page load
+
+async function resolveImageUrl(url, authFetch) {
+  if (!authFetch || !url.startsWith("/api/")) return url;
+  const cached = OBJECT_URLS.get(url);
+  if (cached) return cached;
+  const resp = await authFetch(url);
+  if (!resp.ok) throw new Error(`map image ${resp.status}`);
+  const objectUrl = URL.createObjectURL(await resp.blob());
+  OBJECT_URLS.set(url, objectUrl);
+  return objectUrl;
+}
+
 export class SextantMap {
   /**
    * @param {HTMLCanvasElement} canvas
@@ -205,6 +218,7 @@ export class SextantMap {
     this.marks = [];   // truth marks of the focused tracker on this floor: [{x, y, label}]
     this.suggestions = [];  // advised proxy spots on this floor: [{x, y, label}]
     this.options = { circles: false, trails: true, fingerprint: false, grid: "off", labels: true, subzones: true, image: true, focus: null };
+    this.authFetch = host.fetch || null; // (url) => Promise<Response>, e.g. hass.fetchWithAuth
     this.locks = { zone: false, subzone: false, receiver: false }; // edit mode: locked kinds cannot be selected or dragged
     this.mode = "view";
     this.tool = "select";
@@ -239,7 +253,10 @@ export class SextantMap {
         const img = new Image();
         img.onload = () => { if (this.imageUrl === imageUrl) { this.image = img; this._fitted = false; this.invalidate(); } };
         img.onerror = () => this.invalidate();
-        img.src = imageUrl;
+        // Floor plans come from an authenticated API path, which an <img>
+        // cannot send a token to: fetch them with the host's authenticated
+        // fetch and hand the image a local object URL instead.
+        resolveImageUrl(imageUrl, this.authFetch).then((src) => { if (this.imageUrl === imageUrl) img.src = src; }).catch(() => this.invalidate());
       }
     }
     if (changed) { this.selection = null; this.draft = null; }

@@ -44,7 +44,7 @@ def _layout():
 
 def test_layout_get_reports_layout_maps_and_tuning_spec(tmp_path):
     hass = _hass_with_layout(tmp_path, _layout())
-    maps = tmp_path / "www" / "sextant_maps"
+    maps = tmp_path / "sextant_maps"
     maps.mkdir(parents=True)
     (maps / "F.png").write_bytes(b"png")
     (maps / "notes.txt").write_text("x")
@@ -382,3 +382,17 @@ def test_advice_reports_rooms_and_unplaced_scanners(tmp_path, monkeypatch):
     empty = _hass_with_layout(tmp_path / "empty")
     run(ws.ws_advice(empty, conn, {"id": 31, "type": "sextant/advice"}))
     assert conn.errors and "floor plan" in conn.errors[-1][2]
+
+
+def test_every_write_and_bermuda_command_requires_admin():
+    """Any signed-in user can open a websocket; only administrators may change
+    the layout, tuning, trackers, history or Bermuda, or list every address
+    Bermuda hears. Readers stay open so the Live page works for everyone."""
+    admin = {f.__name__ for f in ws.COMMANDS if getattr(f, "_ws_admin", False)}
+    open_ = {f.__name__ for f in ws.COMMANDS if not getattr(f, "_ws_admin", False)}
+    assert {"ws_layout_save", "ws_tuning_set", "ws_tracker_tune", "ws_truth_mark", "ws_truth_delete",
+            "ws_truth_apply", "ws_history_clear", "ws_calibration_action", "ws_adjust_zones",
+            "ws_kpi_baseline_save", "ws_kpi_baseline_delete"} <= admin
+    assert not any(name.startswith("ws_bermuda_") for name in open_)
+    assert {"ws_layout_get", "ws_history_get", "ws_calibration_status", "ws_selftest",
+            "ws_advice", "ws_receivers", "ws_kpi"} <= open_

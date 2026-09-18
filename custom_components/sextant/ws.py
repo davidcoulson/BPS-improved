@@ -31,6 +31,7 @@ from .const import PROBE_BEACON_UUID
 from . import fingerprint as fingerprint_mod
 from . import truth as truth_mod
 from .storage import (
+    maps_dir,
     LAYOUT_LOCK, get_layout, get_layout_for_edit, get_layout_version, load_kpi_baselines, save_kpi_baselines,
     load_truth, save_truth,
     save_layout,
@@ -135,7 +136,7 @@ async def ws_layout_get(hass, connection, msg):
     core = _core()
     layout = get_layout(hass)
     layout_json = json.dumps(layout) if layout else ""
-    maps_path = hass.config.path("www/sextant_maps")
+    maps_path = maps_dir(hass)
     icons_path = hass.config.path("www/sextant_icons")
     try:
         maps = await hass.async_add_executor_job(core.list_map_files, maps_path)
@@ -225,6 +226,7 @@ def merge_editor_layout(current, incoming):
     vol.Required("layout"): dict,
     vol.Optional("remove_map"): str,
 })
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_layout_save(hass, connection, msg):
     core = _core()
@@ -238,7 +240,7 @@ async def ws_layout_save(hass, connection, msg):
     remove_target = None
     remove = msg.get("remove_map")
     if remove:
-        maps_path = hass.config.path("www/sextant_maps")
+        maps_path = maps_dir(hass)
         remove_target = core._safe_maps_child(maps_path, remove, None)
         if remove_target is None or remove_target.name in core._PROTECTED_MAPS_FILES:
             return _error(connection, msg, "invalid map to remove")
@@ -262,6 +264,7 @@ async def ws_layout_save(hass, connection, msg):
     vol.Optional("settings", default=dict): dict,
     vol.Optional("reset", default=False): bool,
 })
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_tuning_set(hass, connection, msg):
     core = _core()
@@ -284,6 +287,7 @@ async def ws_tuning_set(hass, connection, msg):
     vol.Optional("fp_weight"): vol.Any(None, vol.Coerce(float)),
     vol.Optional("color"): vol.Any(None, str),
 })
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_tracker_tune(hass, connection, msg):
     """Per-tracker settings, each applied on its own: ref-power trim (dB),
@@ -459,6 +463,7 @@ def _refresh_mark_refs(core, store):
     vol.Required("y"): vol.Coerce(float),
     vol.Optional("window_secs", default=truth_mod.DEFAULT_WINDOW_SECS): vol.Coerce(float),
 })
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_truth_mark(hass, connection, msg):
     """Record that ``entity`` is really at (x, y) on ``floor`` right now, from the
@@ -490,6 +495,7 @@ async def ws_truth_list(hass, connection, msg):
 
 
 @websocket_api.websocket_command({vol.Required("type"): "sextant/truth/delete", vol.Required("mark_id"): vol.Coerce(int)})
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_truth_delete(hass, connection, msg):
     core = _core()
@@ -502,6 +508,7 @@ async def ws_truth_delete(hass, connection, msg):
 
 
 @websocket_api.websocket_command({vol.Required("type"): "sextant/truth/evaluate", vol.Optional("entity"): str, vol.Optional("mark_id"): vol.Coerce(int)})
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_truth_evaluate(hass, connection, msg):
     """Every mark (or one tracker's, or one mark) re-solved under the settings in force
@@ -532,6 +539,7 @@ async def ws_truth_evaluate(hass, connection, msg):
     vol.Required("weight"): vol.Coerce(float),
     vol.Optional("gain", default=1.0): vol.Coerce(float),
 })
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_truth_apply(hass, connection, msg):
     """Make an evaluated row the tracker's settings: its blend weight, and the gain
@@ -605,6 +613,7 @@ async def ws_history_get(hass, connection, msg):
 
 
 @websocket_api.websocket_command({vol.Required("type"): "sextant/history/clear", vol.Optional("entity"): str})
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_history_clear(hass, connection, msg):
     core = _core()
@@ -638,6 +647,7 @@ async def ws_calibration_status(hass, connection, msg):
     vol.Optional("duration"): vol.Any(None, vol.Coerce(int)),
     vol.Optional("enabled"): bool,
 })
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_calibration_action(hass, connection, msg):
     from .calibration import async_calibration_action  # noqa: PLC0415
@@ -730,6 +740,7 @@ async def ws_receivers(hass, connection, msg):
     vol.Optional("subzones", default=list): list,
     vol.Optional("options", default=dict): dict,
 })
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_adjust_zones(hass, connection, msg):
     from .zone_adjust import adjust_subzones, adjust_zones  # noqa: PLC0415
@@ -839,6 +850,7 @@ async def ws_kpi_baselines(hass, connection, msg):
     vol.Required("name"): str,
     vol.Optional("hours", default=12.0): vol.Coerce(float),
 })
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_kpi_baseline_save(hass, connection, msg):
     """Compute the window now and keep it under ``name`` for later comparison."""
@@ -862,6 +874,7 @@ async def ws_kpi_baseline_save(hass, connection, msg):
 
 
 @websocket_api.websocket_command({vol.Required("type"): "sextant/kpi/baseline/delete", vol.Required("name"): str})
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_kpi_baseline_delete(hass, connection, msg):
     baselines = await load_kpi_baselines(hass)
@@ -882,6 +895,7 @@ def _bermuda_result(connection, msg, value, feature="device_management"):
 
 
 @websocket_api.websocket_command({vol.Required("type"): "sextant/bermuda/candidates", vol.Optional("max_age"): vol.Coerce(float)})
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_bermuda_candidates(hass, connection, msg):
     rows = bermuda_source.async_get_device_candidates(hass, max_age=msg.get("max_age"))
@@ -892,6 +906,7 @@ async def ws_bermuda_candidates(hass, connection, msg):
 
 
 @websocket_api.websocket_command({vol.Required("type"): "sextant/bermuda/tracked"})
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_bermuda_tracked(hass, connection, msg):
     tracked = bermuda_source.async_get_tracked_devices(hass)
@@ -903,6 +918,7 @@ async def ws_bermuda_tracked(hass, connection, msg):
     vol.Optional("add", default=list): [str],
     vol.Optional("remove", default=list): [str],
 })
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_bermuda_track(hass, connection, msg):
     add, remove = msg.get("add") or [], msg.get("remove") or []
@@ -930,6 +946,7 @@ def _tracked_slugs_for(hass, keys):
 
 
 @websocket_api.websocket_command({vol.Required("type"): "sextant/bermuda/findmy"})
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_bermuda_findmy(hass, connection, msg):
     rows = bermuda_source.async_get_findmy_accessories(hass)
@@ -941,6 +958,7 @@ async def ws_bermuda_findmy(hass, connection, msg):
     vol.Required("accessory_json"): str,
     vol.Optional("name"): vol.Any(None, str),
 })
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_bermuda_findmy_add(hass, connection, msg):
     try:
@@ -951,6 +969,7 @@ async def ws_bermuda_findmy_add(hass, connection, msg):
 
 
 @websocket_api.websocket_command({vol.Required("type"): "sextant/bermuda/findmy/remove", vol.Required("address"): str})
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_bermuda_findmy_remove(hass, connection, msg):
     removed = await bermuda_source.async_remove_findmy_accessory(hass, msg["address"])
@@ -958,6 +977,7 @@ async def ws_bermuda_findmy_remove(hass, connection, msg):
 
 
 @websocket_api.websocket_command({vol.Required("type"): "sextant/bermuda/options"})
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_bermuda_options(hass, connection, msg):
     options = bermuda_source.async_get_options(hass)
@@ -965,6 +985,7 @@ async def ws_bermuda_options(hass, connection, msg):
 
 
 @websocket_api.websocket_command({vol.Required("type"): "sextant/bermuda/options/set", vol.Required("options"): dict})
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_bermuda_options_set(hass, connection, msg):
     try:
@@ -975,6 +996,7 @@ async def ws_bermuda_options_set(hass, connection, msg):
 
 
 @websocket_api.websocket_command({vol.Required("type"): "sextant/bermuda/scanners"})
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_bermuda_scanners(hass, connection, msg):
     directory = bermuda_source.async_get_scanner_directory(hass)
@@ -982,6 +1004,7 @@ async def ws_bermuda_scanners(hass, connection, msg):
 
 
 @websocket_api.websocket_command({vol.Required("type"): "sextant/bermuda/tile_identities"})
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_bermuda_tile_identities(hass, connection, msg):
     """Every Tile ID Bermuda has read, with the area / loudest receiver it was last heard at."""
@@ -994,6 +1017,7 @@ async def ws_bermuda_tile_identities(hass, connection, msg):
     vol.Required("tile_id"): str,
     vol.Required("uid"): str,
 })
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_bermuda_tile_bind(hass, connection, msg):
     """Declare which Tile ID belongs to a configured Tile (the user knows which tag is on which keys)."""
@@ -1009,6 +1033,7 @@ async def ws_bermuda_tile_bind(hass, connection, msg):
     vol.Required("tile_id"): str,
     vol.Required("address"): str,
 })
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_bermuda_tile_adopt(hass, connection, msg):
     """The user points at the live Tile address a configured Tile is using now."""
@@ -1020,6 +1045,7 @@ async def ws_bermuda_tile_adopt(hass, connection, msg):
 
 
 @websocket_api.websocket_command({vol.Required("type"): "sextant/bermuda/scanner_ranging", vol.Optional("max_age"): vol.Coerce(float)})
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_bermuda_scanner_ranging(hass, connection, msg):
     """Receiver-to-receiver ranges from Bermuda: {"scanners": {tx: {rx: {distance, age, ...}}}}.
@@ -1030,6 +1056,7 @@ async def ws_bermuda_scanner_ranging(hass, connection, msg):
 
 
 @websocket_api.websocket_command({vol.Required("type"): "sextant/bermuda/tiles"})
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_bermuda_tiles(hass, connection, msg):
     diag = bermuda_source.async_get_tile_diagnostics(hass)

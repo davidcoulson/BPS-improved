@@ -22,7 +22,7 @@ function mapUrlFor(floorName, maps) {
   const norm = (s) => String(s).toLowerCase().replace(/\.[a-z0-9]+$/, "").replace(/[\s_-]+/g, "");
   const want = norm(floorName);
   const hit = maps.find((m) => norm(m) === want) || maps.find((m) => norm(m).startsWith(want));
-  return hit ? `/local/sextant_maps/${encodeURIComponent(hit)}` : null;
+  return hit ? `/api/sextant/map/${encodeURIComponent(hit)}` : null;
 }
 
 class SextantMapCard extends LitElement {
@@ -45,7 +45,7 @@ class SextantMapCard extends LitElement {
     if (changed.has("hass") && this.hass) { if (!this._data && !this._loading) this._load(); if (!this._unsub) this._subscribe(); }
     if (!this._map) {
       const canvas = this.renderRoot.querySelector("canvas");
-      if (canvas) this._map = new SextantMap(canvas, {});
+      if (canvas) this._map = new SextantMap(canvas, { fetch: (url) => this.hass.fetchWithAuth(url) });
     }
     if (this._map) this._push();
   }
@@ -75,7 +75,7 @@ class SextantMapCard extends LitElement {
   _push() {
     const layout = this._data?.layout;
     const floor = (layout?.floor || []).find((f) => f.name === this._floor) || null;
-    const url = this._config?.image || this._config?.map_file ? (this._config.image || `/local/sextant_maps/${this._config.map_file}`) : mapUrlFor(this._floor, this._data?.maps);
+    const url = this._config?.image || this._config?.map_file ? (this._config.image || `/api/sextant/map/${encodeURIComponent(this._config.map_file)}`) : mapUrlFor(this._floor, this._data?.maps);
     this._map.setFloor(floor, url);
     this._map.setOptions({ circles: !!this._config.circles, trails: !!this._config.trails, labels: this._config.labels !== false, subzones: this._config.subzones !== false, fingerprint: false });
     this._map.setOffline(this._positions?.offline_receivers || []);

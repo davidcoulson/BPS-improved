@@ -45,6 +45,63 @@ LAYOUT_LOCK = asyncio.Lock()
 LEGACY_DOMAIN = "bps"
 
 
+def maps_dir(hass) -> str:
+    """Where the floor-plan images live: ``config/sextant_maps``.
+
+    Not under ``www/``: everything there is served unauthenticated at
+    ``/local/``, and a house's floor plans are not for whoever can reach the
+    port. The panel and the card fetch them through the authenticated
+    ``/api/sextant/map/<file>`` view instead.
+    """
+    return hass.config.path("sextant_maps")
+
+
+def legacy_www_maps_dir(hass) -> str:
+    """Where the images lived up to 3.11.10 (publicly served)."""
+    return hass.config.path("www/sextant_maps")
+
+
+_MAP_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".jfif", ".jpe", ".gif", ".webp", ".bmp", ".svg", ".avif")
+
+
+async def migrate_maps_out_of_www(hass) -> int:
+    """Move floor-plan images from ``www/sextant_maps`` to ``sextant_maps``, once.
+
+    Runs every boot (a backup restore can bring the old folder back). Files
+    already present in the new folder are left alone and the old copy
+    removed; the old folder goes when it is empty. Returns how many moved.
+    """
+    old, new = legacy_www_maps_dir(hass), maps_dir(hass)
+
+    def _move() -> int:
+        if not os.path.isdir(old):
+            return 0
+        os.makedirs(new, exist_ok=True)
+        moved = 0
+        for name in os.listdir(old):
+            src = os.path.join(old, name)
+            if not os.path.isfile(src) or not name.lower().endswith(_MAP_IMAGE_EXTS):
+                continue
+            dst = os.path.join(new, name)
+            if os.path.exists(dst):
+                os.remove(src)
+            else:
+                shutil.move(src, dst)
+                moved += 1
+        if not os.listdir(old):
+            os.rmdir(old)
+        return moved
+
+    try:
+        moved = await hass.async_add_executor_job(_move)
+    except Exception as e:
+        _LOGGER.warning("Could not move floor-plan images out of www/: %s", e)
+        return 0
+    if moved:
+        _LOGGER.info("Moved %d floor-plan image(s) from www/sextant_maps to sextant_maps (no longer public)", moved)
+    return moved
+
+
 def _legacy_layout_path(hass) -> Path:
     return Path(hass.config.path("www/sextant_maps")) / "bpsdata.txt"
 
@@ -285,7 +342,7 @@ async def migrate_from_bps(hass) -> None:
     def _copy_dirs() -> list[str]:
         copied = []
         for old, new in (
-            (hass.config.path(f"www/{LEGACY_DOMAIN}_maps"), hass.config.path(f"www/{DOMAIN}_maps")),
+            (hass.config.path(f"www/{LEGACY_DOMAIN}_maps"), maps_dir(hass)),
             (hass.config.path(".storage", f"{LEGACY_DOMAIN}_history"), hass.config.path(".storage", f"{DOMAIN}_history")),
         ):
             # Setup creates the (empty) target directories before this runs,

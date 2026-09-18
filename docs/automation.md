@@ -37,8 +37,8 @@ follow: false        # switch floors with the first entity
 ```
 
 The card draws with the panel's renderer and the same subscription, so it
-shows exactly what Live shows. `image` (a URL) or `map_file` (a file under
-`/local/sextant_maps/`) overrides the floor's plan.
+shows exactly what Live shows. `image` (a URL) or `map_file` (the name of a
+file in `config/sextant_maps/`) overrides the floor's plan.
 
 ## API
 

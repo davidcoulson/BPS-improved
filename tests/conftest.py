@@ -231,6 +231,10 @@ def _install_homeassistant_stubs():
 
     # websocket_api: the decorators are pass-through, messages are plain dicts
     # a fake connection can record.
+    def _require_admin(func):
+        func._ws_admin = True  # tests assert which commands carry the gate
+        return func
+
     def _websocket_command(schema):
         def deco(func):
             func._ws_schema = schema
@@ -240,6 +244,7 @@ def _install_homeassistant_stubs():
     components.websocket_api = _module(
         "homeassistant.components.websocket_api",
         websocket_command=_websocket_command,
+        require_admin=_require_admin,
         async_response=lambda f: f,
         async_register_command=lambda hass, func: hass.data.setdefault("_ws_commands", []).append(func),
         event_message=lambda msg_id, event: {"id": msg_id, "type": "event", "event": event},

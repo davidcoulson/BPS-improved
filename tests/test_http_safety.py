@@ -156,8 +156,8 @@ def test_all_api_views_require_auth_static_stays_public():
                 api_views.append(obj)
             elif obj.url.startswith("/sextant/"):
                 static_views.append(obj)
-    # save_text, upload_tracker_icon, cords, selftest (read_text was retired: nothing used it).
-    assert len(api_views) == 4, [v.__name__ for v in api_views]
+    # save_text, upload_tracker_icon, cords, selftest, map (read_text was retired: nothing used it).
+    assert len(api_views) == 5, [v.__name__ for v in api_views]
     for v in api_views:
         assert getattr(v, "requires_auth", None) is True, f"{v.__name__} ({v.url})"
     assert static_views, "expected the static frontend view"
