@@ -20,6 +20,11 @@ SENSOR_KINDS = [
     ("sextant_floor", "Sextant Floor"),
     ("sextant_nearest_room", "Sextant Nearest Room"),
     ("sextant_spot", "Sextant Spot"),
+    # The one an automation should usually read: the spot when the thing is in
+    # one, the room when it is not. Without it every automation that wants "so
+    # where is it" has to write the same template over the two sensors above,
+    # once per thing, and get the unknown handling right each time.
+    ("sextant_location", "Sextant Location"),
 ]
 # 3.8.0 renamed zones to rooms and sub-zones to spots in the entity ids too.
 # Registry entries with the old unique_id prefixes are moved to the new ones

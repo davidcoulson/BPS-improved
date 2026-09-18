@@ -2269,6 +2269,32 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
         update_sextant_sensor_state(hass, f"sensor.{entity}_sextant_nearest_room", nearest_zone)
         update_sextant_sensor_state(hass, f"sensor.{entity}_sextant_floor", lowest_floor_name)
         update_sextant_sensor_state(hass, f"sensor.{entity}_sextant_spot", sub_zone, {"room": parent_zone})
+        update_sextant_sensor_state(hass, f"sensor.{entity}_sextant_location", *_location_state(zone, sub_zone, parent_zone, lowest_floor_name))
+
+def _location_state(zone, sub_zone, parent_zone, floor):
+    """(state, attributes) for the fused location sensor: the finest place known.
+
+    The state is the spot when the thing is in one and the room when it is
+    not, so one entity answers "where is it" at whatever resolution is
+    available. Which of the two it is matters to some automations and is not
+    recoverable from the string - "Couch" and "Office" look alike - so `kind`
+    says, and `room` is always filled in. A spot's room comes from the spot's
+    parent rather than from the elected room: they can disagree for a cycle
+    while a thing crosses a boundary, and the room containing the spot is the
+    one that matches the state being published.
+    """
+    known = sub_zone and sub_zone != "unknown"
+    room = (parent_zone if known else zone) or "unknown"
+    return (
+        (sub_zone if known else (zone or "unknown")),
+        {
+            "kind": "spot" if known else "room",
+            "room": room,
+            "spot": sub_zone if known else None,
+            "floor": floor or "unknown",
+        },
+    )
+
 
 def _solve_floor_jobs(jobs):
     """Run one thing's candidate-floor solves. Pure CPU; executor-safe.
@@ -2412,6 +2438,7 @@ async def prune_stale_positions(hass):
         update_sextant_sensor_state(hass, f"sensor.{ent}_sextant_floor", "unknown")
         update_sextant_sensor_state(hass, f"sensor.{ent}_sextant_nearest_room", "unknown")
         update_sextant_sensor_state(hass, f"sensor.{ent}_sextant_spot", "unknown", {"room": "unknown"})
+        update_sextant_sensor_state(hass, f"sensor.{ent}_sextant_location", *_location_state("unknown", "unknown", "unknown", "unknown"))
 
 async def update_apitricords(hass, new_data):
     """Update apitricords in hass.data"""
@@ -3894,7 +3921,9 @@ async def async_unload_entry(hass: HomeAssistant, entry):
         state.entity_id
         for state in hass.states.async_all()
         if state.entity_id.startswith("sensor.")
-        and state.entity_id.endswith(("_sextant_room", "_sextant_floor", "_sextant_nearest_room", "_sextant_spot"))
+        and state.entity_id.endswith(
+            ("_sextant_room", "_sextant_floor", "_sextant_nearest_room", "_sextant_spot", "_sextant_location")
+        )
     ]
     for entity_id in sextant_state_ids:
         hass.states.async_remove(entity_id)

@@ -2,15 +2,34 @@
 
 # Sensors, card, services and API
 
-Each tracked device gets four sensors under its own `<device> (Sextant)`
+Each tracked device gets five sensors under its own `<device> (Sextant)`
 device, nested beneath its Bermuda device:
 
 | Sensor | State |
 |---|---|
+| `sensor.<device>_sextant_location` | **the one to read**: the spot if it is in one, otherwise the room |
 | `sensor.<device>_sextant_floor` | the elected floor |
 | `sensor.<device>_sextant_room` | the elected room, with hysteresis and the stationary lock |
 | `sensor.<device>_sextant_nearest_room` | the nearest room on that floor, instantaneous |
 | `sensor.<device>_sextant_spot` | the spot inside the room, `unknown` when in none; attribute `room` |
+
+`_sextant_location` is the whole answer in one entity, at the finest
+resolution available: *David Bedside Table* when the watch is on the table,
+*Master Bedroom* when it is somewhere else in the room. Its attributes say
+which of the two you got and fill in the rest, so nothing needs a second
+lookup:
+
+| Attribute | Value |
+|---|---|
+| `kind` | `spot` or `room` — the state alone cannot be told apart, *Couch* and *Office* both being names |
+| `room` | always the room, whether the state is the spot or the room |
+| `spot` | the spot, or `None` |
+| `floor` | the elected floor |
+
+When the state is a spot, `room` is the room that spot belongs to rather
+than the separately elected room. The two disagree for a cycle or so while
+a thing crosses a boundary, and a spot paired with a room it is not in is
+worse than one that lags.
 
 `_sextant_nearest_room` drops to `unknown` as soon as no proxy reports a
 distance (about 30 s, Bermuda's timeout): the clean "who is home" signal.

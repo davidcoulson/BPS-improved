@@ -23,7 +23,8 @@ room** when the fix sits between two.
 - 🏠 **Automations that know who is where.** Lights that follow you from
   room to room, heating that knows the bedroom is empty, a nudge when the
   dog is on the couch again, a TV that pauses when you walk out. Every
-  tracked thing gets four sensors: floor, room, spot and nearest room.
+  tracked thing gets five sensors: where it is (spot if it is in one,
+  room if not), plus floor, room, spot and nearest room.
 - 🔧 **Set up in an afternoon.** Install from HACS, upload a floor plan,
   draw your rooms, drop your Bluetooth proxies where they sit in the house,
   choose what to track. That is all.
@@ -92,7 +93,7 @@ token, in Home Assistant's own theme and unit system. Eight pages:
   that fit it, and reports accuracy in metres.
 - Bermuda management from the panel: track, untrack, Find My accessories,
   Tiles followed across address rotation (with the fork).
-- Four sensors per thing, a map card, services and a websocket push per
+- Five sensors per thing, a map card, services and a websocket push per
   cycle. Pure numpy, no SciPy.
 
 ## AI-assisted development

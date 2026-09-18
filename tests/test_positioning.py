@@ -1589,3 +1589,51 @@ def test_boundary_jitter_well_inside_the_margin_still_holds_the_lock():
     for i, t in enumerate((40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0, 110.0, 120.0)):
         zone, locked = _elect("e", 130 if i % 2 else 95, t)
         assert (zone, locked) == ("Kitchen", True)
+
+
+# ---------------------------------------------------------------------------
+# The fused location sensor
+# ---------------------------------------------------------------------------
+
+
+def test_location_publishes_the_spot_when_there_is_one():
+    """In a spot, the state is the spot and the room is still available."""
+    state, attrs = sextant._location_state("Master Bedroom", "David Bedside Table", "Master Bedroom", "Second Floor")
+    assert state == "David Bedside Table"
+    assert attrs == {
+        "kind": "spot",
+        "room": "Master Bedroom",
+        "spot": "David Bedside Table",
+        "floor": "Second Floor",
+    }
+
+
+def test_location_falls_back_to_the_room():
+    """Out of any spot, the room is the finest answer there is."""
+    state, attrs = sextant._location_state("Kitchen", "unknown", "unknown", "Ground Floor")
+    assert state == "Kitchen"
+    assert attrs["kind"] == "room" and attrs["room"] == "Kitchen" and attrs["spot"] is None
+
+
+def test_location_takes_a_spots_room_from_its_parent():
+    """
+    A spot's room comes from the spot, not from the elected room.
+
+    The two disagree for a cycle or two while a thing crosses a boundary, and
+    publishing "Couch" with the room it is not in is worse than lagging.
+    """
+    state, attrs = sextant._location_state("Dining Room", "Couch", "Great Room", "Ground Floor")
+    assert state == "Couch" and attrs["room"] == "Great Room"
+
+
+def test_location_is_unknown_when_nothing_is_known():
+    """A thing that has gone dark reads unknown, not blank."""
+    state, attrs = sextant._location_state("unknown", "unknown", "unknown", "unknown")
+    assert state == "unknown"
+    assert attrs == {"kind": "room", "room": "unknown", "spot": None, "floor": "unknown"}
+
+
+def test_location_never_publishes_an_empty_state():
+    """Missing values must not reach the state machine as an empty string."""
+    state, attrs = sextant._location_state(None, None, None, None)
+    assert state == "unknown" and attrs["room"] == "unknown" and attrs["floor"] == "unknown"

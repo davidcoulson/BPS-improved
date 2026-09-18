@@ -75,7 +75,9 @@ def test_setup_creates_sensors_and_the_accuracy_diagnostic(tmp_path, monkeypatch
     assert hass.data["sextant_add_entities"] is add
     # Second setup: nothing is created twice, the old listener is replaced.
     run(sn.async_setup_entry(hass, None, add))
-    assert len(added) == 9 and "state_changed" in hass.bus.listeners
+    # One per kind per thing, plus the single accuracy diagnostic. Derived
+    # rather than counted, so adding a sensor kind does not fail here.
+    assert len(added) == 2 * len(sn.SENSOR_KINDS) + 1 and "state_changed" in hass.bus.listeners
 
 
 def test_setup_nests_under_the_bermuda_device_when_it_can_find_one(tmp_path, monkeypatch):
