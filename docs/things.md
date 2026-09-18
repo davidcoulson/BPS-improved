@@ -11,7 +11,7 @@ Bluetooth address stays put:
 | What | What it needs |
 |---|---|
 | A phone or watch | Its Identity Resolving Key. A phone changes its address every few minutes and only that key follows it. Paste the key here and Sextant fills in Home Assistant's own Private BLE Device form, which will only take a key it can watch resolve an address right now — so keep the phone awake and near a proxy. |
-| An AirTag or FindMy tag | Its pairing keys, which only the Mac it was paired from holds. Opens the walkthrough on the [Bermuda page](bermuda.md). |
+| An AirTag or FindMy tag | Its pairing keys, exported from the Mac it was paired from or from iCloud, depending on the macOS version. Opens the walkthrough on the [Bermuda page](bermuda.md). |
 | A Tile | A binding, on the [Bermuda page](bermuda.md), so one Tile is followed across its rotations. |
 | Anything else | Nothing. An iBeacon, a fitness band or a tag with a fixed address simply appears below once a couple of proxies hear it. |
 

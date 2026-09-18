@@ -30,13 +30,17 @@ Tiles keep a stable ID. Ringing a Tile needs the Tile account's
 authentication and is not possible from here. Name a Tile from the
 Things page ("Kitchen keys") so the map does not show an address.
 
-**Find My accessories** (AirTags and licensed tags) rotate on a key
-schedule. Export the accessory's pairing keys (`master_key`, `skn`, `sks`,
-`paired_at`, as the FindMy.py library's `FindMyAccessory.to_json()`
-produces) and paste them in the walkthrough on the Bermuda page; Bermuda
-then derives the addresses the tag can be using and tracks it like an IRK
-device. The keys live in Bermuda's config entry; treat backups and
-diagnostics accordingly.
+**Find My accessories** (AirTags, licensed tags, AirPods and the Find My
+Siri Remote) rotate on a key schedule. Export the accessory's pairing keys
+(`master_key`, `skn`, `sks`, `paired_at`) and paste them in the walkthrough
+on the Bermuda page; Bermuda then derives the addresses the tag can be using
+and tracks it like an IRK device. Getting those keys is the awkward part and
+depends on your macOS version: on 14 and earlier `tools/findmy_export.py` in
+the Bermuda fork reads them off the Mac, and on 15 and later they have to be
+exported from iCloud first, because the key that decrypts the local copies is
+no longer readable. [The walkthrough](https://github.com/davidcoulson/bermuda/blob/main/docs/findmy.md)
+has both routes. The keys live in Bermuda's config entry; treat backups and
+diagnostics accordingly, and delete the exported files once they are pasted.
 
 **Apple phones and watches** come in through Home Assistant's Private BLE
 Device integration (their IRK) and appear in Bermuda automatically. The

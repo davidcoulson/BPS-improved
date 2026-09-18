@@ -21,7 +21,7 @@ const ICON_SIZE = 192;   // the icon that is uploaded (px)
 // The iBeacon every calibration probe advertises (README, "make each probe advertise"), hex without dashes.
 const PROBE_BEACON_UUID = "fde3b1502f6443baaee9867f75ee4a6f";
 const FINDMY_KEYS = ["master_key", "skn", "sks", "paired_at"];
-const FINDMY_GUIDE = "https://github.com/malmeloo/FindMy.py";
+const FINDMY_GUIDE = "https://github.com/davidcoulson/bermuda/blob/main/docs/findmy.md";
 
 class SextantDevices extends LitElement {
   static properties = {
@@ -515,7 +515,7 @@ class SextantDevices extends LitElement {
       <div class="dialog card wide" role="dialog" aria-label="Add FindMy accessories">
         <h3>Add FindMy accessories</h3>
         <ol class="steps">
-          <li><b>Export the keys.</b> An AirTag or FindMy tag changes its address every 15 minutes on a schedule seeded when it was paired, so Bermuda needs the pairing keys, and only the Mac (or iPhone backup) they were paired from has them. Follow the key-extraction guide of <a href=${FINDMY_GUIDE} target="_blank" rel="noopener">FindMy.py</a>: it decrypts the Owned Beacons records from your Mac's keychain and prints one JSON per accessory (<code>FindMyAccessory.to_json()</code>).</li>
+          <li><b>Export the keys.</b> An AirTag or FindMy tag changes its address every 15 minutes on a schedule seeded when it was paired, so Bermuda needs the pairing keys rather than an address. Where they come from depends on your Mac: macOS 14 and earlier still keeps them on disk, and <code>tools/findmy_export.py</code> reads them; macOS 15 and later does not, so they have to come out of iCloud first. <a href=${FINDMY_GUIDE} target="_blank" rel="noopener">The walkthrough</a> has the commands for both, and what to expect from AirPods and a Siri Remote.</li>
           <li><b>Paste them here</b>, one or several, in any order. Each needs ${FINDMY_KEYS.map((k, i) => html`${i ? ", " : ""}<code>${k}</code>`)}; a name and model come along when the export had them.</li>
           <li><b>Name and add.</b> Each accessory becomes a <code>findmy_…</code> device in Bermuda; track it from the Things page once it has been seen.</li>
         </ol>
