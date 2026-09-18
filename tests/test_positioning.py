@@ -1707,6 +1707,14 @@ def test_location_takes_a_spots_room_from_its_parent():
     assert state == "Couch" and attrs["room"] == "Great Room"
 
 
+def test_a_spot_with_no_parent_room_still_reports_the_room_the_thing_is_in():
+    """A spot drawn outside every room has no parent. The thing's room is
+    still known from the election, and "unknown" would be a worse answer."""
+    for orphan in (None, "unknown", ""):
+        state, attrs = sextant._location_state("Foyer", "Shoe Rack", orphan, "Ground Floor")
+        assert state == "Shoe Rack" and attrs["kind"] == "spot" and attrs["room"] == "Foyer"
+
+
 def test_location_is_unknown_when_nothing_is_known():
     """A thing that has gone dark reads unknown, not blank."""
     state, attrs = sextant._location_state("unknown", "unknown", "unknown", "unknown")

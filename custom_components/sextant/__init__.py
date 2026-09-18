@@ -2314,7 +2314,11 @@ def _location_state(zone, sub_zone, parent_zone, floor):
     one that matches the state being published.
     """
     known = sub_zone and sub_zone != "unknown"
-    room = (parent_zone if known else zone) or "unknown"
+    # The spot's own room first; failing that (a spot drawn outside every
+    # room has no parent) the elected room, which is still a better answer
+    # than "unknown" for a thing whose room IS known.
+    parent = parent_zone if known and parent_zone and parent_zone != "unknown" else None
+    room = parent or zone or "unknown"
     return (
         (sub_zone if known else (zone or "unknown")),
         {

@@ -111,7 +111,7 @@ class SextantEdit extends LitElement {
     this._syncDraft(true);
   }
 
-  disconnectedCallback() { super.disconnectedCallback(); this._map?.destroy(); }
+  disconnectedCallback() { super.disconnectedCallback(); clearTimeout(this._alignTimer); this._map?.destroy(); }
 
   updated(changed) {
     if (!this._map) return;
@@ -148,6 +148,9 @@ class SextantEdit extends LitElement {
     this._map?.setOffline(this.data?.offline_receivers || []);
     this._map?.setSelection(null);
     this._selection = null;
+    // The last report already covers every floor: show THIS floor's rings now
+    // rather than leaving the previous floor's drawn until the next reply.
+    this._markPins();
     this._refreshAlignment();
   }
 
@@ -171,15 +174,22 @@ class SextantEdit extends LitElement {
    * while it is still being placed. Debounced: a drag fires per pixel. */
   _refreshAlignment() {
     clearTimeout(this._alignTimer);
+    // Replies can overtake each other while a pin is dragged; only the answer
+    // to the LATEST question may be shown, or the card flickers back to a
+    // grading of where the pin was half a second ago.
+    const asked = (this._alignAsked = (this._alignAsked || 0) + 1);
     this._alignTimer = setTimeout(async () => {
       const draft = this._draft;
       if (!draft || !(draft.floor || []).some((fl) => (fl.pins || []).length)) { this._alignment = null; this._markPins(); return; }
       const clean = { floor: draft.floor.map((fl) => ({ name: fl.name, scale: fl.scale, level: fl.level, elevation: fl.elevation, pins: (fl.pins || []).map((q) => ({ name: q.name, cords: q.cords })) })) };
+      let report = null;
       try {
-        this._alignment = await this.hass.callWS({ type: "sextant/registration", layout: clean });
+        report = await this.hass.callWS({ type: "sextant/registration", layout: clean });
       } catch (_e) {
-        this._alignment = null;   // an older backend: the pins still save, they just are not graded
+        report = null;   // an older backend: the pins still save, they just are not graded
       }
+      if (asked !== this._alignAsked || !this.isConnected) return;   // superseded, or the page has gone
+      this._alignment = report;
       this._markPins();
     }, 250);
   }
