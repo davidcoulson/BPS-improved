@@ -75,6 +75,21 @@ deliberately does not absorb a scale error on its own: floors that lined up
 while every distance on one of them stayed 3 % wrong would be worse than
 floors that visibly disagree.
 
+A pin on the wrong corner is the usual mistake, and an easy one: the room
+upstairs runs a few metres longer than the room under it, or its wall is set
+in from the wall below, and the "same" corner is not the same point. The fit
+looks for the smallest set of pins whose removal leaves the rest agreeing,
+sets those aside and names them, rather than letting two bad pins drag every
+good one a metre off. On the plan, a grey ring marks where the *other*
+floors put each pin; a pin that disagrees is joined to its ring by a red
+line, so a wrong corner shows as a long red line rather than a number. Move
+the pin to its ring's corner, or to whatever point really is straight above.
+With fewer than five shared pins nothing can be set aside with any
+confidence, which is one more reason to place more than two.
+
+The pins' scale is only offered when at least four pins agree with each
+other. A scale read out of pins that disagree is noise with two decimals.
+
 Pins cannot give the vertical leg. **Elevation** is how far this floor's
 finished floor sits above the ground floor's: the ceiling height below it
 plus the floor structure, usually about 30 cm (a foot). Left blank, a storey

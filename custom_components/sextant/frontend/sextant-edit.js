@@ -163,7 +163,7 @@ class SextantEdit extends LitElement {
         pin.missLabel = pin.miss == null ? null : fmtLen(pin.miss, this.hass, 2);
       }
     }
-    this._map?.invalidate();
+    this._map?.setPinGhosts(rep?.floors?.[this.floor]?.ghosts || []);
   }
 
   /** Ask the backend to grade the DRAFT, so a pin's effect on the fit shows
@@ -509,7 +509,7 @@ class SextantEdit extends LitElement {
       <h4>Alignment <span class="muted small">${pins.length} pin${pins.length === 1 ? "" : "s"}</span></h4>
       ${!row ? html`<div class="muted">Checking…</div>`
         : row.reference ? html`<div>This is the reference floor: the others are lined up against it.</div>`
-        : row.ok ? html`<div>Lined up on ${row.shared} shared pins, typically within <b>${fmtLen(row.rms_m, this.hass, 2)}</b>${row.worst && row.max_m >= 0.05 ? html`; worst is <b>${row.worst}</b> at ${fmtLen(row.max_m, this.hass, 2)}` : nothing}${Math.abs(row.rotation_deg) >= 0.5 ? html`. This plan is turned ${fmtNum(row.rotation_deg, 1)}° against the reference` : nothing}.</div>`
+        : row.ok ? html`${(row.suspects || []).length ? html`<div class="warn"><b>${row.suspects.join(" and ")}</b> ${row.suspects.length === 1 ? "does" : "do"} not line up with the rest (${row.suspects.map((n) => fmtLen(row.misses?.[n], this.hass, 1)).join(", ")} off) and ${row.suspects.length === 1 ? "was" : "were"} left out of the fit. Most often the corner clicked here is not above the one on the other floor: a room that is longer upstairs, a wall set in from the one below. The grey rings on the plan show where the other floors put each pin.</div>` : nothing}<div>Lined up on ${row.shared - (row.suspects || []).length} agreeing pins, typically within <b>${fmtLen(row.rms_m, this.hass, 2)}</b>${row.worst && row.max_m >= 0.05 ? html`; worst is <b>${row.worst}</b> at ${fmtLen(row.max_m, this.hass, 2)}` : nothing}${Math.abs(row.rotation_deg) >= 0.5 ? html`. This plan is turned ${fmtNum(row.rotation_deg, 1)}° against the reference` : nothing}.</div>`
         : row.rms_m != null ? html`<div class="warn">The pins disagree by ${fmtLen(row.rms_m, this.hass, 2)} - too much to use. Check <b>${row.worst}</b> first (${fmtLen(row.max_m, this.hass, 2)} off), or pins that sit very close together.</div>`
         : html`<div class="muted">Not lined up yet: ${row.why}.</div>`}
       ${off >= 0.01 ? html`<div class="row">The pins fit best at <b>${fmtScale(row.implied_scale, this.hass)}</b>; this floor is set to ${fmtScale(row.scale, this.hass)} (${fmtNum(off * 100, 1)} % apart). ${uiButton({ label: "Use the pins' scale", onClick: () => useScale(row.implied_scale), title: "Set this floor's scale from its pins. Four or more well-spread pins usually beat one tape measurement" })}</div>` : nothing}

@@ -125,3 +125,59 @@ def test_elevation_is_explicit_or_a_storey_per_level():
     assert reg.elevation({"level": 1}) == 3.0 and reg.elevation({"level": -1}) == -3.0
     assert reg.elevation({"level": 1, "elevation": 3.66}) == 3.66
     assert reg.elevation({"level": 1, "elevation": "tall"}) == 3.0 and reg.elevation({}) == 0.0
+
+
+def test_misplaced_pins_are_set_aside_instead_of_smeared_across_the_fit():
+    """Two pins on the wrong corner must be NAMED, and must not drag the five
+    good ones off. Plain least squares blamed a good pin and hid the bad ones."""
+    seven = {**HOUSE, "Chimney": (8.0, 2.0), "Bay": (3.0, 9.0)}
+    layout = {"floor": [_floor("Ground", 0, 100.0, pins=seven), _floor("Second", 1, 100.0, shift=(50, 80), pins=seven)]}
+    pins = {p["name"]: p for p in layout["floor"][1]["pins"]}
+    pins["SE"]["cords"]["y"] += 300      # 3 m south: the room upstairs is longer
+    pins["SW"]["cords"]["y"] += 310
+    frame = reg.solve(layout)["floors"]["Second"]
+    assert sorted(frame["suspects"]) == ["SE", "SW"]
+    assert frame["ok"] and frame["rms_m"] < 1e-6                      # the agreeing five fit perfectly
+    assert frame["misses"]["SE"] == pytest.approx(3.0, abs=1e-6)      # its real error, not a share
+    assert frame["misses"]["NW"] < 1e-6
+    rep = reg.report(layout)["floors"]
+    assert rep["Second"]["suspects"] == frame["suspects"]
+
+
+def test_a_wrong_scale_does_not_make_good_pins_into_suspects():
+    layout = {"floor": [_floor("Ground", 0, 100.0), _floor("Second", 1, 130.0, drawn_scale=112.0)]}
+    frame = reg.solve(layout)["floors"]["Second"]
+    assert frame["suspects"] == [] and frame["implied_scale"] == pytest.approx(130.0, rel=1e-6)
+
+
+def test_the_pins_scale_is_not_offered_when_the_pins_do_not_agree():
+    """Every pin off in a different direction: no small set explains it, so
+    nothing is set aside - and no scale may be read out of the mess."""
+    layout = {"floor": [_floor("Ground", 0, 100.0), _floor("Second", 1, 100.0)]}
+    for pin, (dx, dy) in zip(layout["floor"][1]["pins"], ((90, 0), (-80, 60), (0, -110), (70, 90), (-100, -40))):
+        pin["cords"]["x"] += dx; pin["cords"]["y"] += dy
+    frame = reg.solve(layout)["floors"]["Second"]
+    assert frame["suspects"] == [] and frame["implied_scale"] is None and frame["ok"] is False
+
+
+def test_ghosts_put_the_other_floors_pins_on_this_floors_plan():
+    layout = {"floor": [_floor("Ground", 0, 100.0), _floor("Second", 1, 125.0, shift=(40, 10))]}
+    next(p for p in layout["floor"][1]["pins"] if p["name"] == "NE")["cords"]["x"] += 250   # 2 m east upstairs
+    rep = reg.report(layout)["floors"]
+    on_ground = {g["name"]: g for g in rep["Ground"]["ghosts"]}
+    assert on_ground["NW"]["floor"] == "Second"
+    assert (on_ground["NW"]["x"], on_ground["NW"]["y"]) == pytest.approx((0, 0), abs=0.2)
+    assert on_ground["NE"]["x"] == pytest.approx(1200 + 200, abs=0.2)     # 2 m east of the real corner, in ground px
+    upstairs = {g["name"]: g for g in rep["Second"]["ghosts"]}
+    assert (upstairs["NE"]["x"], upstairs["NE"]["y"]) == pytest.approx((12 * 125 + 40, 10), abs=0.2)  # where it SHOULD be
+
+
+def test_with_few_pins_only_one_may_be_set_aside():
+    """Five pins, two bad: setting both aside would leave three, too few to
+    call the rest an agreement. It must say the floor disagrees, not guess."""
+    layout = {"floor": [_floor("Ground", 0, 100.0), _floor("Second", 1, 100.0)]}
+    pins = {p["name"]: p for p in layout["floor"][1]["pins"]}
+    pins["SE"]["cords"]["y"] += 300
+    pins["SW"]["cords"]["y"] += 310
+    frame = reg.solve(layout)["floors"]["Second"]
+    assert frame["suspects"] == [] and frame["ok"] is False

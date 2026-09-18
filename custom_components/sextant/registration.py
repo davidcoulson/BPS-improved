@@ -47,6 +47,15 @@ MIN_SHARED_PINS = 2
 # not be used for anything. Generous: a plan traced from a photo is off by
 # tens of centimetres and is still far better than no registration at all.
 USABLE_RMS_M = 0.75
+# A set of pins "agrees" when a free-scale fit leaves them within this. Tighter
+# than USABLE_RMS_M because it is judged with the scale free: what is left is
+# then pure placement error, and corners clicked on a plan land within ~20 cm.
+AGREE_RMS_M = 0.3
+# Pins that may be set aside as misplaced, and how many must remain to trust
+# the rest. Setting aside more than this is not finding outliers, it is
+# choosing the answer.
+MAX_SUSPECTS = 3
+MIN_AGREEING = 4
 
 
 def _number(value) -> float | None:
@@ -116,6 +125,60 @@ def _fit_rigid(pairs):
     return theta, tx, ty, misses, implied, math.sqrt(spread / n)
 
 
+def _similarity_rms(pairs):
+    """RMS miss (m) with rotation, shift AND scale free; and that scale."""
+    n = len(pairs)
+    lcx = sum(p[1][0] for p in pairs) / n
+    lcy = sum(p[1][1] for p in pairs) / n
+    hcx = sum(p[2][0] for p in pairs) / n
+    hcy = sum(p[2][1] for p in pairs) / n
+    dot = cross = spread = 0.0
+    for _name, (lx, ly), (hx, hy) in pairs:
+        ax, ay, bx, by = lx - lcx, ly - lcy, hx - hcx, hy - hcy
+        dot += ax * bx + ay * by
+        cross += ax * by - ay * bx
+        spread += ax * ax + ay * ay
+    if spread <= 1e-6:
+        return float("inf"), None
+    theta = math.atan2(cross, dot)
+    cos_t, sin_t = math.cos(theta), math.sin(theta)
+    s = (dot * cos_t + cross * sin_t) / spread
+    total = 0.0
+    for _name, (lx, ly), (hx, hy) in pairs:
+        ax, ay = lx - lcx, ly - lcy
+        px, py = s * (cos_t * ax - sin_t * ay) + hcx, s * (sin_t * ax + cos_t * ay) + hcy
+        total += (px - hx) ** 2 + (py - hy) ** 2
+    return math.sqrt(total / n), s
+
+
+def _agreeing(pairs):
+    """Split pins into the ones that agree with each other and the suspects.
+
+    Least squares has no notion of a wrong pin: two pins on the wrong corner
+    drag the whole fit toward themselves, every pin ends up missing by a metre,
+    and the one reported "worst" is as likely a good pin as a bad one. So
+    before fitting, look for the smallest set of pins whose removal leaves the
+    rest in agreement - judged with the scale free, so that a wrong floor
+    scale (which is a property of the floor, not of any pin) cannot make good
+    pins look bad. Seven pins is a few dozen subsets; nothing here is slow.
+    """
+    from itertools import combinations  # noqa: PLC0415
+
+    if len(pairs) < MIN_AGREEING + 1 or _similarity_rms(pairs)[0] <= AGREE_RMS_M:
+        return pairs, []
+    for k in range(1, min(MAX_SUSPECTS, len(pairs) - MIN_AGREEING) + 1):
+        best = None
+        for out in combinations(range(len(pairs)), k):
+            keep = [p for i, p in enumerate(pairs) if i not in out]
+            rms = _similarity_rms(keep)[0]
+            if best is None or rms < best[0]:
+                best = (rms, out)
+        if best[0] <= AGREE_RMS_M:
+            return ([p for i, p in enumerate(pairs) if i not in best[1]],
+                    [pairs[i][0] for i in best[1]])
+    return pairs, []   # no small set explains it: the floor as a whole disagrees
+
+
 def solve(layout) -> dict:
     """Register every floor that can be. See ``report`` for the shape.
 
@@ -145,7 +208,11 @@ def solve(layout) -> dict:
         "pins": len(pins[ref_name]), "shared": len(pins[ref_name]),
         "rms_m": 0.0, "max_m": 0.0, "worst": None, "misses": {}, "implied_scale": None,
     }}
-    house: dict[str, list[tuple[float, float]]] = {n: [p] for n, p in pins[ref_name].items()}
+    # A pin's house position is set ONCE, by the floor nearest the reference
+    # that carries it. Averaging it over every floor that has it sounds fairer
+    # and is wrong: one badly scaled floor then shifts the target every other
+    # floor is fitted to, and the basement's answer changes with the attic's.
+    house: dict[str, tuple[float, float]] = dict(pins[ref_name])
 
     progress = True
     while progress:
@@ -154,31 +221,39 @@ def solve(layout) -> dict:
             name = f.get("name")
             if name in frames:
                 continue
-            pairs = [
-                (pin, local, (sum(h[0] for h in house[pin]) / len(house[pin]),
-                              sum(h[1] for h in house[pin]) / len(house[pin])))
-                for pin, local in pins[name].items() if pin in house
-            ]
+            pairs = [(pin, local, house[pin]) for pin, local in pins[name].items() if pin in house]
             if len(pairs) < MIN_SHARED_PINS:
                 continue
-            theta, tx, ty, misses, implied, spread = _fit_rigid(pairs)
-            rms = math.sqrt(sum(m * m for m in misses.values()) / len(misses))
+            agreeing, suspects = _agreeing(pairs)
+            theta, tx, ty, _m, _implied, spread = _fit_rigid(agreeing)
+            cos_t, sin_t = math.cos(theta), math.sin(theta)
+            # Every pin's miss against the fit the AGREEING pins made, so a
+            # misplaced pin shows its real error instead of a share of it.
+            misses = {
+                pin: math.hypot(cos_t * lx - sin_t * ly + tx - hx, sin_t * lx + cos_t * ly + ty - hy)
+                for pin, (lx, ly), (hx, hy) in pairs
+            }
+            used = {pin for pin, _l, _h in agreeing}
+            rms = math.sqrt(sum(m * m for pin, m in misses.items() if pin in used) / len(used))
             worst = max(misses, key=misses.get)
             scale = float(f["scale"])
+            free_rms, free_s = _similarity_rms(agreeing)
+            implied = free_s if free_rms <= AGREE_RMS_M and len(agreeing) >= MIN_AGREEING else None
             frames[name] = {
                 "ok": rms <= USABLE_RMS_M and spread >= 1.0,
                 "reference": False, "theta": theta, "tx": tx, "ty": ty,
                 "scale": scale, "elevation": elevation(f),
                 "pins": len(pins[name]), "shared": len(pairs),
                 "rms_m": rms, "max_m": misses[worst], "worst": worst,
-                "misses": misses, "spread_m": spread,
+                "misses": misses, "spread_m": spread, "suspects": suspects,
                 # What this floor's px/m would be if the pins, not the tape
-                # measure, had set it. Only meaningful with pins well apart.
+                # measure, had set it. Offered only when at least four pins
+                # agree with the scale free: a number drawn from pins that do
+                # not agree is noise with two decimal places.
                 "implied_scale": scale / implied if implied and spread >= 2.0 and implied > 0 else None,
             }
-            cos_t, sin_t = math.cos(theta), math.sin(theta)
             for pin, (lx, ly) in pins[name].items():
-                house.setdefault(pin, []).append((cos_t * lx - sin_t * ly + tx, sin_t * lx + cos_t * ly + ty))
+                house.setdefault(pin, (cos_t * lx - sin_t * ly + tx, sin_t * lx + cos_t * ly + ty))
             progress = True
 
     for f in floors:
@@ -219,7 +294,7 @@ def report(layout) -> dict:
     solved = solve(layout)
     floors = {}
     for name, frame in solved["floors"].items():
-        row = {k: frame.get(k) for k in ("ok", "reference", "pins", "shared", "why", "worst")}
+        row = {k: frame.get(k) for k in ("ok", "reference", "pins", "shared", "why", "worst", "suspects")}
         row["elevation"] = round(frame.get("elevation", 0.0), 3)
         if "rms_m" in frame:
             row["rms_m"] = round(frame["rms_m"], 3)
@@ -230,5 +305,21 @@ def report(layout) -> dict:
             row["implied_scale"] = None if implied is None else round(implied, 2)
             row["scale"] = round(frame["scale"], 2)
         floors[name] = row
+    # Where every OTHER floor says each pin is, drawn onto this floor's plan:
+    # the overlay that shows at a glance which pin is on the wrong corner.
+    by_name = {f.get("name"): f for f in (layout.get("floor") if isinstance(layout, dict) else None) or [] if isinstance(f, dict)}
+    for name, frame in solved["floors"].items():
+        if not frame.get("ok"):
+            continue
+        ghosts = []
+        for other, other_frame in solved["floors"].items():
+            if other == name or not other_frame.get("ok"):
+                continue
+            scale = other_frame["scale"]
+            for pin, (lx, ly) in floor_pins(by_name[other]).items():
+                at = to_house(other_frame, lx * scale, ly * scale)
+                here = from_house(frame, *at)
+                ghosts.append({"name": pin, "floor": other, "x": round(here[0], 1), "y": round(here[1], 1)})
+        floors[name]["ghosts"] = ghosts
     lonely = sorted(pin for pin, on in solved["pins"].items() if len(on) < 2)
     return {"reference": solved["reference"], "floors": floors, "pins": solved["pins"], "unlinked": lonely}

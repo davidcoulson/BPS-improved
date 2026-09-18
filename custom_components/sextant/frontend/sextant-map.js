@@ -244,7 +244,8 @@ export class SextantMap {
     this.locks = { zone: false, subzone: false, receiver: false }; // edit mode: locked kinds cannot be selected or dragged
     this.mode = "view";
     this.tool = "select";
-    this.selection = null; // {kind:'receiver'|'zone'|'subzone'|'thing', index, vertex?}
+    this.selection = null; // {kind:'receiver'|'zone'|'subzone'|'pin'|'thing', index, vertex?}
+    this.pinGhosts = [];
     this.hover = null;
     this.draft = null; // points of a polygon being drawn
     this.view = { k: 1, tx: 0, ty: 0 };
@@ -740,8 +741,33 @@ export class SextantMap {
    * and not as one more proxy. Green when the same name exists on another
    * floor, amber while it is still on its own, red when the fit says this
    * pin disagrees with the others (`miss`, metres, set by the editor). */
+  /** Where the other floors say this floor's pins are, in this floor's px. */
+  setPinGhosts(ghosts) { this.pinGhosts = ghosts || []; this.invalidate(); }
+
   _drawPins(ctx, pins) {
     const k = this.view.k;
+    // Ghosts first, under the pins: a hollow ring where another floor puts the
+    // same pin, tied to this floor's pin by a red line when they disagree. A
+    // pin on the wrong corner is then a long red line, visible from across
+    // the plan, instead of a number in a side panel.
+    const byName = new Map(pins.filter((q) => q.cords).map((q) => [q.name, q]));
+    const loud = 0.3 * (this.floor?.scale || 100);   // 30 cm in this floor's px
+    for (const g of this.pinGhosts || []) {
+      const mine = byName.get(g.name);
+      const gap = mine ? Math.hypot(mine.cords.x - g.x, mine.cords.y - g.y) : 0;
+      ctx.save();
+      if (mine && gap > loud) {
+        ctx.strokeStyle = "#d9534f"; ctx.lineWidth = 2.5 / k; ctx.setLineDash([6 / k, 4 / k]);
+        ctx.beginPath(); ctx.moveTo(mine.cords.x, mine.cords.y); ctx.lineTo(g.x, g.y); ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 4 / k;
+      ctx.beginPath(); ctx.arc(g.x, g.y, (PIN_SIZE * 0.8) / k, 0, Math.PI * 2); ctx.stroke();
+      ctx.strokeStyle = gap > loud ? "#d9534f" : "#7a8a99"; ctx.lineWidth = 1.8 / k;
+      ctx.beginPath(); ctx.arc(g.x, g.y, (PIN_SIZE * 0.8) / k, 0, Math.PI * 2); ctx.stroke();
+      ctx.restore();
+      if (this.options.labels && (!mine || gap > loud)) this._label(ctx, `${g.name} on ${g.floor}`, g.x, g.y + (PIN_SIZE + 10) / k, 10, 0.75);
+    }
     pins.forEach((pin, index) => {
       if (!pin.cords) return;
       const selected = this.selection && this.selection.kind === "pin" && this.selection.index === index;
