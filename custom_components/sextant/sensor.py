@@ -26,6 +26,16 @@ SENSOR_KINDS = [
     # once per thing, and get the unknown handling right each time.
     ("sextant_location", "Sextant Location"),
 ]
+# What a sensor's attributes read before it has ever been published, keyed by
+# kind. A thing that has never been heard still has its entities, and an
+# automation reading state_attr(..., "kind") on one should get the same shape it
+# will get later rather than None - "unknown" is an answer, a missing attribute
+# is a bug in whatever reads it.
+INITIAL_ATTRS = {
+    "sextant_location": {"kind": "room", "room": "unknown", "spot": None, "floor": "unknown"},
+    "sextant_spot": {"room": "unknown"},
+}
+
 # 3.8.0 renamed zones to rooms and sub-zones to spots in the entity ids too.
 # Registry entries with the old unique_id prefixes are moved to the new ones
 # (id, name and history follow), so nothing is orphaned by the rename.
@@ -98,7 +108,8 @@ def ensure_sensors_for_entity(hass, entity, sensors_cache, new_sensors):
     via_device = find_bermuda_via_device(hass, entity)
     for suffix, label in missing:
         entity_id = f"sensor.{entity}_{suffix}"
-        sensor = CustomDistanceSensor(f"{entity} {label}", f"{suffix}_{entity}", entity_id, entity, via_device)
+        sensor = CustomDistanceSensor(f"{entity} {label}", f"{suffix}_{entity}", entity_id, entity, via_device,
+                                      attrs=INITIAL_ATTRS.get(suffix))
         sensors_cache[entity_id] = sensor
         new_sensors.append(sensor)
 
@@ -267,13 +278,13 @@ def get_filtered_entities(hass):
 
 class CustomDistanceSensor(SensorEntity):
     """A representation of a custom sensor"""
-    def __init__(self, name, unique_id, entity_id, device_key=None, via_device=None):
+    def __init__(self, name, unique_id, entity_id, device_key=None, via_device=None, attrs=None):
         self._name = name
         self._unique_id = unique_id
         self._attr_name = name
         self._attr_unique_id = unique_id
         self._state = "unknown"
-        self._attrs = {}
+        self._attrs = dict(attrs) if attrs else {}
         self.entity_id = entity_id
         # Group each tracked device's Sextant sensors under their own device rather
         # than one shared "BLE Positioning System" bucket. All four sensors for

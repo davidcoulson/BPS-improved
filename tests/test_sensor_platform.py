@@ -189,3 +189,26 @@ def test_subscribe_retries_until_bermuda_is_there(tmp_path, monkeypatch):
     assert len(attempts) == 2 and callable(hass.data["sextant_bermuda_listener_unsub"])
     # platform setup from YAML goes the same way
     run(sn.async_setup_platform(hass, {}, lambda *a, **k: None))
+
+
+def test_a_never_seen_thing_still_has_usable_location_attributes():
+    """
+    An entity that has never been published must not report missing attributes.
+
+    A thing added but not yet heard - a FindMy tag with a flat battery, say -
+    exists as entities from the moment it is tracked. An automation reading
+    state_attr(..., "kind") on one should get the shape it will always get
+    rather than None, which is indistinguishable from a bug in its own template.
+    """
+    loc = sn.CustomDistanceSensor("tag Sextant Location", "sextant_location_tag",
+                                  "sensor.tag_sextant_location", "tag",
+                                  attrs=sn.INITIAL_ATTRS["sextant_location"])
+    assert loc.state == "unknown"
+    assert loc.extra_state_attributes == {"kind": "room", "room": "unknown", "spot": None, "floor": "unknown"}
+
+    # And the seeded dict must not be shared between sensors.
+    other = sn.CustomDistanceSensor("x", "sextant_location_x", "sensor.x_sextant_location", "x",
+                                    attrs=sn.INITIAL_ATTRS["sextant_location"])
+    other._attrs["room"] = "Kitchen"
+    assert loc.extra_state_attributes["room"] == "unknown"
+    assert sn.INITIAL_ATTRS["sextant_location"]["room"] == "unknown"
