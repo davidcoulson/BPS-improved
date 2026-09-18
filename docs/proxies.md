@@ -19,3 +19,8 @@ listed as such: a whole-house figure hides exactly which rooms the proxies
 place well. The whole-house CEP95 is published as
 `sensor.sextant_position_accuracy` (metres) with per-floor and per-room
 figures in its attributes; the full detail is at `/api/sextant/selftest`.
+The self-test works from the calibration sample window, so a floor only has
+figures once it has been sampled: a manual run samples one floor and
+replaces the window, while **Auto calibration** keeps every floor sampled
+in a rolling six-hour window. Turn it on if you want the whole house
+covered.

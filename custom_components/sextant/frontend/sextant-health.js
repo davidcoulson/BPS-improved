@@ -349,18 +349,24 @@ class SextantHealth extends LitElement {
     const solved = st?.result?.receivers || [];
     const unsolved = st?.result?.unsolved || [];
     const cell = (m) => (m != null ? fmtLen(m, this.hass, 2) : "—");
+    // A floor whose every proxy is unsolved with nobody hearing it has no
+    // calibration samples at all (the window holds the last manual run's
+    // floor unless Auto calibration is on), which is a different message
+    // from "the geometry did not converge".
+    const noSamples = new Set((bd?.floors || []).filter((f) => !f.solved && f.unsolved
+      && unsolved.filter((u) => u.floor === f.floor).every((u) => !u.heard_by)).map((f) => f.floor));
     const count = (r) => (r.solved || r.unsolved
       ? html`${r.solved}${r.unsolved ? html` <span class="muted small">+${r.unsolved} unsolved</span>` : nothing}`
       : html`<span class="muted small">no proxy</span>`);
     return html`<section class="card">
       <h3>Proxy self-test</h3>
-      <p class="small muted">Leave-one-out: each proxy is located from the others' ranges to it and compared with where it is placed. Read it by room: a whole-house figure hides which rooms the proxies place well and which they do not.</p>
+      <p class="small muted">Leave-one-out: each proxy is located from the others' ranges to it and compared with where it is placed. Read it by room: a whole-house figure hides which rooms the proxies place well and which they do not. It works from the calibration sample window, so a floor only has figures once it has been sampled: turn on <b>Auto calibration</b> below to keep every floor sampled.</p>
       <div class="row">${uiButton({ label: this._busy === "selftest" ? "Running…" : "Run self-test", kind: "primary", disabled: this._busy === "selftest", onClick: () => this._runSelftest() })}
         ${st && st.state != null ? html`<span class="muted small">whole house</span> ${this._accPill(Number(st.state))}` : nothing}</div>
       ${bd ? html`<div class="wrap"><table>
         <tr><th>Floor / room</th><th class="num">Proxies</th><th class="num">Median</th><th class="num">CEP95</th><th>Worst proxy</th></tr>
         ${bd.floors.map((f) => html`
-          <tr class="grouphead"><td><b>${f.floor}</b></td><td class="num">${count(f)}</td><td class="num">${cell(f.cep50_m)}</td><td class="num">${f.cep95_m != null ? this._accPill(f.cep95_m) : "—"}</td><td>${f.worst ? proxyName(this.data, f.worst) : ""}</td></tr>
+          <tr class="grouphead"><td><b>${f.floor}</b></td><td class="num">${count(f)}</td><td class="num">${cell(f.cep50_m)}</td><td class="num">${f.cep95_m != null ? this._accPill(f.cep95_m) : "—"}</td><td>${noSamples.has(f.floor) ? html`<span class="muted small">no calibration samples for this floor yet</span>` : f.worst ? proxyName(this.data, f.worst) : ""}</td></tr>
           ${bd.rooms.filter((r) => r.floor === f.floor).map((r) => html`<tr><td style="padding-left: 22px">${r.room ?? html`<span class="muted">outside any room</span>`}</td><td class="num">${count(r)}</td><td class="num">${cell(r.cep50_m)}</td><td class="num">${r.cep95_m != null ? this._accPill(r.cep95_m) : "—"}</td><td>${r.worst ? proxyName(this.data, r.worst) : ""}</td></tr>`)}`)}
       </table></div>
       <details><summary>Every proxy (${solved.length} solved${unsolved.length ? `, ${unsolved.length} unsolved` : ""})</summary>
