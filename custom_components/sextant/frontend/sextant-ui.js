@@ -259,7 +259,7 @@ export const THING_CLASSES = [
   ["child", "Child", "mdi:human-child"],
   ["dog", "Dog", "mdi:dog"],
   ["cat", "Cat", "mdi:cat"],
-  ["paw", "Paw print", "mdi:paw"],
+  ["paw", "Pet", "mdi:paw"],
   ["phone", "Phone", "mdi:cellphone"],
   ["watch", "Watch", "mdi:watch"],
   ["tablet", "Tablet", "mdi:tablet"],
@@ -272,3 +272,8 @@ export const THING_CLASSES = [
   ["bike", "Bike", "mdi:bike"],
 ];
 export function classIcon(cls) { return (THING_CLASSES.find(([k]) => k === cls) || [])[2] || null; }
+
+/** Classes that stand for a family rather than one kind of thing: a spot that
+ * takes a Person takes a man, a woman or a child too (see CLASS_FAMILIES in
+ * __init__.py, which decides it). */
+export const CLASS_FAMILIES = { person: ["man", "woman", "child"], paw: ["dog", "cat"] };

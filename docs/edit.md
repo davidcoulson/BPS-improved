@@ -17,8 +17,10 @@ basement, 1 above) for ordering and an election *bias* (1.15 gives the
 ground floor a standing head start). Padlocks lock rooms, spots and
 proxies against selection so you cannot drag a wall while placing a proxy;
 rooms start locked. A selected spot can be limited to the thing classes it
-takes — tick phone, watch and keys on a bedside table, cat on a cat bed —
-and nothing else will be placed there; tick none and it takes anything.
+takes — pick phone, watch and keys on a bedside table, cat on a cat bed —
+and nothing else will be placed there; pick none and it takes anything.
+Person also takes a man, a woman or a child and Pet also takes the dog or
+the cat, shown outlined in the picker so the spot's reach is visible.
 Undo holds fifty steps. **Adjust rooms** squares
 near-rectangles, snaps neighbours to shared walls and removes overlaps
 with a live preview. Nothing is written until Save.

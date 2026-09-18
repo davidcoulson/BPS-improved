@@ -9,7 +9,7 @@
  */
 import { LitElement, html, css, nothing } from "./lit.js";
 import { SextantMap, polygonCentroid } from "./sextant-map.js";
-import { sharedStyles, widgetStyles, toast, callWS, confirmDialog, fmtNum, uiField, uiSelect, uiSwitch, uiButton, proxyName, lenUnit, toDisplayLen, fromDisplayLen, fmtScale, isImperial, THING_CLASSES } from "./sextant-ui.js";
+import { sharedStyles, widgetStyles, toast, callWS, confirmDialog, fmtNum, uiField, uiSelect, uiSwitch, uiButton, proxyName, lenUnit, toDisplayLen, fromDisplayLen, fmtScale, isImperial, THING_CLASSES, CLASS_FAMILIES } from "./sextant-ui.js";
 import { mapUrlFor } from "./sextant-panel.js";
 
 // [id, label under the icon, icon, tooltip]
@@ -443,13 +443,23 @@ class SextantEdit extends LitElement {
           <label class="field">Colour<input type="color" .value=${this._hex(item.color)} @change=${(e) => this._edit("color", e.target.value)}></label>
         </div>
         <div class="classes">
-          <div class="muted small">Takes which things? None ticked means any of them. A bedside table is for a phone, a watch, keys; a cat bed is for the cat.</div>
-          <div class="chips">
-            ${THING_CLASSES.filter(([k]) => k).map(([k, label]) => html`<span class="chipwrap">${uiSwitch({
-              label, checked: (item.classes || []).includes(k),
-              onChange: (on) => this._edit("classes", this._toggleClass(item.classes, k, on)),
-            })}</span>`)}
+          <div class="muted small">Takes which things? None picked means any of them. A bedside table is for a phone, a watch and keys; a cat bed is for the cat.</div>
+          <div class="classpick">
+            ${THING_CLASSES.filter(([k]) => k).map(([k, label, icon]) => {
+              const picked = (item.classes || []).includes(k);
+              // Person stands for man, woman and child; Pet for the dog and the
+              // cat. Picking the family lights its members here too, outlined
+              // rather than solid, so the spot's real reach is on the screen
+              // instead of hidden behind a tooltip.
+              const implied = !picked && (item.classes || []).some((c) => (CLASS_FAMILIES[c] || []).includes(k));
+              const title = implied ? `${label} — included by the family above` : label;
+              return html`<button class="cls ${picked ? "on" : implied ? "implied" : ""}" title=${title} aria-label=${title} aria-pressed=${picked || implied}
+                                  @click=${() => this._edit("classes", this._toggleClass(item.classes, k, !picked))}>
+                <ha-icon icon=${icon}></ha-icon>
+              </button>`;
+            })}
           </div>
+          ${(item.classes || []).some((c) => CLASS_FAMILIES[c]) ? html`<div class="muted small">Outlined ones come with the family you picked.</div>` : nothing}
         </div>` : nothing}
       <div class="row"><span class="muted small">${(item.cords?.length ?? 1)} point(s)</span><span class="grow"></span>${uiButton({ label: "Delete", kind: "danger", onClick: () => this._deleteSelection() })}</div>
     </div>`;
@@ -475,9 +485,14 @@ class SextantEdit extends LitElement {
 
   static styles = [sharedStyles, widgetStyles, css`
     .classes { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
-    .classes .chips { gap: 4px; }
-    .chipwrap { display: inline-flex; }
-    .chipwrap > ha-formfield, .chipwrap > label.inline { border: 1px solid var(--divider-color); border-radius: 999px; padding: 0 10px 0 2px; font-size: 12px; }
+    /* One icon per class rather than seventeen labelled switches: picked is
+       the page's own ink, the rest sit back in grey. The name is on hover. */
+    .classpick { display: flex; flex-wrap: wrap; gap: 2px; }
+    .classpick .cls { padding: 5px; border: 1px solid transparent; border-radius: 8px; background: transparent; line-height: 0; cursor: pointer; color: var(--disabled-text-color, #c4c4c4); }
+    .classpick .cls ha-icon { --mdc-icon-size: 22px; }
+    .classpick .cls.on { color: var(--primary-text-color); background: var(--secondary-background-color); border-color: var(--divider-color); }
+    .classpick .cls.implied { color: var(--secondary-text-color); border-style: dashed; border-color: var(--divider-color); }
+    .classpick .cls:hover { border-color: var(--primary-color); }
     :host { display: grid; grid-template-columns: 1fr 320px; min-height: 0; }
     .stage { position: relative; min-width: 0; }
     canvas { width: 100%; height: 100%; display: block; --sextant-map-bg: var(--card-background-color, #fff); }

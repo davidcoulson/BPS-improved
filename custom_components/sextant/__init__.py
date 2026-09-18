@@ -3330,9 +3330,21 @@ def thing_class(layout, entity) -> str:
     return value if isinstance(value, str) else ""
 
 
+# Two classes are families rather than one specific kind of thing: ticking
+# Person on a spot means a person, however they are classed, and Pet means
+# the dog or the cat. Only the family admits its members - a spot asking for
+# Man is not satisfied by something classed merely Person.
+CLASS_FAMILIES = {
+    "person": frozenset({"person", "man", "woman", "child"}),
+    "paw": frozenset({"paw", "dog", "cat"}),
+}
+
+
 def spot_accepts(allowed, cls) -> bool:
     """Whether a spot restricted to `allowed` takes a thing of class `cls`."""
-    return not allowed or cls in allowed
+    if not allowed:
+        return True
+    return cls in allowed or any(cls in CLASS_FAMILIES.get(a, ()) for a in allowed)
 
 
 def _floor_sub_zone_polygons(hass, data, entity, floor_name):

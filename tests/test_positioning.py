@@ -1513,6 +1513,33 @@ def test_a_thing_with_no_class_only_gets_the_open_spots():
     assert _settle("meg", BEDSIDE, open_spot) == ("Bedside", "Bedroom")
 
 
+def test_a_family_class_takes_its_members():
+    """Person on a spot means a person however they are classed; Pet the dog or cat."""
+    polys = [("Sofa", "Bedroom", _class_polys()[0][2], frozenset({"person"})),
+             ("Basket", "Bedroom", _class_polys()[1][2], frozenset({"paw"}))]
+    layout = {"tuning": {"subzone_switch_secs": 20.0, "zone_prob_smoothing": 0.6},
+              "thing_classes": {"dad": "man", "kid": "child", "her": "woman", "someone": "person",
+                                "meg": "cat", "rex": "dog", "phone": "phone"}}
+    for entity in ("dad", "kid", "her", "someone"):
+        assert _settle(entity, BEDSIDE, polys, layout) == ("Sofa", "Bedroom"), entity
+    for entity in ("meg", "rex"):
+        assert _settle(entity, CATBED, polys, layout) == ("Basket", "Bedroom"), entity
+    # The phone is in neither family, and a family member is not a family.
+    assert _settle("phone", BEDSIDE, polys, layout) == ("unknown", "Bedroom")
+    assert _settle("meg", BEDSIDE, polys, layout) == ("unknown", "Bedroom")
+
+
+def test_a_specific_class_is_not_satisfied_by_the_family():
+    """A spot asking for Man is not met by something classed merely Person."""
+    assert sextant.spot_accepts(frozenset({"man"}), "person") is False
+    assert sextant.spot_accepts(frozenset({"person"}), "man") is True
+    assert sextant.spot_accepts(frozenset({"paw"}), "cat") is True
+    assert sextant.spot_accepts(frozenset({"cat"}), "paw") is False
+    assert sextant.spot_accepts(frozenset({"person"}), "cat") is False
+    # The families are exactly the two documented ones.
+    assert set(sextant.CLASS_FAMILIES) == {"person", "paw"}
+
+
 def test_spot_class_helpers():
     assert sextant.spot_classes({"classes": ["cat", "dog"]}) == frozenset({"cat", "dog"})
     assert sextant.spot_classes({"classes": []}) == frozenset()
