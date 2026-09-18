@@ -31,13 +31,10 @@ import logging
 import math
 import re
 import time
-from collections import deque
+from array import array
 from datetime import datetime, timezone
-from pathlib import Path
 
-import aiofiles
 import numpy as np
-from aiohttp import web
 from homeassistant.util import slugify
 from .solver_numpy import least_squares_bounded
 
@@ -56,20 +53,20 @@ from .storage import (
 )
 
 DOMAIN = "sextant"
-SAMPLE_INTERVAL = 10  # seconds between dump_devices calls (manual run)
+SAMPLE_INTERVAL = 10  # seconds between sample rounds (manual run)
 DEFAULT_DURATION = 600  # seconds of sampling (manual run)
 MIN_DURATION = 60
 MAX_DURATION = 3600
 MAX_CONSECUTIVE_FAILURES = 6
-AUTO_SAMPLE_INTERVAL = 30  # seconds between dumps in continuous mode
+AUTO_SAMPLE_INTERVAL = 30  # seconds between sample rounds in continuous mode
 AUTO_SOLVE_INTERVAL = 900  # seconds between re-solves in continuous mode
 AUTO_MIN_WINDOW = 300  # seconds of data before the first auto solve
 APPLY_EPSILON = 0.01  # relative correction change worth persisting
 DUMP_DEVICES_TIMEOUT_S = 10  # cap on a single bermuda.dump_devices call
 SAMPLES_MAXLEN = 720  # rolling window per pair (6 h at the auto interval)
-STATE_SAMPLES_PER_PAIR = 200  # samples persisted per pair (enough for a solve)
+STATE_SAMPLES_PER_PAIR = 100  # samples persisted per pair (a solve needs 5; 100 is 50 min)
 STATE_MAX_AGE = SAMPLES_MAXLEN * AUTO_SAMPLE_INTERVAL  # drop older windows
-STALE_ADVERT_SECS = 30  # ignore adverts older than this within a dump
+STALE_ADVERT_SECS = 30  # ignore readings older than this within a sample round
 MIN_SAMPLES_PER_PAIR = 5
 MIN_TRUE_DISTANCE_M = 0.3  # closer pairs carry no path-loss information
 MIN_PAIRS = 4
@@ -83,6 +80,47 @@ DIFF_WEIGHT = 2.0  # direction-difference equations are wall-free; trust them
 POS_SCALE = 0.12  # log10 units before wall-side residuals stop growing much
 NEG_SLOPE = 3.0
 NEG_SCALE = 0.4
+
+
+class SampleWindow:
+    """A bounded window of raw distances as a packed array of doubles.
+
+    A deque of Python floats costs about 32 bytes a sample (the float object
+    plus the deque's pointer to it); a packed double costs 8. A house-sized
+    install holds a few thousand pairs, so at the 720-sample cap that is a
+    16 MB window instead of 64 MB. It behaves like the deque it replaced for
+    everything the module does with one: append, len, iterate, slice,
+    list(). Trimming moves at most a few KB per append.
+    """
+
+    __slots__ = ("_buf", "maxlen")
+
+    def __init__(self, values=(), maxlen=SAMPLES_MAXLEN):
+        self.maxlen = int(maxlen)
+        self._buf = array("d", values)
+        self._trim()
+
+    def _trim(self):
+        excess = len(self._buf) - self.maxlen
+        if excess > 0:
+            del self._buf[:excess]
+
+    def append(self, value):
+        self._buf.append(float(value))
+        self._trim()
+
+    def __len__(self):
+        return len(self._buf)
+
+    def __iter__(self):
+        return iter(self._buf)
+
+    def __getitem__(self, index):
+        return self._buf[index]
+
+    def __repr__(self):
+        return f"SampleWindow({list(self._buf)!r}, maxlen={self.maxlen})"
+
 
 
 def _normalize(value):
@@ -174,9 +212,8 @@ async def async_restore_calibration_state(hass) -> None:
     if fresh and isinstance(payload.get("samples"), dict):
         for key, values in payload["samples"].items():
             if isinstance(values, list):
-                cal["samples"][key] = deque(
-                    (float(v) for v in values if isinstance(v, (int, float))),
-                    maxlen=SAMPLES_MAXLEN,
+                cal["samples"][key] = SampleWindow(
+                    float(v) for v in values if isinstance(v, (int, float))
                 )
     _LOGGER.info(
         "Restored calibration state (%d floor results, %d sample pairs%s)",
@@ -214,7 +251,7 @@ def get_calibration_state(hass) -> dict:
             "started_at": None,
             "ends_at": None,
             "duration": None,
-            "samples": {},  # "tx|rx" -> deque of raw distances (meters)
+            "samples": {},  # "tx|rx" -> SampleWindow of raw distances (meters)
             "receivers": {},  # slug -> {"x", "y", "scale", "floor"}
             "results": {},  # floor name -> latest solve result
             "applied": {},  # floor name -> corrections last written to disk
@@ -405,9 +442,52 @@ def _ingest_dump(cal: dict, devices: dict) -> None:
             distance = advert.get("rssi_distance_raw")
             if not isinstance(distance, (int, float)) or distance <= 0:
                 continue
-            cal["samples"].setdefault(f"{tx_slug}|{rx_slug}", deque(maxlen=SAMPLES_MAXLEN)).append(
-                float(distance)
-            )
+            cal["samples"].setdefault(f"{tx_slug}|{rx_slug}", SampleWindow()).append(distance)
+
+
+def _scanner_devices_from_directory(directory) -> dict:
+    """The scanner half of a dump_devices payload, built from Bermuda's scanner
+    directory, so _match_scanners serves both sample sources unchanged."""
+    devices = {}
+    for address, info in (directory or {}).items():
+        if not address or not isinstance(info, dict):
+            continue
+        address = str(address).lower()
+        devices[address] = {
+            "_is_scanner": True,
+            "address": address,
+            "name": info.get("name") or info.get("slug") or "",
+        }
+    return devices
+
+
+def _ingest_ranging(cal: dict, ranging, directory) -> None:
+    """Extract probe-to-probe raw distances from the fork's scanner-ranging table.
+
+    The same samples _ingest_dump takes from a dump_devices payload, without
+    Bermuda serialising every device it knows first: the table holds only
+    how each scanner hears the other scanners, which is all calibration ever
+    read from a dump. Ages are relative to now (the dump path measures them
+    against the newest stamp in the payload); with fresh data the two agree.
+    """
+    if not isinstance(ranging, dict) or not isinstance(ranging.get("scanners"), dict):
+        return
+    scanner_slug_by_mac = _match_scanners(cal, _scanner_devices_from_directory(directory))
+    for tx_address, heard_by in ranging["scanners"].items():
+        tx_slug = scanner_slug_by_mac.get(str(tx_address or "").lower())
+        if tx_slug is None or not isinstance(heard_by, dict):
+            continue
+        for rx_address, reading in heard_by.items():
+            rx_slug = scanner_slug_by_mac.get(str(rx_address or "").lower())
+            if rx_slug is None or rx_slug == tx_slug or not isinstance(reading, dict):
+                continue
+            age = reading.get("age")
+            if isinstance(age, (int, float)) and age > STALE_ADVERT_SECS:
+                continue
+            distance = reading.get("distance_raw")
+            if not isinstance(distance, (int, float)) or distance <= 0:
+                continue
+            cal["samples"].setdefault(f"{tx_slug}|{rx_slug}", SampleWindow()).append(distance)
 
 
 def _true_distance_m(cal: dict, slug_a: str, slug_b: str):
@@ -432,9 +512,9 @@ def solve_snapshot(cal: dict) -> dict:
 
     solve() is handed to an executor (it is the single longest blocking call in
     the integration - tens of milliseconds on a desktop, hundreds on a Pi-class
-    box, per floor). But cal["samples"] is a dict of deques the ingest path
+    box, per floor). But cal["samples"] is a dict of windows the ingest path
     appends to on the loop, so iterating it off-thread races that ingest: a new
-    pair key raises "dictionary changed size during iteration", and a deque
+    pair key raises "dictionary changed size during iteration", and a window
     growing under np.median silently returns a median of a moving set. Copying
     the two structures it reads is cheap next to the solve and removes the race
     entirely - the same discipline run_selftest already uses.
@@ -652,35 +732,56 @@ async def _dump_devices(hass) -> dict:
     return response or {}
 
 
+async def _collect_samples(hass, cal: dict) -> str:
+    """One round of proxy-to-proxy distances into the window; the source used.
+
+    The Bermuda fork's scanner-ranging table comes first: it is read from the
+    scanner objects in place, a few hundred KB for a house-sized install.
+    Stock Bermuda falls back to the dump_devices service, which serialises
+    every configured device with all of its adverts on the event loop
+    (several MB, a good part of a second, every round).
+    """
+    ranging = bermuda_source.async_get_scanner_ranging(hass, max_age=STALE_ADVERT_SECS)
+    if ranging is not None:
+        directory = bermuda_source.async_get_scanner_directory(hass)
+        if directory is not None:
+            _ingest_ranging(cal, ranging, directory)
+            cal["sample_source"] = "ranging"
+            return "ranging"
+    _ingest_dump(cal, await _dump_devices(hass))
+    cal["sample_source"] = "dump"
+    return "dump"
+
+
 async def _sample_loop(hass, cal: dict) -> None:
     """One-shot, floor-scoped sampling window (manual run)."""
     failures = 0
     try:
         while time.time() < cal["ends_at"]:
             try:
-                _ingest_dump(cal, await _dump_devices(hass))
+                await _collect_samples(hass, cal)
                 failures = 0
             except Exception as e:  # service missing, timeout, bad payload
                 failures += 1
-                _LOGGER.warning("Calibration dump_devices call failed (%d): %s", failures, e)
+                _LOGGER.warning("Calibration sampling failed (%d): %s", failures, e)
                 if failures >= MAX_CONSECUTIVE_FAILURES:
                     cal["state"] = "error"
                     cal["mode"] = "off"
                     cal["error"] = (
-                        "bermuda.dump_devices kept failing — is the Bermuda "
+                        "Bermuda sampling kept failing — is the Bermuda "
                         f"integration installed and current? Last error: {e}"
                     )
                     return
             await asyncio.sleep(SAMPLE_INTERVAL)
 
-        # One final dump before solving so placements edited late in the
+        # One final round before solving so placements edited late in the
         # window (re-link + save inside the last sample gap) are matched and
         # classified against reality — mirrors the auto loop's pre-solve
-        # ingest. A failed dump just falls back to what the window gathered.
+        # ingest. A failed round just falls back to what the window gathered.
         try:
-            _ingest_dump(cal, await _dump_devices(hass))
+            await _collect_samples(hass, cal)
         except Exception as e:
-            _LOGGER.debug("Final calibration dump failed: %s", e)
+            _LOGGER.debug("Final calibration sample round failed: %s", e)
 
         result = await async_solve(hass, cal, cal["floor"])
         cal["results"][result["floor"]] = result
@@ -710,12 +811,12 @@ async def _auto_loop(hass, cal: dict) -> None:
     try:
         while True:
             try:
-                _ingest_dump(cal, await _dump_devices(hass))
-                if cal["error"] and cal["error"].startswith("bermuda.dump_devices"):
+                await _collect_samples(hass, cal)
+                if cal["error"] and cal["error"].startswith("Bermuda sampling"):
                     cal["error"] = None
             except Exception as e:
-                _LOGGER.warning("Auto-calibration dump_devices call failed: %s", e)
-                cal["error"] = f"bermuda.dump_devices failing: {e}"
+                _LOGGER.warning("Auto-calibration sampling failed: %s", e)
+                cal["error"] = f"Bermuda sampling failing: {e}"
 
             now = time.time()
             if now - started >= AUTO_MIN_WINDOW and now - last_solve >= AUTO_SOLVE_INTERVAL:
@@ -737,8 +838,8 @@ async def _auto_solve_and_apply(hass, cal: dict) -> None:
     # ingest so far this cycle ran against the OLD map, so a receiver placed
     # or re-linked since would be misreported as "no matching scanner" (a
     # rename hint) for a whole solve interval despite matching perfectly. And
-    # dump_devices is an external RPC with no timeout — awaiting it under
-    # LAYOUT_LOCK would let a wedged Bermuda hang every bpsdata writer
+    # the dump_devices fallback is an external RPC — awaiting it under
+    # LAYOUT_LOCK would let a wedged Bermuda hang every layout writer
     # (panel saves included), where pre-lock it only delays this solve.
     coords = await _read_coords(hass)
     if not coords:
@@ -746,9 +847,9 @@ async def _auto_solve_and_apply(hass, cal: dict) -> None:
     cal["receivers"] = _build_receiver_map(coords)
     cal["all_placed_slugs"] = _all_placed_slugs(coords)
     try:
-        _ingest_dump(cal, await _dump_devices(hass))
+        await _collect_samples(hass, cal)
     except Exception as e:
-        _LOGGER.debug("Pre-solve dump failed; missing-receiver buckets may lag one cycle: %s", e)
+        _LOGGER.debug("Pre-solve sample round failed; missing-receiver buckets may lag one cycle: %s", e)
     async with LAYOUT_LOCK:
         await _auto_solve_and_apply_locked(hass, cal)
 
@@ -1222,6 +1323,9 @@ def _status_payload(cal: dict) -> dict:
         "started_at": cal["started_at"],
         "first_solve_after": AUTO_MIN_WINDOW,
         "auto_decisions": cal.get("auto_decisions") or {},
+        # "ranging" (the fork's scanner-ranging table) or "dump" (stock
+        # Bermuda's dump_devices service); None before the first round.
+        "sample_source": cal.get("sample_source"),
         "pair_counts": pair_counts,
         "receiver_count": len(cal["receivers"]),
     }

@@ -9,7 +9,10 @@ at a known distance, a run collects those readings for the floor picked
 in the header and solves one range correction per proxy. Start a timed run
 or leave **Auto
 calibration** on: it samples every 30 s into a rolling six-hour window
-across every floor and re-solves every 15 minutes. Before writing anything
+across every floor and re-solves every 15 minutes. With the Bermuda fork the
+samples come straight from its scanner-ranging table, which holds only how
+each proxy hears the others; stock Bermuda is asked for a full device dump
+each round instead, which is several megabytes on a large install. Before writing anything
 it judges each floor's solve with the self-test (how far each proxy lands
 from where it is placed) three ways: with no corrections, with the
 corrections in place, and with the new ones. It applies the new set only

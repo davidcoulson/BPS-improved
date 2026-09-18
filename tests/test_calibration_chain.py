@@ -250,3 +250,127 @@ def test_auto_takes_its_own_corrections_out_when_none_beats_them(tmp_path, monke
     assert cal["auto_decisions"]["F"]["action"] == "revert" and "F" not in cal["applied"]
     floor = st.get_layout(hass)["floor"][0]
     assert all(r.get("correction") is None for r in floor["receivers"]) and floor["calibration"]["reverted"] is True
+
+
+# --- sampling from the fork's scanner-ranging table ---------------------------
+
+
+def _ranging(bias, rng, age=1.0):
+    """The fork's scanner-ranging table for the same synthetic house as _dump."""
+    scanners = {}
+    for tx, a in ADDR.items():
+        heard_by = {}
+        for rx, b in ADDR.items():
+            if rx == tx:
+                continue
+            true = math.hypot(POS[tx][0] - POS[rx][0], POS[tx][1] - POS[rx][1])
+            heard_by[b] = {"distance": None, "distance_raw": true * bias[rx] * rng.uniform(0.95, 1.05), "rssi": -70, "age": age}
+        scanners[a] = heard_by
+    return {"version": 1, "stamp": 1000.0, "scanners": scanners}
+
+
+def _directory():
+    return {a: {"slug": f"proxy_{s}", "name": f"Proxy {s}", "unique_id": None, "address_wifi_mac": None, "last_seen_age": 1.0} for s, a in ADDR.items()}
+
+
+def test_ranging_ingest_yields_the_same_samples_as_a_dump(tmp_path):
+    hass = _hass(tmp_path)
+    cal = _prepared(hass)
+    bias = {s: 1.0 for s in ADDR}
+    cal_mod._ingest_dump(cal, _dump(bias, random.Random(7), 1000.0))
+    from_dump = {k: list(v) for k, v in cal["samples"].items()}
+
+    cal["samples"] = {}
+    cal_mod._ingest_ranging(cal, _ranging(bias, random.Random(7)), _directory())
+    from_ranging = {k: list(v) for k, v in cal["samples"].items()}
+
+    assert from_ranging == from_dump  # same pairs, same values, same rng draw order
+    assert len(from_ranging) == 20  # five proxies hearing each other both ways
+    assert all(isinstance(v, cal_mod.SampleWindow) for v in cal["samples"].values())
+
+
+def test_ranging_ingest_drops_stale_unknown_and_bad_readings(tmp_path):
+    hass = _hass(tmp_path)
+    cal = _prepared(hass)
+    bias = {s: 1.0 for s in ADDR}
+    table = _ranging(bias, random.Random(1))
+    a0, a1, a2 = ADDR["r0"], ADDR["r1"], ADDR["r2"]
+    table["scanners"][a0][a1]["age"] = cal_mod.STALE_ADVERT_SECS + 1  # too old
+    table["scanners"][a0][a2]["distance_raw"] = 0  # no range
+    table["scanners"][a1]["ff:ff:ff:ff:ff:ff"] = {"distance_raw": 3.0, "age": 1.0}  # not a placed scanner
+    table["scanners"]["ee:ee:ee:ee:ee:ee"] = {a0: {"distance_raw": 3.0, "age": 1.0}}
+    table["scanners"][a1][a1] = {"distance_raw": 3.0, "age": 1.0}  # hears itself
+
+    cal_mod._ingest_ranging(cal, table, _directory())
+
+    assert "r0|r1" not in cal["samples"] and "r0|r2" not in cal["samples"]
+    assert "r1|r1" not in cal["samples"]
+    assert not any("ff:ff" in k or "ee:ee" in k for k in cal["samples"])
+    assert len(cal["samples"]) == 18
+    # Garbage shapes are ignored rather than raised.
+    cal_mod._ingest_ranging(cal, None, _directory())
+    cal_mod._ingest_ranging(cal, {"scanners": "nope"}, _directory())
+    cal_mod._ingest_ranging(cal, {"scanners": {a0: "nope"}}, None)
+    assert len(cal["samples"]) == 18
+
+
+def test_collect_samples_prefers_ranging_and_falls_back_to_dump(tmp_path, monkeypatch):
+    hass = _hass(tmp_path)
+    cal = _prepared(hass)
+    bias = {s: 1.0 for s in ADDR}
+    dumps = []
+
+    async def fake_dump(_hass):
+        dumps.append(1)
+        return _dump(bias, random.Random(2), 1000.0)
+
+    monkeypatch.setattr(cal_mod, "_dump_devices", fake_dump)
+    monkeypatch.setattr(cal_mod.bermuda_source, "async_get_scanner_ranging", lambda _h, max_age=None: _ranging(bias, random.Random(2)))
+    monkeypatch.setattr(cal_mod.bermuda_source, "async_get_scanner_directory", lambda _h: _directory())
+
+    assert run(cal_mod._collect_samples(hass, cal)) == "ranging"
+    assert dumps == [] and cal["sample_source"] == "ranging"
+    assert len(cal["samples"]) == 20
+    assert cal_mod._status_payload(cal)["sample_source"] == "ranging"
+
+    # Stock Bermuda: no ranging table, so the dump service is used.
+    monkeypatch.setattr(cal_mod.bermuda_source, "async_get_scanner_ranging", lambda _h, max_age=None: None)
+    assert run(cal_mod._collect_samples(hass, cal)) == "dump"
+    assert dumps == [1] and cal["sample_source"] == "dump"
+
+    # A table without a directory to name the scanners also falls back.
+    monkeypatch.setattr(cal_mod.bermuda_source, "async_get_scanner_ranging", lambda _h, max_age=None: _ranging(bias, random.Random(2)))
+    monkeypatch.setattr(cal_mod.bermuda_source, "async_get_scanner_directory", lambda _h: None)
+    assert run(cal_mod._collect_samples(hass, cal)) == "dump"
+    assert dumps == [1, 1]
+
+
+def test_sample_window_is_bounded_packed_and_listable():
+    w = cal_mod.SampleWindow(maxlen=3)
+    assert len(w) == 0 and list(w) == []
+    for v in (1.0, 2.5, 3.0, 4.0):
+        w.append(v)
+    assert list(w) == [2.5, 3.0, 4.0]  # oldest dropped at the cap
+    assert len(w) == 3 and w[-1] == 4.0 and list(w[-2:]) == [3.0, 4.0]
+    assert w.maxlen == 3 and "SampleWindow" in repr(w)
+    assert cal_mod.SampleWindow([0.1, 0.2]).__len__() == 2 and list(cal_mod.SampleWindow([0.1, 0.2])) == [0.1, 0.2]
+    over = cal_mod.SampleWindow(range(1000))
+    assert len(over) == cal_mod.SAMPLES_MAXLEN and over[0] == 1000 - cal_mod.SAMPLES_MAXLEN
+    assert w._buf.itemsize == 8  # packed doubles, not float objects
+
+
+def test_state_round_trip_keeps_the_persisted_tail_as_windows(tmp_path):
+    hass = _hass(tmp_path)
+    cal = _prepared(hass)
+    cal["samples"]["r0|r1"] = cal_mod.SampleWindow(float(i) for i in range(cal_mod.STATE_SAMPLES_PER_PAIR + 50))
+    run(cal_mod.save_calibration_state(hass))
+    saved = run(st.load_calib_state(hass))
+    assert len(saved["samples"]["r0|r1"]) == cal_mod.STATE_SAMPLES_PER_PAIR == 100
+    assert saved["samples"]["r0|r1"][-1] == float(cal_mod.STATE_SAMPLES_PER_PAIR + 49)
+
+    cal["samples"] = {}
+    cal["mode"] = "off"
+    run(cal_mod.async_restore_calibration_state(hass))
+    restored = cal["samples"]["r0|r1"]
+    assert isinstance(restored, cal_mod.SampleWindow)
+    assert len(restored) == 100 and restored[0] == 50.0

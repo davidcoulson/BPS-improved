@@ -29,6 +29,7 @@ import json
 import re
 import copy
 import difflib
+import shapely
 from shapely.geometry import Point, Polygon
 from shapely.ops import nearest_points, unary_union
 try:
@@ -3047,6 +3048,69 @@ def _zone_poly_cache(hass) -> dict:
     return hass.data.setdefault(_ZONE_POLY_CACHE_KEY, {})
 
 
+def _geometry_array(geoms):
+    """A 1-D object array of shapely geometries (built element-wise: numpy
+    would otherwise try to unpack the geometries as sequences)."""
+    arr = np.empty(len(geoms), dtype=object)
+    for i, geom in enumerate(geoms):
+        arr[i] = geom
+    return arr
+
+
+def _snap_geometry(zone_polys):
+    """(valid, nogo_union) for snap_point_into_zones: the allowed-space union
+    with the (grown) no-go union carved out of it, or None for either when the
+    floor has none of that kind."""
+    allowed = [polygon for _zone_id, polygon, _buffer_size, no_go in zone_polys if not no_go]
+    nogo = [polygon for _zone_id, polygon, _buffer_size, no_go in zone_polys if no_go]
+    nogo_union = unary_union(nogo) if nogo else None
+    if nogo_union is not None and nogo_union.is_empty:
+        nogo_union = None
+    valid = None
+    if allowed:
+        valid = unary_union(allowed)
+        if nogo_union is not None:
+            # Grow-and-subtract: the snap target's boundary ends up
+            # NO_GO_SNAP_MARGIN_PX outside the dead space, so the snapped point
+            # is not still read as inside it by the boundary-inclusive tests.
+            valid = valid.difference(nogo_union.buffer(NO_GO_SNAP_MARGIN_PX))
+        if valid.is_empty:
+            valid = None
+    return valid, nogo_union
+
+
+class _FloorZones(list):
+    """A floor's (zone_id, polygon, buffer_size, no_go) tuples, plus the
+    geometry the per-cycle lookups derive from them, built once per layout
+    version rather than once per lookup.
+
+    Profiling a 21-room house put the three lookups at 26 ms
+    (find_zone_for_point: a buffer() ring around every zone the point was not
+    in), 15 ms (snap_point_into_zones: the allowed union minus the no-go
+    union) and 11 ms (find_nearest_zone: one distance call per zone) per
+    call, several times per tracker per cycle, all on the event loop. The
+    rings, the unions and the arrays below are the same for every lookup
+    until the floorplan is edited, so they live with the tuples in the
+    version-keyed cache, and the predicates run as one vectorised shapely
+    call over the floor instead of one Python call per zone.
+    """
+
+    __slots__ = ("allowed_ids", "allowed_geoms", "allowed_rings", "allowed_boundaries", "snap")
+
+    def __init__(self, tuples):
+        super().__init__(tuples)
+        self.allowed_ids = [zone_id for zone_id, _polygon, _buffer_size, no_go in self if not no_go]
+        allowed = [polygon for _zone_id, polygon, _buffer_size, no_go in self if not no_go]
+        self.allowed_geoms = _geometry_array(allowed)
+        self.allowed_rings = _geometry_array([
+            polygon.buffer(buffer_size)
+            for _zone_id, polygon, buffer_size, no_go in self if not no_go
+        ])
+        # boundary works for Polygon and MultiPolygon alike.
+        self.allowed_boundaries = _geometry_array([polygon.boundary for polygon in allowed])
+        self.snap = _snap_geometry(self)
+
+
 def _floor_zone_polygons(hass, data, entity, floor_name):
     """(zone entity_id, polygon, buffer_size, no_go) tuples for the floor.
 
@@ -3118,6 +3182,7 @@ def _floor_zone_polygons(hass, data, entity, floor_name):
                         results.append((zone["entity_id"], polygon, buffer_size, bool(zone.get("no_go"))))
             break
 
+    results = _FloorZones(results)
     cache[cache_key] = (version, results)
     return results
 
@@ -3143,21 +3208,25 @@ def find_zone_for_point(hass, data, entity, floor_name, point):
     No-go zones (issue #60) are skipped: a tracker can't be in one, so a fix
     there is reported as belonging to the nearest real zone (or "unknown").
     """
-    buffer_candidates = []
-    for zone_id, polygon, buffer_size, no_go in _floor_zone_polygons(hass, data, entity, floor_name):
-        if no_go:
-            continue
-        # covers() also matches points on the polygon boundary.
-        if polygon.covers(point):
-            return zone_id  # Prioritize correct polygon
-        if polygon.buffer(buffer_size).contains(point):
-            # Save candidate: (distance to edge, entity_id)
-            # boundary works for Polygon and MultiPolygon alike.
-            buffer_candidates.append((polygon.boundary.distance(point), zone_id))
-    if buffer_candidates:
-        # Select zone whose edge is closest to the point
-        buffer_candidates.sort()
-        return buffer_candidates[0][1]
+    zones = _floor_zone_polygons(hass, data, entity, floor_name)
+    if not zones.allowed_ids:
+        return "unknown"
+    if not isinstance(point, Point):
+        point = Point(float(point[0]), float(point[1]))
+    # covers() also matches points on the polygon boundary. The first zone
+    # in layout order that covers the point wins, as before.
+    covered = np.flatnonzero(shapely.covers(zones.allowed_geoms, point))
+    if covered.size:
+        return zones.allowed_ids[int(covered[0])]  # Prioritize correct polygon
+    # Otherwise the zone whose soft buffer holds the point and whose edge is
+    # closest to it (ties broken by zone id, like the old sorted candidates).
+    in_ring = np.flatnonzero(shapely.contains(zones.allowed_rings, point))
+    if in_ring.size:
+        distances = shapely.distance(zones.allowed_boundaries[in_ring], point)
+        candidates = sorted(
+            (float(distance), zones.allowed_ids[int(i)]) for i, distance in zip(in_ring, distances)
+        )
+        return candidates[0][1]
     return "unknown"
 
 
@@ -3173,21 +3242,13 @@ def snap_point_into_zones(zone_polys, point):
     carves the void out of the room), and when the floor's only zones are
     no-go (the point is at least pushed off the dead-space footprint).
     """
-    allowed = [polygon for _zone_id, polygon, _buffer_size, no_go in zone_polys if not no_go]
-    nogo = [polygon for _zone_id, polygon, _buffer_size, no_go in zone_polys if no_go]
-    nogo_union = unary_union(nogo) if nogo else None
-    nogo_blocks = nogo_union is not None and not nogo_union.is_empty
+    # The unions come with the floor's cached zone list; a plain list (tests,
+    # ad-hoc callers) gets them computed here.
+    valid, nogo_union = (
+        zone_polys.snap if isinstance(zone_polys, _FloorZones) else _snap_geometry(zone_polys)
+    )
 
-    valid = None
-    if allowed:
-        valid = unary_union(allowed)
-        if nogo_blocks:
-            # Grow-and-subtract: the snap target's boundary ends up
-            # NO_GO_SNAP_MARGIN_PX outside the dead space, so the snapped point
-            # is not still read as inside it by the boundary-inclusive tests.
-            valid = valid.difference(nogo_union.buffer(NO_GO_SNAP_MARGIN_PX))
-
-    if valid is not None and not valid.is_empty:
+    if valid is not None:
         if valid.covers(point):
             return None  # already in valid space
         snapped, _ = nearest_points(valid, point)
@@ -3195,7 +3256,7 @@ def snap_point_into_zones(zone_polys, point):
 
     # No allowed space to land in. If the point sits in declared dead space,
     # at least push it just off the no-go footprint; otherwise leave it as-is.
-    if nogo_blocks and nogo_union.covers(point):
+    if nogo_union is not None and nogo_union.covers(point):
         snapped, _ = nearest_points(nogo_union.buffer(NO_GO_SNAP_MARGIN_PX).boundary, point)
         return snapped
     return None
@@ -3209,15 +3270,15 @@ def find_nearest_zone(hass, data, entity, floor_name, point):
     inside a zone has distance 0, so it matches find_zone_for_point there).
     Returns "unknown" only when the floor has no usable zones.
     """
-    nearest_id = "unknown"
-    nearest_distance = None
-    for zone_id, polygon, _buffer_size, no_go in _floor_zone_polygons(hass, data, entity, floor_name):
-        if no_go:
-            continue  # dead space is never "the nearest zone" (issue #60)
-        distance = polygon.distance(point)
-        if nearest_distance is None or distance < nearest_distance:
-            nearest_id, nearest_distance = zone_id, distance
-    return nearest_id
+    zones = _floor_zone_polygons(hass, data, entity, floor_name)
+    if not zones.allowed_ids:  # dead space is never "the nearest zone" (issue #60)
+        return "unknown"
+    if not isinstance(point, Point):
+        point = Point(float(point[0]), float(point[1]))
+    # One vectorised call over the floor; argmin keeps the first of equals,
+    # as the old strict-less-than scan did.
+    distances = shapely.distance(zones.allowed_geoms, point)
+    return zones.allowed_ids[int(np.argmin(distances))]
 
 
 def _floor_sub_zone_polygons(hass, data, entity, floor_name):
