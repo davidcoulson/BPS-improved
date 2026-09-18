@@ -29,6 +29,7 @@ class SextantDevices extends LitElement {
     data: { attribute: false },
     positions: { attribute: false },
     section: { type: String },
+    openThing: { attribute: false },
     _tracked: { state: true },
     _candidates: { state: true },
     _tiles: { state: true },
@@ -49,6 +50,7 @@ class SextantDevices extends LitElement {
   constructor() {
     super();
     this.section = "things";
+    this.openThing = null;   // a thing another page asked us to open the dialog for
     this._tracked = null;
     this._candidates = null;
     this._tiles = null;
@@ -74,6 +76,22 @@ class SextantDevices extends LitElement {
   }
 
   disconnectedCallback() { super.disconnectedCallback(); clearInterval(this._timer); }
+
+  /** Open the dialog for a thing another page sent us to.
+   *
+   * Waited for rather than done on the way in: the Live page knows the slug
+   * before this page has its data, and the dialog reads names, classes and
+   * heights out of the layout. Announcing it back lets the panel forget the
+   * request, so returning here later does not reopen it. */
+  updated() {
+    if (!this.openThing || !this.data?.layout) return;
+    const slug = this.openThing;
+    const address = (this._tracked || []).find((r) => r.slug === slug)?.address
+      || (this.data?.entities || {})[slug]
+      || null;
+    this._openWizard(slug, address);
+    this.dispatchEvent(new CustomEvent("thing-opened", { bubbles: true, composed: true }));
+  }
 
   get _hasApi() { return (this.data?.features || []).includes("device_management"); }
 
@@ -692,7 +710,7 @@ class SextantDevices extends LitElement {
           ${(this._findmy || []).map((a) => html`<tr>
             <td><b>${a.name}</b><br><span class="muted small">${a.address}</span></td>
             <td>${a.model || "—"}</td>
-            <td>${a.current_source ? html`<span class="pill ok">seen as ${a.current_source}</span> <span class="muted small">${fmtAge(a.last_seen_age)} ago</span>` : a.alignment_index ? html`<span class="pill warn">aligned, not visible</span>` : html`<span class="pill">searching</span>`}</td>
+            <td>${a.current_source ? html`<span class="pill ok">seen as ${a.current_source}</span> <span class="muted small">${fmtAge(a.last_seen_age)} ago</span>` : a.alignment_index ? html`<span class="pill warn" title="Bermuda knows where this accessory is in its key schedule, so it knows which addresses to look for. No proxy has heard one of them yet - the tag is out of range, or its battery is flat.">not heard yet</span>` : html`<span class="pill" title="No key alignment for this accessory yet, so Bermuda is working through a wide range of addresses it could be using. This narrows the moment a proxy hears it once.">looking for it</span>`}</td>
             <td><button class="iconbtn danger" title="Remove ${a.name}" @click=${() => this._removeFindMy(a.address, a.name)}><ha-icon icon="mdi:trash-can-outline"></ha-icon></button></td>
           </tr>`)}
           ${(this._findmy || []).length ? nothing : html`<tr><td colspan="4" class="muted">None configured.</td></tr>`}

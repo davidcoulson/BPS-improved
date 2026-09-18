@@ -1552,3 +1552,40 @@ def test_spot_class_helpers():
     assert sextant.thing_class({"thing_classes": {"meg": "cat"}}, "meg") == "cat"
     assert sextant.thing_class({"thing_classes": {}}, "meg") == ""
     assert sextant.thing_class(None, "meg") == "" and sextant.thing_class({}, "meg") == ""
+
+
+def test_a_fix_resting_on_the_unlock_margin_still_releases():
+    """
+    A lock must not stall on a fix that sits exactly at the unlock margin.
+
+    From a real case: a bag in the laundry room solved 1.02 m from the foyer
+    against a 1.00 m margin, so the away clock started, and any cycle that
+    wobbled a centimetre closer wiped it. The dwell never completed, the room
+    sensor read foyer for as long as the bag sat there, and the map drew the
+    bag in the laundry room the whole time.
+    """
+    sextant._zone_state.clear()
+    for t in (0.0, 10.0, 20.0, 30.0):
+        zone, locked = _elect("e", 90, t)
+    assert (zone, locked) == ("Kitchen", True)
+
+    # Now parked just past the margin (1 m = 100 px), jittering across it by a
+    # couple of centimetres either way - never coming properly back.
+    seen = []
+    for i, t in enumerate((40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0, 110.0)):
+        x = 202 if i % 2 else 199  # 1.02 m and 0.99 m past the boundary
+        seen.append(_elect("e", x, t))
+    assert seen[0] == ("Kitchen", True), "the lock should hold at first"
+    assert seen[-1][0] == "Dining", f"the lock must release: {seen}"
+
+
+def test_boundary_jitter_well_inside_the_margin_still_holds_the_lock():
+    """The hysteresis must not cost the protection it was added around."""
+    sextant._zone_state.clear()
+    for t in (0.0, 10.0, 20.0, 30.0):
+        zone, locked = _elect("e", 90, t)
+    assert locked is True
+    # Wandering 30 cm over the line and back, as a resting thing's fix does.
+    for i, t in enumerate((40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0, 110.0, 120.0)):
+        zone, locked = _elect("e", 130 if i % 2 else 95, t)
+        assert (zone, locked) == ("Kitchen", True)

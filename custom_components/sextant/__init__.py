@@ -2817,8 +2817,21 @@ def _elect_zone(entity, floor_name, instant_zone, point, kf_state, zone_polys, s
         incumbent_poly = next((p for zid, p, _b, _n in zone_polys if zid == incumbent), None)
         margin_px = _tuning(layout, "zone_unlock_margin") * (scale if isinstance(scale, (int, float)) and scale > 0 else 1.0)
         pt = point if isinstance(point, Point) else Point(center)
-        away = incumbent_poly is None or incumbent_poly.distance(pt) > margin_px
-        st["away_since"] = (st["away_since"] or now) if away else None
+        gap = None if incumbent_poly is None else incumbent_poly.distance(pt)
+        away = gap is None or gap > margin_px
+
+        # Starting and clearing the away clock on the same threshold makes a fix
+        # that rests *at* the margin permanently unreleasable. A bag in the
+        # laundry room solved 1.02 m from the foyer against a 1.00 m margin: the
+        # clock started, then any cycle that wobbled a centimetre closer wiped
+        # it, so the 30 s dwell never completed. The room sensor read foyer for
+        # as long as the bag sat there, while the map drew it where it really
+        # was. So coming back has to mean coming properly back, not merely
+        # dipping under the line the clock started on.
+        if away:
+            st["away_since"] = st["away_since"] or now
+        elif gap is not None and gap <= margin_px * ZONE_AWAY_RESET_FRACTION:
+            st["away_since"] = None
         left_for_long = st["away_since"] is not None and now - st["away_since"] >= _tuning(layout, "zone_unlock_secs")
         moving_for_long = st["moving_since"] is not None and now - st["moving_since"] >= stationary_secs
         if not left_for_long and not moving_for_long:
@@ -3084,6 +3097,13 @@ def _geometry_array(geoms):
     for i, geom in enumerate(geoms):
         arr[i] = geom
     return arr
+
+
+# How far back inside the unlock margin a fix has to come before the "it has
+# left the locked zone" clock is wiped. Half, so that starting and stopping the
+# clock are different thresholds and a fix resting on the margin resolves one
+# way or the other instead of stalling forever. See _elect_zone.
+ZONE_AWAY_RESET_FRACTION = 0.5
 
 
 def _snap_geometry(zone_polys):

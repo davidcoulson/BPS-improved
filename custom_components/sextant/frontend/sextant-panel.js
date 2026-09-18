@@ -129,9 +129,15 @@ class SextantPanel extends LitElement {
 
   _modes() { return this._isAdmin() ? MODES : MODES.filter(([id]) => !ADMIN_MODES.has(id)); }
 
-  _setMode(mode) {
-    if (!this._modes().some(([id]) => id === mode)) mode = "live";
+  /** Switch pages. `target` is a mode id, or {mode, thing} to open that
+   * thing's dialog once the destination page has loaded - which is how the
+   * Live card's edit button reaches the thing settings without a second
+   * copy of the dialog living here. */
+  _setMode(target) {
+    const { mode: wanted, thing } = typeof target === "string" ? { mode: target } : (target || {});
+    const mode = this._modes().some(([id]) => id === wanted) ? wanted : "live";
     this._mode = mode;
+    this._openThing = mode === "things" ? thing || null : null;
     if (mode !== "edit") this._spots = [];
     try { localStorage.setItem("sextant.mode", mode); } catch { /* private mode */ }
   }
@@ -192,7 +198,9 @@ class SextantPanel extends LitElement {
       case "things":
       case "bermuda":
         return html`<sextant-devices .hass=${this.hass} .data=${this._data} .positions=${this._positions} .section=${this._mode}
+                                     .openThing=${this._openThing}
                                      @layout-changed=${() => this._onLayoutChanged()}
+                                     @thing-opened=${() => { this._openThing = null; }}
                                      @quick-nav=${(e) => this._setMode(e.detail)}></sextant-devices>`;
       case "proxies":
       case "calibration":
@@ -578,6 +586,7 @@ class SextantLive extends LitElement {
             ${this._renderBlend(sel)}
             ${this._renderTruth(sel)}
             <div class="row">
+              ${this._isAdmin() ? uiButton({ label: "Edit", icon: "mdi:pencil-outline", onClick: () => this._goto({ mode: "things", thing: sel.ent }) }) : nothing}
               ${uiButton({ label: "Scrub history", icon: "mdi:history", disabled: h?.ent === sel.ent, onClick: () => this._loadHistory(sel.ent) })}
             </div>
             ${this._renderLinks(sel.ent)}
