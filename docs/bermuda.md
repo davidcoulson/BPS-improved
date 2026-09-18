@@ -38,7 +38,7 @@ and tracks it like an IRK device. Getting those keys is the awkward part and
 depends on your macOS version: on 14 and earlier `tools/findmy_export.py` in
 the Bermuda fork reads them off the Mac, and on 15 and later they have to be
 exported from iCloud first, because the key that decrypts the local copies is
-no longer readable. [The walkthrough](https://github.com/davidcoulson/bermuda/blob/main/docs/findmy.md)
+no longer readable. [The walkthrough](https://github.com/davidcoulson/bermuda/blob/fork-testing/docs/findmy.md)
 has both routes. The keys live in Bermuda's config entry; treat backups and
 diagnostics accordingly, and delete the exported files once they are pasted.
 

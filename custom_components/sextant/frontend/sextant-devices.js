@@ -21,7 +21,7 @@ const ICON_SIZE = 192;   // the icon that is uploaded (px)
 // The iBeacon every calibration probe advertises (README, "make each probe advertise"), hex without dashes.
 const PROBE_BEACON_UUID = "fde3b1502f6443baaee9867f75ee4a6f";
 const FINDMY_KEYS = ["master_key", "skn", "sks", "paired_at"];
-const FINDMY_GUIDE = "https://github.com/davidcoulson/bermuda/blob/main/docs/findmy.md";
+const FINDMY_GUIDE = "https://github.com/davidcoulson/bermuda/blob/fork-testing/docs/findmy.md";
 
 class SextantDevices extends LitElement {
   static properties = {
