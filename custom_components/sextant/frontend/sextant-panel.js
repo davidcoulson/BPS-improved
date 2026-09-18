@@ -155,19 +155,31 @@ class SextantPanel extends LitElement {
             </button>`)}
         </nav>
         <div class="spacer"></div>
-        ${floors.length && FLOOR_MODES.has(this._mode) ? html`
-          <label class="floor-pick">
-            <span class="sr">Floor</span>
-            <select @change=${(e) => { this._floor = e.target.value; }}>
-              ${sortFloors(floors).map((f) => html`<option value=${f.name} ?selected=${f.name === this._floor}>${f.name}</option>`)}
-            </select>
-          </label>` : nothing}
-        <span class="stamp" title="Time since the last positioning cycle"><ha-icon icon="mdi:update"></ha-icon>${this._positions.stamp ? fmtAge(Date.now() / 1000 - this._positions.stamp) : "—"}</span>
+        <div class="wide-only">${this._renderFloorAndStamp(floors)}</div>
         <a class="repo" href=${REPO_URL} target="_blank" rel="noopener" title="Sextant on GitHub"><ha-icon icon="mdi:github"></ha-icon></a>
       </div>
       ${this._error ? html`<div class="banner error">${this._error} <button @click=${() => this._load()}>Retry</button></div>` : nothing}
       ${this._data?.app_version && PANEL_VERSION && this._data.app_version !== PANEL_VERSION ? html`<div class="banner update">Sextant ${this._data.app_version} is installed; this page is still running ${PANEL_VERSION}. <button @click=${() => window.location.reload()}>Reload</button></div>` : nothing}
       <div class="body">${this._renderMode()}</div>
+      <div class="bottombar narrow-only">${this._renderFloorAndStamp(floors)}</div>
+    `;
+  }
+
+  /** The floor picker (when the mode has floors) and the cycle-age stamp.
+   * On a wide screen these sit in the topbar; on a phone the topbar has no
+   * room to spare for them without pushing the mode tabs into a sideways
+   * scroll, so they move to a slim bar under the page instead (CSS picks
+   * which copy renders - see .wide-only/.narrow-only). */
+  _renderFloorAndStamp(floors) {
+    return html`
+      ${floors.length && FLOOR_MODES.has(this._mode) ? html`
+        <label class="floor-pick">
+          <span class="sr">Floor</span>
+          <select @change=${(e) => { this._floor = e.target.value; }}>
+            ${sortFloors(floors).map((f) => html`<option value=${f.name} ?selected=${f.name === this._floor}>${f.name}</option>`)}
+          </select>
+        </label>` : nothing}
+      <span class="stamp" title="Time since the last positioning cycle"><ha-icon icon="mdi:update"></ha-icon>${this._positions.stamp ? fmtAge(Date.now() / 1000 - this._positions.stamp) : "—"}</span>
     `;
   }
 
@@ -190,7 +202,8 @@ class SextantPanel extends LitElement {
                                     @show-spots=${(e) => { this._spots = e.detail.spots; this._floor = e.detail.floor; this._setMode("edit"); this._spots = e.detail.spots; }}></sextant-health>`;
       default:
         return html`<sextant-live .hass=${this.hass} .data=${this._data} .positions=${this._positions} .floor=${this._floor}
-                                  @layout-changed=${() => this._onLayoutChanged()} @floor-changed=${(e) => { this._floor = e.detail; }}></sextant-live>`;
+                                  @layout-changed=${() => this._onLayoutChanged()} @floor-changed=${(e) => { this._floor = e.detail; }}
+                                  @quick-nav=${(e) => this._setMode(e.detail)}></sextant-live>`;
     }
   }
 
@@ -220,8 +233,27 @@ class SextantPanel extends LitElement {
     .banner.update { background: var(--warning-color, #c77800); color: #fff; padding: 8px 12px; }
     .banner button { margin-left: 8px; }
     .sr { position: absolute; left: -9999px; }
+    .narrow-only { display: none; }
+    .bottombar { align-items: center; justify-content: flex-end; gap: 10px; padding: 6px 10px; background: var(--card-background-color); border-top: 1px solid var(--divider-color); flex: none; padding-bottom: max(6px, env(safe-area-inset-bottom)); }
+    .bottombar .floor-pick select { padding: 6px 8px; }
+    .bottombar .stamp { color: var(--secondary-text-color); }
     @media (max-width: 960px) { .mode-label { display: none; } .modes button { padding: 0 8px; } }
-    @media (max-width: 720px) { .brand-text { display: none; } .topbar { gap: 4px; padding: 0 6px; } .brand { margin-right: 2px; } .modes { overflow-x: auto; scrollbar-width: none; } .modes button { padding: 0 6px; } .repo { display: none; } .floor-pick select { padding: 4px 2px; max-width: 120px; } }
+    /* Below 720px the topbar has only the brand mark, the mode tabs and the
+       menu button - the floor picker and the cycle-age stamp move to the
+       bottombar instead of eating the width the tabs need, which is what
+       forced the tab strip into a sideways scroll. */
+    @media (max-width: 720px) {
+      .brand-text { display: none; }
+      .topbar { gap: 4px; padding: 0 6px; }
+      .brand { margin-right: 2px; }
+      .repo { display: none; }
+      .wide-only { display: none; }
+      .narrow-only { display: flex; }
+      .modes button { padding: 0 8px; }
+      /* Freeing the floor picker and stamp usually leaves enough room for
+         all 8 tabs; this is only a safety net on a very narrow phone. */
+      .modes { overflow-x: auto; scrollbar-width: none; }
+    }
   `];
 }
 
@@ -242,6 +274,7 @@ class SextantLive extends LitElement {
     _truth: { state: true },
     _marks: { state: true },
     _blend: { state: true },
+    _optionsOpen: { state: true },
   };
 
   constructor() {
@@ -257,7 +290,16 @@ class SextantLive extends LitElement {
     this._history = null; // {ent, from, to, points:[{t,x,y,f}] }
     this._scrub = null;   // seconds, absolute
     this._icons = new Map();
+    this._optionsOpen = false; // the map-options sheet, phone-width only
   }
+
+  /** Whether this hass user may reach an admin-only page - mirrors the
+   * panel's own check, used here only to decide which quick-action
+   * shortcuts to offer (the destination page enforces the real gate). */
+  _isAdmin() { return this.hass?.user?.is_admin !== false; }
+
+  /** Ask the panel to switch pages, for a quick-action shortcut. */
+  _goto(mode) { this.dispatchEvent(new CustomEvent("quick-nav", { detail: mode, bubbles: true, composed: true })); }
 
   firstUpdated() {
     this._map = new SextantMap(this.renderRoot.querySelector("canvas"), {
@@ -439,15 +481,35 @@ class SextantLive extends LitElement {
       ["circles", "Range circles", "The distance each proxy measured, as a circle: the fix is where they meet"],
       ["fingerprint", "Fingerprint fix", "Where the fingerprint estimator alone would put each tracker (dashed), next to the published fix"],
     ];
+    const gridPicker = uiSelect({ label: "Grid", value: this._options.grid, options: [{ value: "off", label: "No grid" }, { value: "m", label: "Metres" }, { value: "ft", label: "Feet" }], onChange: (v) => this._setOption("grid", v), style: "min-width: 120px" });
+    const fitButton = uiButton({ label: "Fit map", kind: "text", icon: "mdi:fit-to-screen", onClick: () => this._map.fit() });
     return html`
+      <div class="quick-actions">
+        ${uiButton({ label: "Self-test", kind: "outline", icon: "mdi:clipboard-check-outline", onClick: () => this._goto("proxies") })}
+        ${this._isAdmin() ? html`
+          ${uiButton({ label: "New tracker", kind: "outline", icon: "mdi:plus-circle-outline", onClick: () => this._goto("trackers") })}
+          ${uiButton({ label: "Calibrate", kind: "outline", icon: "mdi:tune-vertical", onClick: () => this._goto("calibration") })}` : nothing}
+      </div>
       <div class="stage"><canvas></canvas>
         <div class="overlay">
-          <div class="chips" title="A switch and its label share a border: the word is on the right of its switch.">
+          <div class="chips wide-only" title="A switch and its label share a border: the word is on the right of its switch.">
             ${switches.map(([k, l, tip]) => html`<span title=${tip} class="chipwrap">${uiSwitch({ label: l, checked: !!this._options[k], onChange: (v) => this._setOption(k, v) })}</span>`)}
           </div>
-          ${uiSelect({ label: "Grid", value: this._options.grid, options: [{ value: "off", label: "No grid" }, { value: "m", label: "Metres" }, { value: "ft", label: "Feet" }], onChange: (v) => this._setOption("grid", v), style: "min-width: 120px" })}
-          ${uiButton({ label: "Fit map", kind: "text", icon: "mdi:fit-to-screen", onClick: () => this._map.fit() })}
+          <span class="wide-only">${gridPicker}</span>
+          <span class="wide-only">${fitButton}</span>
+          <button class="iconbtn narrow-only" title="Map options" @click=${() => { this._optionsOpen = !this._optionsOpen; }}><ha-icon icon="mdi:tune-variant"></ha-icon></button>
+          <span class="narrow-only">${fitButton}</span>
         </div>
+        ${this._optionsOpen ? html`
+          <div class="opts-backdrop narrow-only" @click=${() => { this._optionsOpen = false; }}></div>
+          <div class="opts-sheet narrow-only">
+            <h3>Map options</h3>
+            <div class="chips" title="A switch and its label share a border: the word is on the right of its switch.">
+              ${switches.map(([k, l, tip]) => html`<span title=${tip} class="chipwrap">${uiSwitch({ label: l, checked: !!this._options[k], onChange: (v) => this._setOption(k, v) })}</span>`)}
+            </div>
+            ${gridPicker}
+            ${uiButton({ label: "Done", kind: "primary", onClick: () => { this._optionsOpen = false; } })}
+          </div>` : nothing}
         ${h ? html`
           <div class="scrub">
             <span>${new Date(h.from * 1000).toLocaleTimeString()}</span>
@@ -559,6 +621,8 @@ class SextantLive extends LitElement {
 
   static styles = [sharedStyles, widgetStyles, css`
     :host { display: grid; grid-template-columns: 1fr 300px; min-height: 0; }
+    .quick-actions { display: none; }
+    .narrow-only { display: none; }
     .stage { position: relative; min-width: 0; }
     canvas { width: 100%; height: 100%; display: block; --sextant-map-bg: var(--card-background-color, #fff); }
     .overlay { position: absolute; left: 10px; top: 10px; display: flex; flex-wrap: wrap; gap: 8px 12px; padding: 6px 10px; border-radius: 8px; background: var(--card-background-color); box-shadow: var(--ha-card-box-shadow, 0 1px 4px rgba(0,0,0,0.2)); font-size: 12px; align-items: center; max-width: calc(100% - 20px); }
@@ -593,7 +657,23 @@ class SextantLive extends LitElement {
     .marking { background: var(--warning-color, #c77800); color: #fff; padding: 6px 8px; border-radius: 6px; font-size: 13px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
     .card.inner { margin-top: 8px; padding: 8px; }
     ul.plain { list-style: none; padding: 0; margin: 4px 0; font-size: 12px; }
-    @media (max-width: 720px) { :host { grid-template-columns: 1fr; grid-template-rows: 1fr auto; } .side { border-left: 0; border-top: 1px solid var(--divider-color); max-height: 40vh; } .overlay { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding: 4px 8px; gap: 6px; } .overlay > * { flex: none; } }
+    .opts-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.35); z-index: 9; }
+    .opts-sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; background: var(--card-background-color); border-radius: 14px 14px 0 0; padding: 14px 16px max(14px, env(safe-area-inset-bottom)); box-shadow: 0 -2px 12px rgba(0,0,0,0.25); display: flex; flex-direction: column; gap: 10px; max-height: 70vh; overflow: auto; }
+    .opts-sheet .chips { flex-direction: column; align-items: stretch; }
+    .opts-sheet .chipwrap { justify-content: space-between; }
+    .opts-sheet .chipwrap > ha-formfield, .opts-sheet .chipwrap > label.inline { width: 100%; justify-content: space-between; }
+    /* Small buttons a phone user reaches for right away: jump straight to
+       the page that does the thing, instead of hunting through the mode
+       tabs. Calibration and adding a tracker are admin actions - offered
+       only when this user could reach those pages at all. */
+    .quick-actions button { display: flex; align-items: center; gap: 6px; }
+    @media (max-width: 720px) {
+      :host { grid-template-columns: 1fr; grid-template-rows: auto 1fr auto; }
+      .quick-actions { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 10px; background: var(--card-background-color); border-bottom: 1px solid var(--divider-color); }
+      .side { border-left: 0; border-top: 1px solid var(--divider-color); max-height: 40vh; }
+      .wide-only { display: none; }
+      .narrow-only { display: flex; }
+    }
   `];
 }
 

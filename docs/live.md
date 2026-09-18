@@ -17,6 +17,14 @@ fingerprint fix, a trail, and hide the plan image. A history scrubber under
 the map replays where a tracker has been over the retention window, with a
 room band, playback and a jump-to-time picker.
 
+On a phone the map switches (labels, trails, the grid and so on) collapse
+behind a single options button so they never force sideways scrolling, the
+floor picker and the cycle-age clock move to a bar under the page, and a
+row of **quick actions** — self-test, and for an administrator, adding a
+tracker and starting calibration — jumps straight to the right page
+without hunting through the tabs. Editing the floor plan itself is still
+a desktop job.
+
 ## Truth marks
 
 When a tracker sits in the wrong place, select it on the Live page, click

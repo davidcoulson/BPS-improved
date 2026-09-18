@@ -50,6 +50,15 @@ export const sharedStyles = css`
   .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 12px; align-items: start; }
   code { font-family: ui-monospace, monospace; font-size: 12px; }
   .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--primary-text-color); color: var(--primary-background-color); padding: 8px 14px; border-radius: 8px; font-size: 13px; z-index: 10; box-shadow: 0 2px 8px rgba(0,0,0,0.3); }
+  /* A wide table on a phone: the leading column (almost always the row's
+     identity - a proxy, a tracker, a device) stays put while the rest
+     scrolls under it, and a fading edge says there is more to see. Pure
+     CSS, no markup changes, so every .wrap table in the panel gets this. */
+  @media (max-width: 720px) {
+    .wrap { position: relative; background: linear-gradient(to right, var(--card-background-color) 30%, rgba(0,0,0,0)), linear-gradient(to right, rgba(0,0,0,0), var(--card-background-color) 70%) 100% 0; background-repeat: no-repeat; background-size: 20px 100%, 20px 100%; background-attachment: local, scroll; }
+    .wrap table { border-collapse: separate; border-spacing: 0; }
+    .wrap th:first-child, .wrap td:first-child { position: sticky; left: 0; background: var(--card-background-color); box-shadow: 2px 0 4px -2px rgba(0,0,0,0.2); }
+  }
 `;
 
 export function fmtAge(seconds) {
