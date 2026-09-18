@@ -1087,7 +1087,7 @@ async def update_tracked_entities(hass):
             # Use a separate copy per entity to avoid cross-entity mutation side effects.
             layout = get_layout(hass)
             _refresh_fingerprint_references(hass, layout, now_ts)
-            new_global_data = [{"entity": ent, "data": copy.deepcopy(layout)} for ent in unique_values]
+            new_global_data = [{"entity": ent, "data": _thing_layout(layout)} for ent in unique_values]
 
             await process_entities(hass, new_global_data)
             async_dispatcher_send(hass, SIGNAL_BPS_UPDATE, _push_payload(hass))
@@ -2519,10 +2519,49 @@ async def process_single_entity(hass, new_global_data, eids):
     await update_receiver_radii(hass, eids)  # Wait for the receivers to update
     await update_trilateration_and_zone(hass, new_global_data, eids["entity"])  # When it is complete → perform trilateration
 
+def _thing_layout(layout):
+    """One thing's working copy of the layout: only what a cycle writes to.
+
+    Each thing gets its own copy because the cycle writes that thing's readings
+    onto the receivers (``distance``, ``quality``, ``cords.r``). That is ALL it
+    writes, so that is all that needs copying. This used to be a deepcopy of
+    the whole layout per thing per cycle - rooms, spots, pins, bias-field grids,
+    every thing's name and class - eighteen times over, in one synchronous
+    block on the event loop, and it got heavier with every feature that stored
+    something on a floor. Everything but the receivers is shared and must be
+    treated as read-only here, as it already was.
+    """
+    out = dict(layout)
+    floors = []
+    for floor in layout.get("floor", []):
+        own = dict(floor)
+        own["receivers"] = [
+            {**r, "cords": dict(r["cords"])} if isinstance(r.get("cords"), dict) else dict(r)
+            for r in floor.get("receivers") or []
+        ]
+        floors.append(own)
+    out["floor"] = floors
+    return out
+
+
 async def process_entities(hass, new_global_data):
-    """Process multiple entities in parallel, but ensure the correct order for each individual entity"""
-    tasks = [process_single_entity(hass, new_global_data, eids) for eids in new_global_data]
-    await asyncio.gather(*tasks)  # Run all entities in parallel, but maintain the correct internal order
+    """Process every thing, one at a time, letting the event loop run in between.
+
+    This used to gather all of them. Each thing's work up to its first real
+    await - reading the receivers, building the solver jobs - is synchronous,
+    and asyncio runs every ready task before it polls for I/O again, so a
+    gather of eighteen things ran eighteen of those back to back: a 200-330 ms
+    stall of the whole of Home Assistant, measured, on every cycle. Nothing
+    was gained for it either - the solves go to the executor but the rest
+    holds the GIL, so the things never really ran in parallel.
+
+    One at a time, the longest the loop waits on Sextant is a single thing's
+    chunk. The cycle takes a little longer end to end and has fifteen seconds
+    to do it in.
+    """
+    for eids in new_global_data:
+        await process_single_entity(hass, new_global_data, eids)
+        await asyncio.sleep(0)  # a thing with nothing to solve never awaits: yield for it
 
 def extract_candidate_floors(new_global_data, tmpentity):
     """Every floor hearing the thing, ranked by its nearest receiver.

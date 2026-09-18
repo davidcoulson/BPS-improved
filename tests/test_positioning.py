@@ -1726,3 +1726,52 @@ def test_location_never_publishes_an_empty_state():
     """Missing values must not reach the state machine as an empty string."""
     state, attrs = sextant._location_state(None, None, None, None)
     assert state == "unknown" and attrs["room"] == "unknown" and attrs["floor"] == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# The cycle must not hold the event loop
+# ---------------------------------------------------------------------------
+
+
+def test_a_things_working_copy_isolates_what_the_cycle_writes_and_shares_the_rest():
+    layout = _square_layout({"zone_switch_secs": 30})
+    layout["floor"][0]["bias_field"] = {"cell_m": 1.0, "x0": 0, "y0": 0, "values": [[1.0] * 10] * 10}
+    a, b = sextant._thing_layout(layout), sextant._thing_layout(layout)
+    rx = a["floor"][0]["receivers"][0]
+    rx["distance"], rx["quality"], rx["cords"]["r"] = 2.5, 0.8, 250.0     # everything a cycle writes
+    for other in (layout, b):
+        theirs = other["floor"][0]["receivers"][0]
+        assert "distance" not in theirs and "quality" not in theirs and "r" not in theirs["cords"]
+    # ...and nothing else is copied: that was the cost.
+    assert a["floor"][0]["zones"] is layout["floor"][0]["zones"]
+    assert a["floor"][0]["bias_field"] is layout["floor"][0]["bias_field"]
+    assert a["tuning"] is layout["tuning"]
+    # A receiver without coordinates (hand-edited file) must not break it.
+    odd = {"floor": [{"name": "F", "receivers": [{"entity_id": "x"}, {"entity_id": "y", "cords": None}]}]}
+    assert [r["entity_id"] for r in sextant._thing_layout(odd)["floor"][0]["receivers"]] == ["x", "y"]
+
+
+def test_the_cycle_gives_the_event_loop_a_turn_between_things(monkeypatch):
+    """Gathering every thing ran all their synchronous chunks back to back and
+    stalled Home Assistant for a quarter of a second a cycle. Something else
+    waiting on the loop must get to run between one thing and the next."""
+    order = []
+
+    async def fake_single(hass, data, eids):
+        order.append(eids["entity"])        # no await inside: the worst case, a thing with nothing to solve
+
+    monkeypatch.setattr(sextant, "process_single_entity", fake_single)
+
+    async def bystander():
+        for _ in range(3):
+            await asyncio.sleep(0)
+            order.append("loop")
+
+    async def main():
+        other = asyncio.ensure_future(bystander())
+        await sextant.process_entities(None, [{"entity": e} for e in ("a", "b", "c", "d")])
+        await other
+
+    run(main())
+    assert order[0] == "a" and "loop" in order[1:3], order   # the loop ran before thing c, not after thing d
+    assert [o for o in order if o != "loop"] == ["a", "b", "c", "d"]
