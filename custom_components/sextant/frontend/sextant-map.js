@@ -107,6 +107,85 @@ function distToSegment(p, a, b) {
   return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
 }
 
+// --- Wall snapping for proxies -----------------------------------------------
+// A proxy in a wall outlet or a light switch IS part of the wall, and a hand
+// placing it lands a few centimetres to one side or the other; which side
+// decides which room it counts for. While a proxy is dragged, a wall within
+// WALL_SNAP_M pulls it onto itself, WALL_INSET_M inside the room the cursor
+// is in (so the point-in-room test is never ambiguous), and keeps it there
+// until the cursor is WALL_RELEASE_M past the wall: crossing takes a
+// deliberate move, sliding along the wall and turning a corner does not.
+// The host skips this while Alt is held.
+export const WALL_SNAP_M = 0.25;
+export const WALL_RELEASE_M = 0.6;
+export const WALL_INSET_M = 0.05;
+const PX_PER_M_FALLBACK = 40; // an unscaled floor: 2000 px frame at ~50 m
+
+function projectOnSegment(p, a, b) {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const l2 = dx * dx + dy * dy;
+  let t = l2 ? ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2 : 0;
+  t = Math.max(0, Math.min(1, t));
+  const q = { x: a.x + t * dx, y: a.y + t * dy };
+  return { q, d: Math.hypot(p.x - q.x, p.y - q.y) };
+}
+
+/** q moved `inset` off the edge a-b into the interior of `ring`. */
+function insetInto(q, a, b, ring, inset) {
+  const len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+  const nx = -(b.y - a.y) / len, ny = (b.x - a.x) / len;
+  const plus = { x: q.x + nx * inset, y: q.y + ny * inset };
+  const minus = { x: q.x - nx * inset, y: q.y - ny * inset };
+  if (pointInPolygon(plus, ring)) return plus;
+  if (pointInPolygon(minus, ring)) return minus;
+  const c = polygonCentroid(ring);
+  return Math.hypot(plus.x - c.x, plus.y - c.y) <= Math.hypot(minus.x - c.x, minus.y - c.y) ? plus : minus;
+}
+
+/**
+ * Where a dragged proxy should sit for cursor `p` (map px).
+ * @param {{x:number,y:number}} p cursor
+ * @param {Array<{entity_id:string, cords:Array<{x:number,y:number}>}>} rooms the floor's rooms (no-go areas excluded)
+ * @param {number|null} scale px per metre (null: an unscaled floor)
+ * @param {object|null} prev the snap returned by the previous call in this drag, or null
+ * @returns {{point:{x:number,y:number}, snap:null|{room:number, edge:number, a, b, name:string}}}
+ */
+export function snapToWall(p, rooms, scale, prev) {
+  const m = scale || PX_PER_M_FALLBACK;
+  const snapD = WALL_SNAP_M * m, releaseD = WALL_RELEASE_M * m, inset = WALL_INSET_M * m;
+  const edgeOf = (room, edge) => {
+    const ring = rooms[room].cords;
+    return { a: ring[edge], b: ring[(edge + 1) % ring.length], ring };
+  };
+  const place = (room, edge) => {
+    const { a, b, ring } = edgeOf(room, edge);
+    const { q } = projectOnSegment(p, a, b);
+    return { point: insetInto(q, a, b, ring, inset), snap: { room, edge, a, b, name: rooms[room].entity_id } };
+  };
+  // Candidate walls: the room the cursor is in, else every room.
+  const inside = rooms.findIndex((r) => (r.cords || []).length >= 3 && pointInPolygon(p, r.cords));
+  let nearest = null;
+  rooms.forEach((r, ri) => {
+    const ring = r.cords || [];
+    if (ring.length < 3 || (inside >= 0 && ri !== inside)) return;
+    for (let e = 0; e < ring.length; e++) {
+      const { d } = projectOnSegment(p, ring[e], ring[(e + 1) % ring.length]);
+      if (!nearest || d < nearest.d) nearest = { room: ri, edge: e, d };
+    }
+  });
+  // Hysteresis: a wall already holding the proxy keeps it until the cursor is
+  // well past it, unless another wall of the same room is now closer and
+  // within snapping range (turning a corner).
+  if (prev && rooms[prev.room] && (rooms[prev.room].cords || []).length > prev.edge) {
+    const { a, b } = edgeOf(prev.room, prev.edge);
+    const dPrev = projectOnSegment(p, a, b).d;
+    const corner = nearest && nearest.room === prev.room && nearest.edge !== prev.edge && nearest.d <= snapD && nearest.d < dPrev;
+    if (dPrev <= releaseD && !corner) return place(prev.room, prev.edge);
+  }
+  if (nearest && nearest.d <= snapD) return place(nearest.room, nearest.edge);
+  return { point: p, snap: null };
+}
+
 export class SextantMap {
   /**
    * @param {HTMLCanvasElement} canvas
@@ -314,7 +393,18 @@ export class SextantMap {
     if (Math.abs(dx) + Math.abs(dy) > 0.5) d.moved = true;
     const f = this.floor, hit = d.hit;
     if (hit.kind === "receiver") {
-      f.receivers[hit.index].cords = { x: d.origin[0].x + dx, y: d.origin[0].y + dy };
+      const raw = { x: d.origin[0].x + dx, y: d.origin[0].y + dy };
+      if (this.options.wallSnap !== false && !e.altKey) {
+        const rooms = (f.zones || []).filter((z) => !z.no_go && (z.cords || []).length >= 3);
+        const res = snapToWall(raw, rooms, f.scale, d.snap);
+        d.snap = res.snap;
+        this._snap = res.snap;
+        f.receivers[hit.index].cords = res.point;
+      } else {
+        d.snap = null;
+        this._snap = null;
+        f.receivers[hit.index].cords = raw;
+      }
     } else {
       const list = hit.kind === "zone" ? f.zones : f.subzones;
       const item = list[hit.index];
@@ -338,6 +428,7 @@ export class SextantMap {
   _up(e) {
     const d = this._drag;
     this._drag = null;
+    this._snap = null;
     this.lastDragMoved = !!(d && d.moved);
     if (!d) return;
     if (d.kind === "item" && d.moved) {
@@ -439,6 +530,7 @@ export class SextantMap {
     this._drawPolygons(ctx, f.zones || [], "zone");
     if (this.options.subzones) this._drawPolygons(ctx, f.subzones || [], "subzone");
     this._drawDraft(ctx);
+    if (this._snap) this._drawSnap(ctx);
     this._drawReceivers(ctx, f.receivers || []);
     if (this.mode !== "edit") { this._drawTrackers(ctx); this._drawMarks(ctx); }
     ctx.restore();
@@ -568,6 +660,22 @@ export class SextantMap {
         this._label(ctx, r.label || r.entity_id, r.cords.x, r.cords.y + (base + 9) / k, 10, 0.8);
       }
     });
+  }
+
+  _drawSnap(ctx) {
+    // The wall holding the dragged proxy, and which room's side it is on.
+    const { a, b, name } = this._snap;
+    const k = this.view.k;
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.strokeStyle = "rgba(255, 152, 0, 0.35)";
+    ctx.lineWidth = 10 / k;
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    ctx.strokeStyle = "#ff9800";
+    ctx.lineWidth = 3 / k;
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    ctx.restore();
+    if (name) this._label(ctx, `on the wall, ${name} side`, (a.x + b.x) / 2, (a.y + b.y) / 2, 11, 0.95);
   }
 
   _drawDraft(ctx) {

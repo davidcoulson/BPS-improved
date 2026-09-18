@@ -14,7 +14,7 @@ import { mapUrlFor } from "./sextant-panel.js";
 
 // [id, label under the icon, icon, tooltip]
 const TOOLS = [
-  ["select", "Select", "mdi:cursor-default-outline", "Select and drag proxies, rooms and vertices"],
+  ["select", "Select", "mdi:cursor-default-outline", "Select and drag proxies, rooms and vertices. A dragged proxy snaps onto a nearby wall on the side you are dragging from; hold Alt to place it freely"],
   ["receiver", "Proxy", "mdi:access-point-plus", "Place a proxy: pick one Bermuda knows, then click the map"],
   ["zone", "Room", "mdi:vector-polygon", "Draw a room: click corners, close on the first one"],
   ["subzone", "Spot", "mdi:vector-rectangle", "Draw a spot (a couch, a desk, a bedside table) inside a room"],
