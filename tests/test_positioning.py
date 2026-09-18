@@ -8,6 +8,8 @@ import asyncio
 import types
 import math
 
+import pytest
+
 import sextant
 from sextant import calibration as cal_mod
 from conftest import make_hass
@@ -1152,6 +1154,69 @@ def test_full_cycle_floor_switches_on_proximity_when_fits_tie(monkeypatch):
         clock["t"] += 10
         seen.append(cycle(2.0, 5.0, "F")["floor"])
     assert seen[-1] == "F", seen
+
+
+def _void_election(monkeypatch, shape):
+    """A thing beside a void: once settled on F, both floors hear it with the
+    SAME distances (no slab between them), so fit and proximity tie exactly
+    and the election has nothing to go on. Returns every cycle's payload."""
+    import copy
+    from sextant import floor_field
+    _reset_thing_state()
+    hass = make_hass()
+    hass.data["sextant_sensors"] = {f"sensor.e_sextant_{k}": _Sensor() for k in ("zone", "nearest_zone", "floor", "sub_zone")}
+    layout = _square_layout({"stationary_secs": 600.0, "floor_switch_secs": 60.0})
+    up = copy.deepcopy(layout["floor"][0]); up["name"] = "U"
+    for z in up["zones"]:
+        z["entity_id"] += " Up"; z["zone_id"] += "u"
+    layout["floor"].append(up)
+    shape(layout, floor_field)
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(sextant.time, "time", lambda: clock["t"])
+    out = []
+    for n in range(16):
+        clock["t"] += 10
+        data = copy.deepcopy(layout)
+        for fl in data["floor"]:
+            for rx in fl["receivers"]:
+                if n < 3 and fl["name"] == "U":
+                    continue                 # settle on F first: upstairs does not hear it yet
+                d = math.hypot(rx["cords"]["x"] / 100.0 - 2.0, rx["cords"]["y"] / 100.0 - 5.0)
+                rx["distance"] = d
+                rx["cords"]["r"] = d * 100.0
+        run(sextant.update_trilateration_and_zone(hass, [{"entity": "e", "data": data}], "e"))
+        entry = next(i for i in sextant.apitricords if i["ent"] == "e")
+        out.append({k: copy.deepcopy(entry[k]) for k in ("floor", "floors", "floor_cands", "cords")})
+    return out
+
+
+def test_a_flat_bias_field_leaves_a_whole_election_untouched(monkeypatch):
+    """The rollout plan is "lay it flat, confirm nothing moved". Nothing must
+    move: not the winner, not the odds, not one digit of any score."""
+    bare = _void_election(monkeypatch, lambda layout, ff: None)
+
+    def lay_flat(layout, ff):
+        for fl in layout["floor"]:
+            fl["bias_field"] = ff.flat((0, 0, 1000, 1000), fl["scale"])
+    assert _void_election(monkeypatch, lay_flat) == bare
+    assert {e["floor"] for e in bare} == {"F"}          # the tie never unseats the incumbent
+    assert bare[-1]["floor_cands"]["U"]["bias"] == 1.0
+
+
+def test_a_shaped_bias_field_breaks_a_tie_the_evidence_cannot(monkeypatch):
+    """Same void, but U's field says a fix landing here is to be believed.
+    That is the only difference between the floors, and it decides it."""
+    def shape(layout, ff):
+        up = layout["floor"][1]
+        up["bias_field"] = ff.flat((0, 0, 1000, 1000), up["scale"])
+        ff.paint(up, [(0, 300), (400, 300), (400, 700), (0, 700)], 1.6)   # a landing around (2, 5) m
+    seen = _void_election(monkeypatch, shape)
+    assert seen[2]["floor"] == "F" and seen[-1]["floor"] == "U", [e["floor"] for e in seen]
+    cands = seen[-1]["floor_cands"]
+    assert cands["U"]["bias"] == 1.6 and cands["F"]["bias"] == 1.0
+    assert cands["U"]["score"] == pytest.approx(cands["U"]["prox"] * 1.6, abs=1e-3)
+    # Each contender reports its OWN fix, in its own floor's pixels.
+    assert all(abs(c["fix"][0] - 200) < 5 and abs(c["fix"][1] - 500) < 5 for c in cands.values())
 # ---------------------------------------------------------------------------
 # Solves run in the executor; positions are pushed over the websocket
 # ---------------------------------------------------------------------------

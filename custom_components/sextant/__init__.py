@@ -18,7 +18,7 @@ from homeassistant.util import slugify
 import numpy as np
 from .solver_numpy import least_squares_bounded_soft_l1
 import voluptuous as vol
-from homeassistant.core import ServiceCall
+from homeassistant.core import ServiceCall, ServiceResponse, SupportsResponse
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 import logging
@@ -70,6 +70,7 @@ from .const import ACCURACY_ENTITY_ID
 from . import history as history_mod
 from . import bermuda_source
 from . import fingerprint
+from . import floor_field
 from . import truth as truth_mod
 from .zone_adjust import adjust_zones, adjust_subzones
 
@@ -2112,15 +2113,33 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
     # upstairs receivers around the void as by the office ones (measured
     # live at 0.54 / 0.46, incumbent never challenged). The floor whose
     # receivers are physically nearest gets the benefit of the doubt.
-    scores = _proximity_weighted_scores(
+    prox_scores = _proximity_weighted_scores(
         {f: s["conf"] for f, s in solved.items()},
         {c["name"]: c.get("near_k_m", c.get("nearest_m")) for c in candidates},
         _tuning(layout, "floor_proximity_weight"),
     )
     # The floor's own prior (layout floor["bias"], default 1): in a house the
     # ground floor is where things usually are, and a phone on the kitchen
-    # counter must not tie with the bedroom directly above it.
-    scores = {f: s * _floor_bias(layout, f) for f, s in scores.items()}
+    # counter must not tie with the bedroom directly above it. Shaped by the
+    # floor's bias field at where THIS floor's solve put the thing, so the
+    # prior can differ beside a void from what it is over a slab.
+    biases = {f: _floor_bias(layout, f, solved[f]["fix"]) for f in prox_scores}
+    scores = {f: s * biases[f] for f, s in prox_scores.items()}
+    # Every contender's own fix and how its score was built, not just the
+    # winner's. A bias field is tuned against exactly this: where did each
+    # floor's solve land, and what did the election make of it. The published
+    # odds are smoothed and the losing floors' fixes were never published, so
+    # without this a wrong election cannot be replayed under another field.
+    floor_cands = {
+        f: {
+            "fix": [round(float(solved[f]["fix"][0]), 1), round(float(solved[f]["fix"][1]), 1)],
+            "conf": round(solved[f]["conf"], 4),
+            "prox": round(prox_scores[f], 4),
+            "bias": round(biases[f], 4),
+            "score": round(scores[f], 4),
+        }
+        for f in scores
+    }
     probs = _update_floor_probabilities(entity, scores, valid_floors)
     now = time.time()
     # The incumbent's required lead grows with how long it has held the floor
@@ -2236,6 +2255,10 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
                 # Smoothed floor-election probabilities, for debugging "why
                 # did it pick this floor" (issue #94).
                 "floors": {f: round(p, 3) for f, p in probs.items()},
+                # This cycle's raw contenders behind those smoothed odds: each
+                # floor's own fix, fit, proximity-weighted score, bias (scalar
+                # x field) and final score. What a bias field is tuned from.
+                "floor_cands": floor_cands,
                 # Positioning telemetry for the eval harness (tools/sextant_eval.py)
                 # and the debug tab: the pre-Kalman, pre-snap trilaterated fix
                 # next to the published (filtered + snapped) `cords`, so solver
@@ -2587,20 +2610,26 @@ def _score_floor_fit(fix, weighted, scale):
     return 0.5 * coverage + 0.5 * quality, rms_m, coverage
 
 
-def _floor_bias(layout, floor_name):
-    """The floor's election prior from the layout (floor["bias"]), default 1.
+def _floor_bias(layout, floor_name, fix=None):
+    """The floor's election prior: its scalar bias, shaped by its bias field.
 
     Multiplies the floor's score before the probabilities are updated, so a
     bias of 1.2 is a 20 % head start in every cycle, not a one-off nudge.
-    Anything not a number in (0, 10] is ignored.
+    A scalar that is not a number in (0, 10] is ignored.
+
+    ``fix`` is this floor's OWN candidate fix this cycle, in its own pixels.
+    Given one, the scalar is multiplied by the floor's bias field sampled
+    there (floor_field.py) - the scalar is one prior for the whole plan, the
+    field is where on the plan that prior is wrong. No fix, no field, or a
+    flat field all leave the scalar exactly as it was.
     """
     floors = layout.get("floor") if isinstance(layout, dict) else None
     for floor in floors or []:
         if isinstance(floor, dict) and floor.get("name") == floor_name:
             bias = floor.get("bias")
-            if isinstance(bias, (int, float)) and not isinstance(bias, bool) and 0 < bias <= 10:
-                return float(bias)
-            return 1.0
+            if not (isinstance(bias, (int, float)) and not isinstance(bias, bool) and 0 < bias <= 10):
+                bias = 1.0
+            return float(bias) * (floor_field.sample(floor, fix) if fix is not None else 1.0)
     return 1.0
 
 
@@ -3683,6 +3712,83 @@ def _register_calibration_services(hass) -> None:
             await save_layout(hass, data)
         _LOGGER.info("sextant.set_thing_heights: %d thing(s) set", len(heights))
 
+    async def _bias_field(call: ServiceCall) -> ServiceResponse:
+        """Lay, shape or remove a floor's bias field (floor_field.py).
+
+        A service for the same reason the heights are: the layout lives in
+        HA's Store and a file edit under a running HA is lost on the next
+        save. ``flat`` lays the no-op field, ``paint`` writes a value under a
+        room, a spot or a drawn polygon, ``clear`` removes the field again.
+        """
+        floor_name = call.data["floor"]
+        action = call.data["action"]
+        async with LAYOUT_LOCK:
+            data = get_layout_for_edit(hass)
+            floors = data.get("floor") if isinstance(data, dict) else None
+            floor = next((f for f in floors or [] if isinstance(f, dict) and f.get("name") == floor_name), None)
+            if floor is None:
+                known = ", ".join(str(f.get("name")) for f in floors or [] if isinstance(f, dict))
+                raise HomeAssistantError(f"No floor named {floor_name!r}. Floors: {known or 'none'}")
+            touched = None
+            try:
+                if action == "clear":
+                    floor.pop(floor_field.FIELD_KEY, None)
+                else:
+                    if action == "flat" or floor_field.parse(floor) is None:
+                        # Painting an unfielded floor lays the flat field
+                        # first, so "paint the catwalk" is one call, not two.
+                        xs, ys = [], []
+                        for receiver in floor.get("receivers") or []:
+                            cords = receiver.get("cords") or {}
+                            if "x" in cords and "y" in cords:
+                                xs.append(float(cords["x"]))
+                                ys.append(float(cords["y"]))
+                        for shape in (floor.get("zones") or []) + (floor.get("subzones") or []):
+                            for pt in shape.get("cords") or []:
+                                xs.append(float(pt["x"]))
+                                ys.append(float(pt["y"]))
+                        if not xs:
+                            raise ValueError("the floor has no extent; place proxies or draw rooms first")
+                        floor[floor_field.FIELD_KEY] = floor_field.flat(
+                            (min(xs), min(ys), max(xs), max(ys)), floor.get("scale"),
+                            call.data.get("cell_m", 1.0), call.data.get("value", 1.0) if action == "flat" else 1.0,
+                        )
+                    if action == "paint":
+                        points = call.data.get("points")
+                        area = call.data.get("area")
+                        if (points is None) == (area is None):
+                            raise ValueError('paint needs exactly one of "area" (a room or spot name) or "points"')
+                        if area is not None:
+                            shapes = (floor.get("zones") or []) + (floor.get("subzones") or [])
+                            shape = next((s for s in shapes if s.get("entity_id") == area), None)
+                            if shape is None:
+                                names = ", ".join(sorted(str(s.get("entity_id")) for s in shapes))
+                                raise ValueError(f"no room or spot named {area!r} on {floor_name}. Known: {names}")
+                            points = [(pt["x"], pt["y"]) for pt in shape.get("cords") or []]
+                        touched = floor_field.paint(floor, points, call.data.get("value", 1.0), call.data.get("mode", "set"))
+            except ValueError as err:
+                raise HomeAssistantError(f"sextant.set_floor_bias_field: {err}") from err
+            await save_layout(hass, data)
+        summary = floor_field.describe(floor)
+        _LOGGER.info("sextant.set_floor_bias_field: %s on %s -> %s (cells painted: %s)",
+                     action, floor_name, summary, touched)
+        return {"floor": floor_name, "action": action, "cells_painted": touched, "field": summary}
+
+    hass.services.async_register(
+        DOMAIN, "set_floor_bias_field", _bias_field,
+        schema=vol.Schema({
+            vol.Required("floor"): cv.string,
+            vol.Required("action"): vol.In(["flat", "paint", "clear"]),
+            vol.Optional("cell_m", default=1.0): vol.All(
+                vol.Coerce(float), vol.Range(min=floor_field.CELL_MIN_M, max=floor_field.CELL_MAX_M)),
+            vol.Optional("value", default=1.0): vol.All(
+                vol.Coerce(float), vol.Range(min=floor_field.FIELD_MIN, max=floor_field.FIELD_MAX)),
+            vol.Optional("mode", default="set"): vol.In(["set", "multiply"]),
+            vol.Optional("area"): cv.string,
+            vol.Optional("points"): [vol.All([vol.Coerce(float)], vol.Length(min=2, max=2))],
+        }),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
     hass.services.async_register(
         DOMAIN, "set_auto_calibration", _auto,
         schema=vol.Schema({vol.Required("enabled"): cv.boolean}),

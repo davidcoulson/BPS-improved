@@ -191,3 +191,86 @@ set_tuning:
       default: false
       selector:
         boolean:
+
+set_floor_bias_field:
+  name: Set a floor's bias field
+  description: >-
+    Shape a floor's election bias by place. The field is a coarse grid of
+    multipliers over the floor plan, sampled where that floor's own solve put
+    the thing, and multiplied onto the floor's scalar bias. Lay a flat field
+    first (it changes nothing), then paint the places where the election is
+    wrong: up where a fix is trustworthy (a catwalk beside a void), down where
+    it is impossible (the void itself).
+  fields:
+    floor:
+      name: Floor
+      description: The floor's name, as on the Edit page.
+      required: true
+      example: Second Floor
+      selector:
+        text:
+    action:
+      name: Action
+      description: >-
+        "flat" lays a uniform field over the floor (replacing any field already
+        there), "paint" writes a value under a room, spot or polygon (laying a
+        flat field first if the floor has none), "clear" removes the field.
+      required: true
+      example: paint
+      selector:
+        select:
+          options:
+            - flat
+            - paint
+            - clear
+    cell_m:
+      name: Cell size
+      description: Grid cell edge in metres, used when a field is laid. Default 1.
+      required: false
+      example: 1.0
+      selector:
+        number:
+          min: 0.25
+          max: 10
+          step: 0.25
+          unit_of_measurement: m
+          mode: box
+    value:
+      name: Value
+      description: >-
+        The multiplier to write. 1 is neutral, above 1 favours this floor when
+        its solve lands here, below 1 counts against it. Default 1.
+      required: false
+      example: 1.4
+      selector:
+        number:
+          min: 0.1
+          max: 10
+          step: 0.05
+          mode: box
+    mode:
+      name: Paint mode
+      description: >-
+        "set" writes the value; "multiply" scales what each cell already holds,
+        so overlapping strokes compound.
+      required: false
+      example: set
+      selector:
+        select:
+          options:
+            - set
+            - multiply
+    area:
+      name: Room or spot
+      description: Paint under this room or spot, by name. Use this or Points.
+      required: false
+      example: Catwalk
+      selector:
+        text:
+    points:
+      name: Points
+      description: Paint under this polygon, as [x, y] pairs in the floor's pixels.
+      required: false
+      example: "[[1200, 900], [1500, 900], [1500, 1100], [1200, 1100]]"
+      selector:
+        object:

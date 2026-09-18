@@ -251,7 +251,10 @@ def _install_homeassistant_stubs():
         result_message=lambda msg_id, result=None: {"id": msg_id, "type": "result", "success": True, "result": result},
     )
     _module("homeassistant.helpers.template", Template=object)
-    _module("homeassistant.core", HomeAssistant=object, ServiceCall=object, callback=lambda f: f)
+    _module(
+        "homeassistant.core", HomeAssistant=object, ServiceCall=object, callback=lambda f: f,
+        ServiceResponse=dict, SupportsResponse=types.SimpleNamespace(NONE="none", ONLY="only", OPTIONAL="optional"),
+    )
     _module("homeassistant.exceptions", HomeAssistantError=Exception)
     # `from homeassistant.helpers import config_validation as cv` reads the
     # attribute off the parent package (like panel_custom above).
@@ -318,6 +321,7 @@ def _install_homeassistant_stubs():
         Schema=lambda *a, **k: None, Required=lambda *a, **k: None,
         Optional=lambda *a, **k: None, Coerce=lambda *a, **k: None,
         All=lambda *a, **k: None, Any=lambda *a, **k: None, Length=lambda *a, **k: None, Range=lambda *a, **k: None,
+        In=lambda *a, **k: None,
     )
     # NOTE: no watchdog stub — the integration no longer imports it (the file
     # watcher was removed when the layout moved to the Store). If a stray import

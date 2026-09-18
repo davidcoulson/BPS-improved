@@ -14,7 +14,8 @@ counts for. Hold Alt to place one freely. Draw rooms, spots and no-go areas as p
 drag, edge midpoints add a vertex, right-click removes one. Set the scale
 by measuring a known distance. Give a floor a *level* (0 ground, -1
 basement, 1 above) for ordering and an election *bias* (1.15 gives the
-ground floor a standing head start). Padlocks lock rooms, spots and
+ground floor a standing head start; where one number for the whole floor
+is too blunt, see [bias fields](positioning.md)). Padlocks lock rooms, spots and
 proxies against selection so you cannot drag a wall while placing a proxy;
 rooms start locked. A selected spot can be limited to the thing classes it
 takes — pick phone, watch and keys on a bedside table, cat on a cat bed —
