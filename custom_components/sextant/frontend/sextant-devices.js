@@ -1,7 +1,7 @@
 /**
- * Trackers and Bermuda modes: Bermuda without its options flow.
+ * Things and Bermuda modes: Bermuda without its options flow.
  *
- * section="trackers": what Bermuda tracks, each with a dialog for its name,
+ * section="things": what Bermuda tracks, each with a dialog for its name,
  * class (the icon on the map), height, ref trim and custom icon, and
  * everything Bermuda hears but does not track (one click to track, which
  * opens that same dialog).
@@ -9,12 +9,12 @@
  * accessories (with a step-by-step add) and the Tiles' binding state.
  */
 import { LitElement, html, css, nothing } from "./lit.js";
-import { pointInPolygon, trackerColor } from "./sextant-map.js";
-import { sharedStyles, widgetStyles, fmtAge, fmtNum, toast, callWS, confirmDialog, uiField, uiSelect, uiSwitch, uiButton, trackerName, fmtLen, lenUnit, toDisplayLen, fromDisplayLen, TRACKER_CLASSES, classIcon } from "./sextant-ui.js";
+import { pointInPolygon, thingColor } from "./sextant-map.js";
+import { sharedStyles, widgetStyles, fmtAge, fmtNum, toast, callWS, confirmDialog, uiField, uiSelect, uiSwitch, uiButton, thingName, fmtLen, lenUnit, toDisplayLen, fromDisplayLen, THING_CLASSES, classIcon } from "./sextant-ui.js";
 
 const KIND_FILTERS = [["all", "Everything"], ["tile", "Tiles"], ["ibeacon", "iBeacons"], ["device", "Other devices"]];
 const RECENT_SECS = 60;
-// Quick colours for a tracker; the picker next to them takes any colour.
+// Quick colours for a thing; the picker next to them takes any colour.
 const PALETTE = ["#e53935", "#fb8c00", "#fdd835", "#43a047", "#00897b", "#1e88e5", "#3949ab", "#8e24aa", "#d81b60", "#6d4c41", "#8d6e63", "#546e7a"];
 const CROP_SIZE = 260;   // the cropper on screen (px)
 const ICON_SIZE = 192;   // the icon that is uploaded (px)
@@ -47,7 +47,7 @@ class SextantDevices extends LitElement {
 
   constructor() {
     super();
-    this.section = "trackers";
+    this.section = "things";
     this._tracked = null;
     this._candidates = null;
     this._tiles = null;
@@ -60,7 +60,7 @@ class SextantDevices extends LitElement {
     this._kind = "all";
     this._showAll = false;
     this._busy = false;
-    this._wizard = null;        // tracker dialog state
+    this._wizard = null;        // thing dialog state
     this._findmyWizard = null;  // FindMy add-accessory dialog state
     this._pendingTrack = null;  // config_value just sent to Bermuda: open its dialog once it appears
   }
@@ -113,7 +113,7 @@ class SextantDevices extends LitElement {
     if (!tileId) return;
     const r = await callWS(this, this.hass, { type: "sextant/bermuda/tile/bind", tile_id: tileId, uid });
     if (r) {
-      toast(this, r.address ? `${trackerName(this.data, tileId)} is now ${r.address}` : `${trackerName(this.data, tileId)} remembered as ${uid}; it binds when that Tile is next heard`);
+      toast(this, r.address ? `${thingName(this.data, tileId)} is now ${r.address}` : `${thingName(this.data, tileId)} remembered as ${uid}; it binds when that Tile is next heard`);
       this._bindPick = { ...this._bindPick, [uid]: "" };
       await this._refreshLight();
     }
@@ -124,7 +124,7 @@ class SextantDevices extends LitElement {
     if (!address) return;
     const r = await callWS(this, this.hass, { type: "sextant/bermuda/tile/adopt", tile_id: tileId, address });
     if (r) {
-      toast(this, `${trackerName(this.data, tileId)} is now ${r.address}`);
+      toast(this, `${thingName(this.data, tileId)} is now ${r.address}`);
       this._adoptPick = { ...this._adoptPick, [tileId]: "" };
       await this._refreshLight();
       this.dispatchEvent(new CustomEvent("layout-changed"));
@@ -156,19 +156,19 @@ class SextantDevices extends LitElement {
     let icon = p.settings.icon;
     if (p.file) { const uploaded = await this._uploadIcon(slug, p.file); if (uploaded) icon = uploaded; }
     const r = await this._tune(slug, { ...p.settings, icon });
-    if (r) toast(this, `${p.settings.name || trackerName(this.data, slug)} is tracked and set up`);
+    if (r) toast(this, `${p.settings.name || thingName(this.data, slug)} is tracked and set up`);
   }
 
   /** Track: the dialog first, Bermuda only after Save (so nothing changes if you change your mind). */
   _startTrack(c) {
     this._wizard = {
       new: true, config_value: c.config_value, address: c.address, slug: null,
-      name: "", placeholder: c.name || c.address, tracker_class: c.kind === "tile" ? "tag" : "", height: "", ref: "", icon: "", file: null,
+      name: "", placeholder: c.name || c.address, thing_class: c.kind === "tile" ? "tag" : "", height: "", ref: "", icon: "", file: null,
     };
   }
 
   async _tune(entity, patch) {
-    const r = await callWS(this, this.hass, { type: "sextant/tracker/tune", entity, ...patch });
+    const r = await callWS(this, this.hass, { type: "sextant/thing/tune", entity, ...patch });
     if (r) this.dispatchEvent(new CustomEvent("layout-changed"));
     return r;
   }
@@ -178,7 +178,7 @@ class SextantDevices extends LitElement {
     const form = new FormData();
     form.append("icon", file, file.name || `${entity}-icon.png`);
     try {
-      const resp = await this.hass.fetchWithAuth("/api/sextant/upload_tracker_icon", { method: "POST", body: form });
+      const resp = await this.hass.fetchWithAuth("/api/sextant/upload_thing_icon", { method: "POST", body: form });
       if (!resp.ok) throw new Error(await resp.text());
       const body = await resp.json().catch(() => ({}));
       return body.icon_url || body.value || body.path || `/local/sextant_icons/${file.name}`;
@@ -201,20 +201,20 @@ class SextantDevices extends LitElement {
     if (r) { toast(this, "Bermuda options saved; Bermuda is reloading…"); this._options = r.options; }
   }
 
-  // --- Tracker dialog --------------------------------------------------------
+  // --- Thing dialog --------------------------------------------------------
 
   _openWizard(slug, address) {
     const layout = this.data?.layout || {};
     this._wizard = {
       slug, address,
-      name: layout.tracker_names?.[slug] || "",
-      placeholder: trackerName({ ...this.data, names: { ...(this.data?.names || {}), [slug]: undefined } }, slug),
-      tracker_class: layout.tracker_classes?.[slug] || "",
-      height: toDisplayLen(layout.tracker_heights?.[slug], this.hass),
-      ref: layout.tracker_ref_offsets?.[slug] ?? "",
-      icon: layout.tracker_icons?.[slug] || "",
-      estimator: layout.tracker_estimators?.[slug] || "",
-      color: layout.tracker_colors?.[slug] || "",
+      name: layout.thing_names?.[slug] || "",
+      placeholder: thingName({ ...this.data, names: { ...(this.data?.names || {}), [slug]: undefined } }, slug),
+      thing_class: layout.thing_classes?.[slug] || "",
+      height: toDisplayLen(layout.thing_heights?.[slug], this.hass),
+      ref: layout.thing_ref_offsets?.[slug] ?? "",
+      icon: layout.thing_icons?.[slug] || "",
+      estimator: layout.thing_estimators?.[slug] || "",
+      color: layout.thing_colors?.[slug] || "",
       file: null,     // the cropped photo (a Blob) waiting to be uploaded on Save
       preview: null,  // its object URL
       crop: null,     // the cropper state while a photo is being framed
@@ -308,7 +308,7 @@ class SextantDevices extends LitElement {
     if (!w) return;
     const settings = {
       name: w.name.trim() || null,
-      tracker_class: w.tracker_class || null,
+      thing_class: w.thing_class || null,
       height: w.height === "" || w.height == null ? null : fromDisplayLen(w.height, this.hass),
       ref_offset_db: w.ref === "" || w.ref == null ? null : Number(w.ref),
       icon: w.icon || null,
@@ -335,7 +335,7 @@ class SextantDevices extends LitElement {
     if (!w) return nothing;
     const unit = lenUnit(this.hass);
     return html`<div class="modal" @click=${(e) => { if (e.target === e.currentTarget) this._wizard = null; }}>
-      <div class="dialog card" role="dialog" aria-label="Tracker settings">
+      <div class="dialog card" role="dialog" aria-label="Thing settings">
         <h3>${w.new ? "Track " : ""}${w.placeholder} <span class="muted small">${w.address}</span></h3>
         ${w.new ? html`<p class="small muted">Nothing is sent to Bermuda until you press Track below; Cancel leaves it untracked.</p>` : nothing}
         <div class="row">
@@ -344,26 +344,26 @@ class SextantDevices extends LitElement {
         <p class="small muted">Blank keeps the device name from Bermuda / Home Assistant.</p>
         <h4>What is it?</h4>
         <div class="classes">
-          ${TRACKER_CLASSES.map(([key, label, icon]) => html`<button class="cls ${w.tracker_class === key ? "on" : ""}" title=${label} @click=${() => { w.tracker_class = key; this.requestUpdate(); }}>
+          ${THING_CLASSES.map(([key, label, icon]) => html`<button class="cls ${w.thing_class === key ? "on" : ""}" title=${label} @click=${() => { w.thing_class = key; this.requestUpdate(); }}>
             ${icon ? html`<ha-icon icon=${icon}></ha-icon>` : html`<span class="initials">Ab</span>`}<span>${label}</span></button>`)}
         </div>
         <div class="row colour">
-          <span class="avatar-preview" style="background: ${trackerColor(w.slug, w.color || null)}" title="how this tracker will look">${w.preview || w.icon ? html`<img src=${w.preview || w.icon} alt="">` : classIcon(w.tracker_class) ? html`<ha-icon icon=${classIcon(w.tracker_class)}></ha-icon>` : html`<span class="initials">${(w.name || w.placeholder || "?").slice(0, 2).toUpperCase()}</span>`}</span>
+          <span class="avatar-preview" style="background: ${thingColor(w.slug, w.color || null)}" title="how this thing will look">${w.preview || w.icon ? html`<img src=${w.preview || w.icon} alt="">` : classIcon(w.thing_class) ? html`<ha-icon icon=${classIcon(w.thing_class)}></ha-icon>` : html`<span class="initials">${(w.name || w.placeholder || "?").slice(0, 2).toUpperCase()}</span>`}</span>
           <span class="small">Colour</span>
           ${PALETTE.map((c) => html`<button class="swatch ${w.color === c ? "on" : ""}" style="background: ${c}" title=${c} @click=${() => { w.color = c; this.requestUpdate(); }}></button>`)}
           <input type="color" title="Any colour" .value=${w.color || "#1e88e5"} @input=${(e) => { w.color = e.target.value; this.requestUpdate(); }}>
           ${w.color ? uiButton({ label: "Auto", kind: "text", onClick: () => { w.color = ""; this.requestUpdate(); }, title: "Back to the automatic colour" }) : nothing}
         </div>
-        <p class="small muted">The colour is used everywhere this tracker is drawn: the map, the Live list, the map card.</p>
+        <p class="small muted">The colour is used everywhere this thing is drawn: the map, the Live list, the map card.</p>
         <div class="row">
           ${uiField({ label: `Height (${unit})`, type: "number", step: 0.05, min: 0, max: unit === "ft" ? 16 : 5, value: w.height, placeholder: String(toDisplayLen(this._defaultHeight(), this.hass)), onChange: (v) => { w.height = v; this.requestUpdate(); }, style: "width: 150px" })}
           ${uiField({ label: "Ref trim (dB)", type: "number", step: 0.5, min: -20, max: 20, value: w.ref, placeholder: "0", onChange: (v) => { w.ref = v; this.requestUpdate(); }, style: "width: 150px" })}
         </div>
-        <p class="small muted">Height: how high it is usually carried or placed (a phone in a pocket about 1 m, a dog's collar 0.3 m). Ref trim: a few dB either way if this tracker always reads too near or too far.</p>
+        <p class="small muted">Height: how high it is usually carried or placed (a phone in a pocket about 1 m, a dog's collar 0.3 m). Ref trim: a few dB either way if this thing always reads too near or too far.</p>
         <div class="row">
           ${uiSelect({ label: "Positioning", value: w.estimator || "default", options: [{ value: "default", label: `Default (${this.data?.layout?.tuning?.position_estimator || "geometric"})` }, { value: "geometric", label: "Geometric only, no fingerprint" }, { value: "fused", label: "Fused" }, { value: "fingerprint", label: "Fingerprint only" }], onChange: (v) => { w.estimator = v === "default" ? "" : v; this.requestUpdate(); }, style: "min-width: 280px" })}
         </div>
-        <p class="small muted">Positioning: the estimator for this tracker alone. If the fingerprint makes it worse (a Tile or a tag whose radio reads unlike the phones), pick geometric only.</p>
+        <p class="small muted">Positioning: the estimator for this thing alone. If the fingerprint makes it worse (a Tile or a tag whose radio reads unlike the phones), pick geometric only.</p>
         <h4>Photo or custom icon <span class="muted small">optional, drawn instead of the class icon</span></h4>
         ${w.crop ? html`<div class="cropper">
           <canvas class="cropper" width=${CROP_SIZE} height=${CROP_SIZE}
@@ -444,7 +444,7 @@ class SextantDevices extends LitElement {
         <ol class="steps">
           <li><b>Export the keys.</b> An AirTag or FindMy tag changes its address every 15 minutes on a schedule seeded when it was paired, so Bermuda needs the pairing keys, and only the Mac (or iPhone backup) they were paired from has them. Follow the key-extraction guide of <a href=${FINDMY_GUIDE} target="_blank" rel="noopener">FindMy.py</a>: it decrypts the Owned Beacons records from your Mac's keychain and prints one JSON per accessory (<code>FindMyAccessory.to_json()</code>).</li>
           <li><b>Paste them here</b>, one or several, in any order. Each needs ${FINDMY_KEYS.map((k, i) => html`${i ? ", " : ""}<code>${k}</code>`)}; a name and model come along when the export had them.</li>
-          <li><b>Name and add.</b> Each accessory becomes a <code>findmy_…</code> device in Bermuda; track it from the Trackers page once it has been seen.</li>
+          <li><b>Name and add.</b> Each accessory becomes a <code>findmy_…</code> device in Bermuda; track it from the Things page once it has been seen.</li>
         </ol>
         <textarea placeholder='{"master_key": "...", "skn": "...", "sks": "...", "paired_at": "...", "name": "Keys"}' .value=${w.text} @input=${(e) => this._parseFindMy(e.target.value)}></textarea>
         ${w.errors.length ? html`<ul class="errors">${w.errors.map((e) => html`<li>${e}</li>`)}</ul>` : nothing}
@@ -468,14 +468,14 @@ class SextantDevices extends LitElement {
 
   render() {
     if (!this._hasApi) {
-      return html`<div class="page"><div class="card">This Bermuda build has no device-management API. Update Bermuda to fork-testing.15 or later to manage trackers from here.</div></div>`;
+      return html`<div class="page"><div class="card">This Bermuda build has no device-management API. Update Bermuda to fork-testing.15 or later to manage things from here.</div></div>`;
     }
-    return html`<div class="page">${this.section === "bermuda" ? this._renderBermuda() : this._renderTrackers()}</div>${this._renderWizard()}${this._renderFindMyWizard()}`;
+    return html`<div class="page">${this.section === "bermuda" ? this._renderBermuda() : this._renderThings()}</div>${this._renderWizard()}${this._renderFindMyWizard()}`;
   }
 
-  /** The carry height used for a tracker without one of its own: the layout's tracker_height, else 1 m. */
+  /** The carry height used for a thing without one of its own: the layout's thing_height, else 1 m. */
   _defaultHeight() {
-    const h = this.data?.layout?.tracker_height;
+    const h = this.data?.layout?.thing_height;
     return typeof h === "number" && h >= 0 && h <= 5 ? h : 1.0;
   }
 
@@ -514,13 +514,13 @@ class SextantDevices extends LitElement {
     return { room: p.room, floor: p.floor, proxy: p.name, rssi: hit.rssi };
   }
 
-  _renderTrackers() {
+  _renderThings() {
     const layout = this.data?.layout || {};
     const placed = this._placedAddresses();
     const index = this._placedIndex();
-    const heights = layout.tracker_heights || {}, offsets = layout.tracker_ref_offsets || {}, icons = layout.tracker_icons || {}, classes = layout.tracker_classes || {}, colors = layout.tracker_colors || {};
+    const heights = layout.thing_heights || {}, offsets = layout.thing_ref_offsets || {}, icons = layout.thing_icons || {}, classes = layout.thing_classes || {}, colors = layout.thing_colors || {};
     const live = new Map((this.positions?.positions || []).map((p) => [p.ent, p]));
-    const tracked = Object.entries(this._tracked || {}).sort((a, b) => trackerName(this.data, a[1].slug).localeCompare(trackerName(this.data, b[1].slug)));
+    const tracked = Object.entries(this._tracked || {}).sort((a, b) => thingName(this.data, a[1].slug).localeCompare(thingName(this.data, b[1].slug)));
     const filter = this._filter.toLowerCase();
     const placedHearing = (c) => (Array.isArray(c.heard_by) ? c.heard_by : []).filter((h) => placed.has(String(h.address || "").toLowerCase())).length;
     const all = (this._candidates || []).filter((c) => !this._isProxyBeacon(c) && !this._onlyUnplaced(c, placed));
@@ -536,20 +536,20 @@ class SextantDevices extends LitElement {
       <section class="card">
         <h3>Tracked <span class="muted">${tracked.length}</span></h3>
         <div class="wrap"><table class="compact">
-          <tr><th>Tracker</th><th>Where</th><th class="num">Height</th><th class="num">Ref trim</th><th></th></tr>
+          <tr><th>Thing</th><th>Where</th><th class="num">Height</th><th class="num">Ref trim</th><th></th></tr>
           ${tracked.map(([address, d]) => {
-            const slug = d.slug, p = live.get(slug), name = trackerName(this.data, slug), mdi = classIcon(classes[slug]);
+            const slug = d.slug, p = live.get(slug), name = thingName(this.data, slug), mdi = classIcon(classes[slug]);
             return html`<tr>
               <td class="who">
                 <button class="iconpick" title="Change the icon or class of ${name}" @click=${() => this._openWizard(slug, address)}>
-                  ${icons[slug] ? html`<img class="icon round" src=${icons[slug]} alt="" style="box-shadow: 0 0 0 2px ${trackerColor(slug, colors[slug])}">` : html`<ha-icon class="icon" icon=${mdi || "mdi:tag-outline"} style="color: ${trackerColor(slug, colors[slug])}"></ha-icon>`}
+                  ${icons[slug] ? html`<img class="icon round" src=${icons[slug]} alt="" style="box-shadow: 0 0 0 2px ${thingColor(slug, colors[slug])}">` : html`<ha-icon class="icon" icon=${mdi || "mdi:tag-outline"} style="color: ${thingColor(slug, colors[slug])}"></ha-icon>`}
                 </button>
-                <div><a href="#" class="name" title="Edit name, class, height, ref trim and icon" @click=${(e) => { e.preventDefault(); this._openWizard(slug, address); }}>${name}</a><br><span class="muted small">${address}${classes[slug] ? ` · ${(TRACKER_CLASSES.find(([k]) => k === classes[slug]) || [])[1] || classes[slug]}` : ""}${layout.tracker_estimators?.[slug] ? ` · ${layout.tracker_estimators[slug]} only` : ""}</span></div>
+                <div><a href="#" class="name" title="Edit name, class, height, ref trim and icon" @click=${(e) => { e.preventDefault(); this._openWizard(slug, address); }}>${name}</a><br><span class="muted small">${address}${classes[slug] ? ` · ${(THING_CLASSES.find(([k]) => k === classes[slug]) || [])[1] || classes[slug]}` : ""}${layout.thing_estimators?.[slug] ? ` · ${layout.thing_estimators[slug]} only` : ""}</span></div>
               </td>
               <td>${p ? html`${p.zone}${p.sub_zone && p.sub_zone !== "unknown" ? ` · ${p.sub_zone}` : ""}<br><span class="muted small">${p.floor}</span>`
                 : d.last_seen_age != null ? html`<span class="muted">no position</span><br><span class="muted small">seen ${fmtAge(d.last_seen_age)} ago</span>`
                 : html`<span class="muted">not heard yet</span>`}</td>
-              <td class="num">${heights[slug] != null ? fmtLen(heights[slug], this.hass) : html`<span class="muted" title="the default carry height; click the name to give this tracker its own">${fmtLen(this._defaultHeight(), this.hass)}</span>`}</td>
+              <td class="num">${heights[slug] != null ? fmtLen(heights[slug], this.hass) : html`<span class="muted" title="the default carry height; click the name to give this thing its own">${fmtLen(this._defaultHeight(), this.hass)}</span>`}</td>
               <td class="num">${offsets[slug] != null && offsets[slug] !== 0 ? `${offsets[slug] > 0 ? "+" : ""}${fmtNum(offsets[slug], 1)} dB` : html`<span class="muted">0</span>`}</td>
               <td class="actions">
                 <button class="iconbtn" title="Edit ${name}" @click=${() => this._openWizard(slug, address)}><ha-icon icon="mdi:pencil-outline"></ha-icon></button>
@@ -631,18 +631,18 @@ class SextantDevices extends LitElement {
     const t = this._tiles;
     if (!t) return html`<div class="muted">Loading…</div>`;
     const bindings = Object.entries(t.bindings || {});
-    if (!bindings.length) return html`<div class="muted">No Tiles configured. Track one from the Trackers page; Tiles show as <span class="pill">Tile</span>.</div>`;
+    if (!bindings.length) return html`<div class="muted">No Tiles configured. Track one from the Things page; Tiles show as <span class="pill">Tile</span>.</div>`;
     // Live, unbound Tile addresses with where they are, for the adopt pickers.
     const index = this._placedIndex();
     const liveTiles = (this._candidates || []).filter((c) => c.kind === "tile" && (c.last_seen_age ?? 1e9) <= 60)
       .map((c) => { const w = this._heardWhere(c, index); return { address: c.address, where: w ? `${w.room || w.floor} · ${w.proxy} (${w.rssi} dBm)` : c.area_name || "unplaced proxies only" }; })
       .sort((a, b) => a.where.localeCompare(b.where));
     return html`
-      <p class="small muted">Click a Tile's name to call it "Kitchen keys"; the map and the Trackers page use that name. Bermuda follows each Tile across its address rotations by RSSI pattern and remembers where it last was, so it finds it again after a restart; that works while the Tile is not sitting among other Tiles. A Tile marked <span class="pill warn">not heard</span> has rotated away unseen: pick the live address that is where the Tile is and Adopt. On Private ID Tiles the ID readable over Bluetooth rotates too, so it cannot name a tag; probing stays off unless "Tile identity probes" is on above.</p>
+      <p class="small muted">Click a Tile's name to call it "Kitchen keys"; the map and the Things page use that name. Bermuda follows each Tile across its address rotations by RSSI pattern and remembers where it last was, so it finds it again after a restart; that works while the Tile is not sitting among other Tiles. A Tile marked <span class="pill warn">not heard</span> has rotated away unseen: pick the live address that is where the Tile is and Adopt. On Private ID Tiles the ID readable over Bluetooth rotates too, so it cannot name a tag; probing stays off unless "Tile identity probes" is on above.</p>
       <div class="wrap"><table class="compact">
         <tr><th>Tile</th><th>Bound address</th><th>This Tile is…</th><th>History</th></tr>
         ${bindings.map(([id, sources]) => { const lost = t.bound_age?.[id] == null || t.bound_age[id] > 300; return html`<tr>
-          <td><a href="#" class="name" title="Name this Tile (and set its class, height and icon)" @click=${(e) => { e.preventDefault(); this._openWizard(id, sources[0]); }}>${trackerName(this.data, id)}</a>${this.data?.layout?.tracker_names?.[id] ? nothing : html`<br><span class="muted small">click to name it</span>`}${t.uids?.[id] ? html`<br><code class="small">${t.uids[id]}</code>` : nothing}</td>
+          <td><a href="#" class="name" title="Name this Tile (and set its class, height and icon)" @click=${(e) => { e.preventDefault(); this._openWizard(id, sources[0]); }}>${thingName(this.data, id)}</a>${this.data?.layout?.thing_names?.[id] ? nothing : html`<br><span class="muted small">click to name it</span>`}${t.uids?.[id] ? html`<br><code class="small">${t.uids[id]}</code>` : nothing}</td>
           <td><code>${sources[0] || "—"}</code>${t.bound_age?.[id] != null ? html` <span class="muted small">heard ${fmtAge(t.bound_age[id])} ago</span>` : html` <span class="pill warn">not heard</span>`}</td>
           <td>${liveTiles.length ? html`<div class="row">
             ${uiSelect({ label: lost ? "pick the tag it is now" : "re-point it", value: this._adoptPick[id] || "", options: [{ value: "", label: lost ? "choose a live Tile address…" : "leave as is" }, ...liveTiles.map((c) => ({ value: c.address, label: `${c.address} · ${c.where}` }))], onChange: (v) => { this._adoptPick = { ...this._adoptPick, [id]: v }; }, style: "min-width: 300px" })}
@@ -652,7 +652,7 @@ class SextantDevices extends LitElement {
       </table></div>
       ${this._options?.tile_identity_probes ? this._renderIdentities(bindings.map(([id]) => id)) : nothing}
       <p class="small muted">Handovers ${t.handovers ?? 0} (${t.ambiguous_handovers ?? 0} ambiguous) · probes ${t.probes ?? 0}, failed ${t.probe_failures ?? 0}${t.probes_inherited ? `, ${t.probes_inherited} inherited` : ""}${t.probes_pending?.length ? `, pending ${t.probes_pending.length}` : ""}${t.probe_budget_left != null ? ` · ${t.probe_budget_left} connections left this hour` : ""}.
-        ${t.last_handover ? html`Last: ${trackerName(this.data, t.last_handover.tile)} → <code>${t.last_handover.to}</code> by ${t.last_handover.reason || "rssi pattern"}${t.last_handover.score != null ? ` (${fmtNum(t.last_handover.score, 1)} dB over ${t.last_handover.scanners} proxies)` : ""}.` : nothing}
+        ${t.last_handover ? html`Last: ${thingName(this.data, t.last_handover.tile)} → <code>${t.last_handover.to}</code> by ${t.last_handover.reason || "rssi pattern"}${t.last_handover.score != null ? ` (${fmtNum(t.last_handover.score, 1)} dB over ${t.last_handover.scanners} proxies)` : ""}.` : nothing}
         ${t.last_probe?.detail ? html`<br>Last probe of <code>${t.last_probe.address}</code>: ${t.last_probe.error || "ok"} ${t.last_probe.detail}` : nothing}
       </p>`;
   }
@@ -673,7 +673,7 @@ class SextantDevices extends LitElement {
   _renderIdentities(tileIds) {
     const ids = Object.values(this._identities || {}).sort((a, b) => (a.last_seen_age ?? 1e9) - (b.last_seen_age ?? 1e9));
     if (!ids.length) return nothing;
-    const options = [{ value: "", label: "choose a Tile…" }, ...tileIds.map((id) => ({ value: id, label: trackerName(this.data, id) }))];
+    const options = [{ value: "", label: "choose a Tile…" }, ...tileIds.map((id) => ({ value: id, label: thingName(this.data, id) }))];
     const placed = this._placedIndex();
     const where = (row) => {
       const heard = row.heard_by || (row.strongest ? [row.strongest] : []);
@@ -690,7 +690,7 @@ class SextantDevices extends LitElement {
           <td>${row.last_seen_age != null ? `${fmtAge(row.last_seen_age)} ago` : "—"}</td>
           <td>${w.room || "—"}</td>
           <td class="small">${w.proxy || html`<span class="muted">only unplaced proxies hear it</span>`}${w.unplaced && w.proxy ? html` <span class="muted">(+${w.unplaced} unplaced and ignored)</span>` : nothing}</td>
-          <td>${row.tile_id ? html`<b>${trackerName(this.data, row.tile_id)}</b>` : html`<div class="row">
+          <td>${row.tile_id ? html`<b>${thingName(this.data, row.tile_id)}</b>` : html`<div class="row">
             ${uiSelect({ label: "", value: this._bindPick[row.uid] || "", options, onChange: (v) => { this._bindPick = { ...this._bindPick, [row.uid]: v }; }, style: "min-width: 200px" })}
             ${uiButton({ label: "Bind", kind: "primary", disabled: !this._bindPick[row.uid], onClick: () => this._bindTile(row.uid) })}</div>`}</td>
           <td class="small muted">${row.addresses?.length || 0} address${row.addresses?.length === 1 ? "" : "es"}</td>

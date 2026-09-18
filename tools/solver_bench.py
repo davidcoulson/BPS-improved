@@ -2,7 +2,7 @@
 Compare the pure-numpy solver against scipy on REAL floorplan geometry.
 
 Answers the only question that matters before dropping scipy: does the
-replacement put trackers in the same place?
+replacement put things in the same place?
 
 Receiver coordinates and per-floor scales come from an actual install
 (`real_layout.json`, exported from `.storage/sextant`), so the geometry —
@@ -15,7 +15,7 @@ distances to every receiver are computed, and realistic corruption is applied:
   * a configurable fraction of gross outliers (a receiver reading several
     times too far — through-wall, or a stale reading), which is exactly what
     the soft_l1 loss exists to survive;
-  * a limited receiver subset, since only some receivers hear a given tracker.
+  * a limited receiver subset, since only some receivers hear a given thing.
 
 Both solvers get identical inputs, the same analytic Jacobian and the same
 1/r^2 weighting used in `trilaterate()`. Deltas are reported in METRES via the
@@ -99,7 +99,7 @@ def make_callables(known_points, min_weight_radius):
 
     x0 = np.array([float(px.mean()), float(py.mean())])
     # Extra starting points for the multi-start solver. The receiver reporting
-    # the SMALLEST radius is the strongest single prior on where the tracker
+    # the SMALLEST radius is the strongest single prior on where the thing
     # is; the 1/r^2-weighted centroid is a cheap second opinion that leans the
     # same way without committing to one receiver.
     i_near = int(np.argmin(pr))

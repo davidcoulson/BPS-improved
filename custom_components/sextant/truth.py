@@ -1,17 +1,17 @@
 """Truth marks: "it is actually here", and what to make of that.
 
-A mark is a tracker, a floor and a point the user vouches for, taken with
+A mark is a thing, a floor and a point the user vouches for, taken with
 the solver inputs of the cycles around it (the per-proxy radii the fit
-used and the tracker's vector of ranges). With those inputs kept, the
+used and the thing's vector of ranges). With those inputs kept, the
 same cycles can be re-solved under any settings, so a mark answers three
 questions:
 
 * which blend of geometric fit and fingerprint match, and which reference
-  gain, puts THIS tracker nearest the truth (``evaluate`` sweeps them);
-* how far off the current settings are, in metres, per tracker: an
+  gain, puts THIS thing nearest the truth (``evaluate`` sweeps them);
+* how far off the current settings are, in metres, per thing: an
   accuracy figure the stability KPI cannot give (``evaluate`` with the
   current settings only);
-* what this tracker's ranges look like at a known point: a fingerprint
+* what this thing's ranges look like at a known point: a fingerprint
   reference where no probe sits (``mark_reference``), in the same probe
   scale the receivers' references use.
 
@@ -28,7 +28,7 @@ from collections import deque
 
 from . import fingerprint
 
-# Cycles kept per tracker: twelve minutes at the default 15 s.
+# Cycles kept per thing: twelve minutes at the default 15 s.
 BUFFER_SAMPLES = 48
 # The blend weights and gain multipliers a mark is evaluated over.
 WEIGHTS = (0.0, 0.25, 0.5, 0.75, 1.0)
@@ -52,13 +52,13 @@ def estimator_for(weight):
 
 
 class Buffer:
-    """The last cycles' solver inputs per tracker, so a mark can be re-solved."""
+    """The last cycles' solver inputs per thing, so a mark can be re-solved."""
 
     def __init__(self, maxlen=BUFFER_SAMPLES):
         self._by_entity = {}
         self._maxlen = maxlen
 
-    def remember(self, entity, jobs, tracker_vec, gain, estimator, now=None):
+    def remember(self, entity, jobs, thing_vec, gain, estimator, now=None):
         floors = {}
         for job in jobs:
             weighted = [[float(v) for v in pt] for pt in job.get("weighted") or []]
@@ -77,7 +77,7 @@ class Buffer:
             "t": float(now if now is not None else time.time()),
             "gain": float(gain),
             "estimator": estimator,
-            "tracker_vec": {str(k): float(v) for k, v in (tracker_vec or {}).items()},
+            "thing_vec": {str(k): float(v) for k, v in (thing_vec or {}).items()},
             "floors": floors,
         }
         self._by_entity.setdefault(entity, deque(maxlen=self._maxlen)).append(sample)
@@ -123,9 +123,9 @@ def evaluate(samples, floor, mark, scale, zone_of, solve, refs_for_gain, k=3, mi
             for s in usable:
                 fj = s["floors"][floor]
                 spec = None
-                if w > 0 and s.get("tracker_vec"):
+                if w > 0 and s.get("thing_vec"):
                     spec = {
-                        "mode": estimator_for(w), "tracker": s["tracker_vec"], "refs": refs,
+                        "mode": estimator_for(w), "thing": s["thing_vec"], "refs": refs,
                         "k": k, "missing_m": missing_m, "weight": w, "floor_weight": w, "gain": gain,
                     }
                 jobs.append({
@@ -165,7 +165,7 @@ def mark_reference(mark):
     gain = 1.0
     for s in mark.get("samples") or []:
         gain = float(s.get("gain") or gain)
-        for rx, d in (s.get("tracker_vec") or {}).items():
+        for rx, d in (s.get("thing_vec") or {}).items():
             if isinstance(d, (int, float)) and d > 0:
                 per_rx.setdefault(rx, []).append(float(d))
     vector = {rx: fingerprint._median(v) / max(gain, 1e-6) for rx, v in per_rx.items() if len(v) >= 2}
@@ -178,7 +178,7 @@ def mark_reference(mark):
 
 
 def summarize(rows_by_mark):
-    """Per-tracker accuracy from {mark id: (entity, row)} evaluated at the
+    """Per-thing accuracy from {mark id: (entity, row)} evaluated at the
     current settings: marks, mean of the mean errors, share of cycles in the
     right room."""
     per_entity = {}

@@ -1,4 +1,4 @@
-"""The REST views: /api/sextant/cords, /api/sextant/selftest, /api/sextant/upload_tracker_icon."""
+"""The REST views: /api/sextant/cords, /api/sextant/selftest, /api/sextant/upload_thing_icon."""
 import asyncio
 import io
 import types
@@ -50,7 +50,7 @@ class _Request(dict):
 
 def _upload(hass, field, admin=True):
     request = _Request(hass, {"icon": field} if field is not None else {}, admin)
-    return run(sextant.SextantUploadTrackerIconAPI().post(request))
+    return run(sextant.SextantUploadThingIconAPI().post(request))
 
 
 def test_icon_upload_is_for_admins_and_raster_images_under_2mb(tmp_path):

@@ -45,7 +45,7 @@ class SextantOptionsFlow(config_entries.OptionsFlow):
         current_interval = self._config_entry.options.get(OPTION_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL)
         schema = vol.Schema({
             vol.Required(OPTION_SHOW_SIDEBAR_PANEL, default=current_value): bool,
-            # Seconds between trilateration recomputes per tracker. Lower this only
+            # Seconds between trilateration recomputes per thing. Lower this only
             # if you need faster-than-15s position updates and can spare the CPU.
             vol.Required(OPTION_UPDATE_INTERVAL, default=current_interval): vol.All(
                 vol.Coerce(int), vol.Range(min=1, max=300)

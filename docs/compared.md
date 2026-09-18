@@ -35,7 +35,7 @@ Sextant is the fourth step in a lineage:
 | Near-field anchor | no | no | no | yes |
 | Smoothing | per distance | 3-sample average | Kalman | Kalman |
 | Proxy calibration | manual rssi offset | no | probes calibrate each other | same, with 3D heights, written into Bermuda if you like |
-| Proxy and tracker heights | no | no | proxy heights | proxy heights and per-tracker carry heights |
+| Proxy and thing heights | no | no | proxy heights | proxy heights and per-thing carry heights |
 | No-go areas | no | no | yes | yes |
 | Position history | no | session trail | scrubber, hours to days | scrubber, hours to days |
 | Panel | config flow | iframe with a pasted token | dark iframe panel | native Home Assistant panel, seven pages |

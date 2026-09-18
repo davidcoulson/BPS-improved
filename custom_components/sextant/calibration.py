@@ -21,7 +21,7 @@ correcting in distance space. Corrections are normalized to a geometric mean
 of 1: they encode only how receivers differ from each other. A bias shared by
 the whole fleet is dominated by the beacons' TX power, which says nothing
 about the phones and watches actually being tracked — applying it would
-uniformly rescale every tracker distance and shift all positions (learned the
+uniformly rescale every thing distance and shift all positions (learned the
 hard way: zones all went "unknown" the moment the first corrections landed).
 """
 
@@ -647,8 +647,8 @@ def solve(cal: dict, floor_name: str):
 
     # Corrections must encode RELATIVE receiver differences only. Any bias
     # shared by the whole fleet — typically the beacons' TX power differing
-    # from the ref_power Bermuda's tracker calibration assumes — would rescale
-    # every tracker distance at once and shift all trilaterated positions
+    # from the ref_power Bermuda's thing calibration assumes — would rescale
+    # every thing distance at once and shift all trilaterated positions
     # (points drift out of their zones). Normalize to a geometric mean of 1
     # so the absolute scale stays with Bermuda's own calibration.
     # (Cast to plain floats: numpy scalars are not JSON serializable.)

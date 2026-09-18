@@ -1,6 +1,6 @@
 """Tests for the direct Bermuda data path (sextant.bermuda_source).
 
-Sextant used to source tracker<->receiver distances by scraping
+Sextant used to source thing<->receiver distances by scraping
 ``sensor.<device>_distance_to_<scanner>`` out of the state machine, which
 forces every one of those entities to be enabled. These cover the replacement
 path that reads Bermuda's in-memory snapshot instead, and — importantly — that
@@ -161,8 +161,8 @@ def test_slug_map_borrows_scanner_coverage_across_devices(monkeypatch):
     on its own name, the map must offer every scanner seen by ANY device to
     every tracked device, not just the ones that device's own adverts happen
     to include yet — measured in production as 18 of 48 receivers reachable
-    for a just-swapped tracker versus 45+ for everything else, which silently
-    starved that tracker's solve."""
+    for a just-swapped thing versus 45+ for everything else, which silently
+    starved that thing's solve."""
     _install_bermuda_api(monkeypatch, _two_device_snapshot())
 
     mapping = bermuda_source.async_build_slug_map(object())
@@ -337,7 +337,7 @@ def test_renamed_device_is_never_offered_under_more_than_one_prefix(monkeypatch)
     name) used to have TWO device_prefixes in the entity registry pointing at
     the same physical device, since Bermuda's entity_ids are frozen at
     creation and never follow a later rename - which spawned a second,
-    duplicate Sextant tracker for what is physically one device.
+    duplicate Sextant thing for what is physically one device.
 
     Reading the prefix directly from the snapshot's CURRENT slug makes this
     structurally impossible rather than merely deduplicated after the fact:

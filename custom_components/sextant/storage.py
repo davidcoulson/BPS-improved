@@ -168,6 +168,51 @@ def get_layout_for_edit(hass):
     return copy.deepcopy(data) if isinstance(data, dict) else None
 
 
+# --- "tracker" became "thing" (3.12.0) --------------------------------------
+# Four stores carry the old word in their keys. Each load path below renames
+# what it finds, so an install that has been running since before the rename
+# keeps its names, colours, icons, heights, learned gains, truth marks and KPI
+# baselines. The layout is written back once; the rest are renamed in memory,
+# since they are rewritten in the new shape on their next save anyway.
+THING_KEY_RENAMES = {
+    "tracker_names": "thing_names",
+    "tracker_classes": "thing_classes",
+    "tracker_colors": "thing_colors",
+    "tracker_icons": "thing_icons",
+    "tracker_heights": "thing_heights",
+    "tracker_height": "thing_height",
+    "tracker_estimators": "thing_estimators",
+    "tracker_fp_weights": "thing_fp_weights",
+    "tracker_fp_gains": "thing_fp_gains",
+    "tracker_ref_offsets": "thing_ref_offsets",
+    "tracker_gain": "thing_gain",
+    "tracker_vec": "thing_vec",
+    "changes_per_tracker_hour": "changes_per_thing_hour",
+}
+
+
+def rename_thing_keys(data, _renames=THING_KEY_RENAMES):
+    """Every ``tracker_*`` key in `data`, at any depth, under its new name.
+
+    Returns (data, renamed) - the same object, mutated in place, and how many
+    keys moved, so a caller can decide whether the store is worth rewriting.
+    """
+    renamed = 0
+    if isinstance(data, dict):
+        for old, new in _renames.items():
+            if old in data and new not in data:
+                data[new] = data.pop(old)
+                renamed += 1
+        for value in data.values():
+            _, n = rename_thing_keys(value)
+            renamed += n
+    elif isinstance(data, list):
+        for item in data:
+            _, n = rename_thing_keys(item)
+            renamed += n
+    return data, renamed
+
+
 async def load_layout(hass):
     """Load the layout from the store into the in-memory cache (at setup).
 
@@ -179,6 +224,13 @@ async def load_layout(hass):
     except Exception as e:
         _LOGGER.error("Could not load layout from storage; starting empty: %s", e)
         data = None
+    data, renamed = rename_thing_keys(data)
+    if renamed:
+        _LOGGER.info("Renamed %d tracker_* layout key(s) to thing_*", renamed)
+        try:
+            await _layout_store(hass).async_save(data)
+        except Exception as e:  # the in-memory rename still stands for this run
+            _LOGGER.warning("Could not persist the thing_* layout keys: %s", e)
     _bucket(hass)["layout"] = data if data is not None else []
     _bump_layout_version(hass)
     return _bucket(hass)["layout"]
@@ -229,7 +281,7 @@ async def load_kpi_baselines(hass) -> dict:
     except Exception as e:
         _LOGGER.warning("Could not load KPI baselines: %s", e)
         return {}
-    return data if isinstance(data, dict) else {}
+    return rename_thing_keys(data)[0] if isinstance(data, dict) else {}
 
 
 async def save_kpi_baselines(hass, baselines: dict) -> None:
@@ -256,6 +308,7 @@ async def load_truth(hass) -> dict:
         return {"marks": [], "next_id": 1}
     if not isinstance(data, dict):
         return {"marks": [], "next_id": 1}
+    rename_thing_keys(data)
     data.setdefault("marks", [])
     data.setdefault("next_id", 1)
     return data
@@ -276,13 +329,13 @@ def _fp_gain_store(hass) -> Store:
 
 
 async def load_fp_gains(hass) -> dict:
-    """``{"learned_gain": float, "tracker_gain": {entity: float}}``; empty when none."""
+    """``{"learned_gain": float, "thing_gain": {entity: float}}``; empty when none."""
     try:
         data = await _fp_gain_store(hass).async_load()
     except Exception as e:
         _LOGGER.warning("Could not load fingerprint gains: %s", e)
         return {}
-    return data if isinstance(data, dict) else {}
+    return rename_thing_keys(data)[0] if isinstance(data, dict) else {}
 
 
 async def save_fp_gains(hass, data: dict) -> None:

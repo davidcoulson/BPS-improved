@@ -16,7 +16,7 @@ alongside it, so a later scale change can be detected.
 
 Storage is columnar (`array`), which is the difference between ~17 bytes and
 ~264 bytes per point - i.e. between ~2 MB and ~34 MB resident for 24 h across
-three trackers. Durability is append-only NDJSON day files, so a crash can
+three things. Durability is append-only NDJSON day files, so a crash can
 only cost the last un-flushed batch, never the whole history the way rewriting
 a single blob could (the lesson of issue #104).
 
@@ -41,7 +41,7 @@ HISTORY_DIRNAME = "sextant_history"
 # Defaults, all overridable per install from top-level layout keys.
 DEFAULT_MAX_AGE = 6 * 3600           # keep 6 h unless asked for more
 MAX_AGE_LIMIT = 7 * 24 * 3600        # 7 days, the supported ceiling
-DEFAULT_MAX_POINTS = 200_000         # per tracker; OOM guard, independent of age
+DEFAULT_MAX_POINTS = 200_000         # per thing; OOM guard, independent of age
 DEFAULT_MIN_INTERVAL = 2.0           # s between kept points
 DEFAULT_MIN_MOVE_M = 0.3             # m of movement to be worth keeping
 DEFAULT_HEARTBEAT = 30.0             # s: keep a point even when standing still
@@ -111,7 +111,7 @@ def history_config(layout):
 
 
 class _Track:
-    """One tracker's columnar ring buffer."""
+    """One thing's columnar ring buffer."""
 
     __slots__ = ("t", "x", "y", "f", "gap", "z", "floors", "scales", "zones",
                  "last_kept", "force_gap")
@@ -221,7 +221,7 @@ class _Track:
 
 
 class PositionHistory:
-    """Every tracker's history, plus the NDJSON lines waiting to be appended."""
+    """Every thing's history, plus the NDJSON lines waiting to be appended."""
 
     MAX_PENDING = 50_000          # never let the flush queue grow unbounded
 
@@ -292,7 +292,7 @@ class PositionHistory:
                 # Heard again after a silence: the device was not standing
                 # still, it was not being heard, so break the line instead of
                 # drawing one long straight segment across the outage. (The
-                # tracker only gets an explicit mark_gap once it has been
+                # thing only gets an explicit mark_gap once it has been
                 # absent for the whole position_timeout, which is much longer.)
                 # This runs for a room change too: a silence is still a silence
                 # however the room came out at the end of it.
@@ -300,7 +300,7 @@ class PositionHistory:
                             DROPOUT_GAP_MIN):
                     gap = GAP_DROPOUT
         if track.force_gap:
-            # mark_gap fires when a tracker was pruned for absence, or across a
+            # mark_gap fires when a thing was pruned for absence, or across a
             # restart: in both the device really was unheard for that stretch.
             gap = GAP_DROPOUT
             track.force_gap = False
@@ -315,7 +315,7 @@ class PositionHistory:
         """Age every track, not just the one that recorded.
 
         record() evicts the track it touched, which is enough while a device
-        keeps reporting - but a tracker that has gone silent (left the house,
+        keeps reporting - but a thing that has gone silent (left the house,
         battery flat), or a history that has since been switched OFF, would
         otherwise keep serving points long past the configured window. Called
         from the periodic flush and before every query.
@@ -325,9 +325,9 @@ class PositionHistory:
             track.evict(self.cfg["max_age"], self.cfg["max_points"], now)
 
     def mark_gap(self, ent):
-        """The next point for this tracker starts a new polyline.
+        """The next point for this thing starts a new polyline.
 
-        Used when a tracker is pruned for absence, or across a restart, so the
+        Used when a thing is pruned for absence, or across a restart, so the
         scrubber does not draw a straight line over a gap in the record.
         """
         track = self.tracks.get(ent)
@@ -336,9 +336,9 @@ class PositionHistory:
         track.force_gap = True
 
     def forget(self, ent=None):
-        """Discard the in-memory record for one tracker, or for all of them.
+        """Discard the in-memory record for one thing, or for all of them.
 
-        Also drops that tracker's queued-but-unflushed rows, which would
+        Also drops that thing's queued-but-unflushed rows, which would
         otherwise be appended to disk moments after the clear and reappear on
         the next restart.
         """
@@ -367,7 +367,7 @@ class PositionHistory:
         if zone:
             row["z"] = zone
         # Tagged with its UTC day so the flush can group by segment file, and
-        # with the entity so forget() can drop just that tracker's queued rows
+        # with the entity so forget() can drop just that thing's queued rows
         # without having to pattern-match the serialised JSON.
         self._pending.append(
             (day_key(ts), ent, json.dumps(row, separators=(",", ":"))))
@@ -458,7 +458,7 @@ class PositionHistory:
 
     # --- querying ----------------------------------------------------------
     def retained(self, ent):
-        """The span actually held for one tracker, or None when empty."""
+        """The span actually held for one thing, or None when empty."""
         track = self.tracks.get(ent)
         if track is None or not track.t:
             return None
@@ -469,7 +469,7 @@ class PositionHistory:
         return sorted(e for e, tr in self.tracks.items() if tr.t)
 
     def query(self, ent, frm, to, max_points):
-        """Points for one tracker in [frm, to], decimated to ~max_points.
+        """Points for one thing in [frm, to], decimated to ~max_points.
 
         Decimation keeps a uniform stride so the trail spans the WHOLE window,
         and always keeps the first and last point, every gap and every floor
@@ -666,9 +666,9 @@ def restore_recent(dirpath, cfg, now=None):
 
 
 def drop_entity(dirpath, ent):
-    """Rewrite every segment without one tracker's rows. Returns rows removed.
+    """Rewrite every segment without one thing's rows. Returns rows removed.
 
-    Segments are shared by all trackers, so forgetting one means a rewrite.
+    Segments are shared by all things, so forgetting one means a rewrite.
     Each file is written to a sibling temp and os.replace()d, so a crash
     mid-rewrite leaves the original segment intact rather than a truncated one.
     """

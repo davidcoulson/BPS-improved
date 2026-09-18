@@ -51,7 +51,7 @@ export const sharedStyles = css`
   code { font-family: ui-monospace, monospace; font-size: 12px; }
   .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--primary-text-color); color: var(--primary-background-color); padding: 8px 14px; border-radius: 8px; font-size: 13px; z-index: 10; box-shadow: 0 2px 8px rgba(0,0,0,0.3); }
   /* A wide table on a phone: the leading column (almost always the row's
-     identity - a proxy, a tracker, a device) stays put while the rest
+     identity - a proxy, a thing, a device) stays put while the rest
      scrolls under it, and a fading edge says there is more to see. Pure
      CSS, no markup changes, so every .wrap table in the panel gets this. */
   @media (max-width: 720px) {
@@ -234,8 +234,8 @@ export function fromDisplayLen(value, hass) { if (value === "" || value == null)
 /** px per metre shown as px per foot when imperial. */
 export function fmtScale(pxPerM, hass) { if (!pxPerM) return "no scale"; return isImperial(hass) ? `${fmtNum(pxPerM * 0.3048, 1)} px/ft` : `${fmtNum(pxPerM, 1)} px/m`; }
 
-/** A tracker's display name: the device name Bermuda / Home Assistant knows, else the slug tidied up. */
-export function trackerName(data, ent) {
+/** A thing's display name: the device name Bermuda / Home Assistant knows, else the slug tidied up. */
+export function thingName(data, ent) {
   const known = data?.names?.[ent];
   if (known) return known;
   return slugLabel(ent).replace(/\b\w/g, (c) => c.toUpperCase());
@@ -250,8 +250,8 @@ export function proxyName(data, slugOrAddress) {
   return slugOrAddress;
 }
 
-/** Tracker classes: what a tracker is, drawn as that icon on the map. */
-export const TRACKER_CLASSES = [
+/** Thing classes: what a thing is, drawn as that icon on the map. */
+export const THING_CLASSES = [
   ["", "No class (initials)", null],
   ["person", "Person", "mdi:account"],
   ["man", "Man", "mdi:face-man"],
@@ -271,4 +271,4 @@ export const TRACKER_CLASSES = [
   ["car", "Car", "mdi:car"],
   ["bike", "Bike", "mdi:bike"],
 ];
-export function classIcon(cls) { return (TRACKER_CLASSES.find(([k]) => k === cls) || [])[2] || null; }
+export function classIcon(cls) { return (THING_CLASSES.find(([k]) => k === cls) || [])[2] || null; }

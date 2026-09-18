@@ -111,7 +111,7 @@ def summarise(per_entity):
         out[suffix.lstrip("_")] = {
             "entities": len(members),
             "changes": changes,
-            "changes_per_tracker_hour": round(changes / hours, 2) if hours else None,
+            "changes_per_thing_hour": round(changes / hours, 2) if hours else None,
             "flip_ratio": round(flips / changes, 3) if changes else None,
             "median_of_median_dwell_s": round(statistics.median(dwells), 1) if dwells else None,
         }
@@ -135,7 +135,7 @@ def rows_from_recorder(states):
 
 
 DELTA_METRICS = ("changes_per_hour", "flip_ratio", "median_dwell_s", "short_dwell_ratio", "dead")
-SUMMARY_DELTA_METRICS = ("changes_per_tracker_hour", "flip_ratio", "median_of_median_dwell_s")
+SUMMARY_DELTA_METRICS = ("changes_per_thing_hour", "flip_ratio", "median_of_median_dwell_s")
 
 
 def _num(value):
@@ -147,7 +147,7 @@ def deltas(current, baseline):
 
     Both are ``{"entities": {eid: metrics}, "summary": {group: metrics}}`` as
     ``compute_metrics``/``summarise`` produce them. Only entities and metrics
-    present on both sides with numeric values appear; a tracker added since
+    present on both sides with numeric values appear; a thing added since
     the baseline simply has no delta row.
     """
     out = {"entities": {}, "summary": {}}

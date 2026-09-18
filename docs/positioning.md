@@ -2,13 +2,13 @@
 
 # How positioning works
 
-Each cycle (15 s by default) runs this pipeline per tracker.
+Each cycle (15 s by default) runs this pipeline per thing.
 
 **Distances.** Bermuda's smoothed distance per proxy, or with
 `distance_estimator: median` the median of the recent raw RSSI samples
 converted with Bermuda's own path-loss parameters, which is symmetric where
 Bermuda's running minimum reads far proxies short. Calibration factors and
-the proxy and tracker heights are applied here: a slant range becomes a
+the proxy and thing heights are applied here: a slant range becomes a
 horizontal one before it reaches the solver. Readings under 0.5 m are
 weighted as "right here" rather than by 1/r².
 
@@ -26,26 +26,26 @@ nearest room; a fix in a no-go area is snapped out of it.
 proxy, so Bermuda continuously measures a labelled vector of ranges at a
 known position: one reference fingerprint per proxy, for free. With
 `position_estimator: fused` (the recommended setting once the reference
-database has a minute of samples) a tracker's vector of ranges is matched
+database has a minute of samples) a thing's vector of ranges is matched
 against those references and the fix is blended,
 `(1 - fingerprint_weight) × fit + fingerprint_weight × fingerprint`. A
-wall that makes a proxy read the tracker long makes it read the references
+wall that makes a proxy read the thing long makes it read the references
 behind that wall long too, and the comparison cancels it. The gain
-between probe beacons and trackers is learned from the trackers themselves
+between probe beacons and things is learned from the things themselves
 (`fingerprint_auto_gain`): a shared gain, plus a faster multiplier per
-tracker, because a watch reads weak and a Tile reads hot. It is published
-per fix as `fp.gain`. A match whose scale still disagrees with the tracker
+thing, because a watch reads weak and a Tile reads hot. It is published
+per fix as `fp.gain`. A match whose scale still disagrees with the thing
 counts for less (`fp.trust`, zero at a factor of three). A floor with only
-one or two proxies can compete on its fingerprint. Any tracker can opt out
-from its dialog on the Trackers page: **Positioning** is the estimator for
-that tracker alone, so a tag the fingerprint makes worse can be geometric
+one or two proxies can compete on its fingerprint. Any thing can opt out
+from its dialog on the Things page: **Positioning** is the estimator for
+that thing alone, so a tag the fingerprint makes worse can be geometric
 only.
 
 **Smoothing.** A constant-velocity Kalman filter on the position, in
 metres so it behaves the same on any plan resolution; it resets on a floor
 change or an absence.
 
-**Floors.** Every floor with three or more proxies hearing the tracker is
+**Floors.** Every floor with three or more proxies hearing the thing is
 solved and scored by how well its fit explains all of its proxies. A
 through-ceiling reading fits one proxy and contradicts the rest. Scores
 are scaled by proximity (the mean of the `floor_proximity_k` nearest
@@ -56,7 +56,7 @@ floor's `bias`, then smoothed; a challenger must lead for
 **Rooms.** Membership, not a point test: samples on the filter's error
 ellipse are attributed to rooms and the shares smoothed. The current room
 holds until a challenger leads by `zone_switch_margin` for
-`zone_switch_secs`. A tracker slower than `stationary_speed` for
+`zone_switch_secs`. A thing slower than `stationary_speed` for
 `stationary_secs` is on a table and its room locks; it unlocks after
 `zone_unlock_secs` more than `zone_unlock_margin` outside, or when it
 clearly moves.
@@ -66,7 +66,7 @@ each spot of the elected room, entered at `subzone_enter_prob`, left at
 `subzone_unlock_margin` outside, every change waiting
 `subzone_switch_secs`. A locked room keeps its spot.
 
-**Near-field anchor.** A tracker one proxy reads inside `anchor_max_m`
+**Near-field anchor.** A thing one proxy reads inside `anchor_max_m`
 with every other proxy at least `anchor_ratio` times farther, for
 `anchor_secs`, is placed on that proxy: a watch on the bedside table next
 to its proxy, not 1.7 m away where the far proxies' errors pull the fit.

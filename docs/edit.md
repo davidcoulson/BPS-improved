@@ -24,7 +24,7 @@ with a live preview. Nothing is written until Save.
 
 A plan drawn for a builder carries a tile hatch over every floor, room
 names, room dimensions and a title block. Sextant draws its own rooms,
-proxies and trackers on top of it, and all that ink competes with them —
+proxies and things on top of it, and all that ink competes with them —
 badly, on a phone. `tools/clean_floorplan.py` strips a plan down to its
 walls and door swings, which is all the map needs behind the rooms you
 draw:

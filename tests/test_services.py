@@ -55,11 +55,11 @@ def test_receiver_heights_are_written_with_a_default_and_range_checked(tmp_path)
     assert _receivers(hass)["r0"]["height"] == 1.2
 
 
-def test_tracker_heights_accumulate(tmp_path):
+def test_thing_heights_accumulate(tmp_path):
     hass, h = _hass(tmp_path)
-    run(h["set_tracker_heights"](_Call(heights={"phone": 1.1})))
-    run(h["set_tracker_heights"](_Call(heights={"watch": 0.9})))
-    assert st.get_layout(hass)["tracker_heights"] == {"phone": 1.1, "watch": 0.9}
+    run(h["set_thing_heights"](_Call(heights={"phone": 1.1})))
+    run(h["set_thing_heights"](_Call(heights={"watch": 0.9})))
+    assert st.get_layout(hass)["thing_heights"] == {"phone": 1.1, "watch": 0.9}
 
 
 def test_tuning_is_validated_and_reset(tmp_path):

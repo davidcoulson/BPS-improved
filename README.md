@@ -12,7 +12,7 @@ room** when the fix sits between two.
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=davidcoulson&repository=sextant&category=Integration)
 
-![The Live page: the floor plan with every tracker, the selected one focused with a halo, and its room, spot, floor and proxies in the side panel](img/screenshots/sextant-live.png)
+![The Live page: the floor plan with every tracked thing, the selected one focused with a halo, and its room, spot, floor and proxies in the side panel](img/screenshots/sextant-live.png)
 
 ## TL;DR
 
@@ -31,7 +31,7 @@ room** when the fix sits between two.
   watch on the boundary between the kitchen and the dining room does not
   flip back and forth every few seconds.
 - 🎯 **Teach it.** If something shows in the wrong place, click where it
-  really is and Sextant works out which settings fit that tracker best.
+  really is and Sextant works out which settings fit that thing best.
 - 🤖 **Built with AI, tested in a real house.** Sextant was developed with
   Claude as a coding partner, and every change runs in the author's home
   before it ships: more than 60 Bluetooth proxies, 16 tracked people, pets
@@ -42,7 +42,7 @@ room** when the fix sits between two.
 
 | Install | Configure | Tune | Automate |
 |---|---|---|---|
-| [Installing](docs/install.md) · [What you need](docs/install.md#what-you-need) · [Upgrading from BPS](docs/install.md#upgrading-from-bps-or-bps-improved) | [Edit](docs/edit.md) · [Trackers](docs/trackers.md) · [Bermuda](docs/bermuda.md) · [Proxies](docs/proxies.md) | [Live](docs/live.md) · [Calibration](docs/calibration.md) · [Tuning](docs/tuning.md) · [Advice](docs/advice.md) · [How positioning works](docs/positioning.md) | [Sensors, card, services and API](docs/automation.md) |
+| [Installing](docs/install.md) · [What you need](docs/install.md#what-you-need) · [Upgrading from BPS](docs/install.md#upgrading-from-bps-or-bps-improved) | [Edit](docs/edit.md) · [Things](docs/things.md) · [Bermuda](docs/bermuda.md) · [Proxies](docs/proxies.md) | [Live](docs/live.md) · [Calibration](docs/calibration.md) · [Tuning](docs/tuning.md) · [Advice](docs/advice.md) · [How positioning works](docs/positioning.md) | [Sensors, card, services and API](docs/automation.md) |
 
 Also [Where Sextant fits](docs/compared.md) (Bermuda, BPS, BPS-improved and
 Sextant side by side) and [Data and development](docs/development.md).
@@ -56,7 +56,7 @@ Sextant side by side) and [Data and development](docs/development.md).
    [Bermuda fork](https://github.com/davidcoulson/bermuda).
 3. Open **Sextant** in the sidebar. On **Edit**, add a floor from a plan
    image, set its scale, place the proxies, draw the rooms, Save.
-4. On **Trackers**, pick what to track. Positions appear on **Live**
+4. On **Things**, pick what to track. Positions appear on **Live**
    within a cycle.
 
 You want three or more proxies per floor, and each ESPHome proxy should
@@ -70,9 +70,9 @@ token, in Home Assistant's own theme and unit system. Eight pages:
 
 | Page | For |
 |---|---|
-| [Live](docs/live.md) | every tracker on the plan; focus one for its room, spot, floor and proxies; blend slider and truth marks |
+| [Live](docs/live.md) | every tracked thing on the plan; focus one for its room, spot, floor and proxies; blend slider and truth marks |
 | [Edit](docs/edit.md) | place proxies, draw rooms, spots and no-go areas, set the scale and floor levels |
-| [Trackers](docs/trackers.md) | what is tracked and everything Bermuda hears; name, class, colour, photo, height and estimator per tracker |
+| [Things](docs/things.md) | what is tracked and everything Bermuda hears; name, class, colour, photo, height and estimator per thing |
 | [Bermuda](docs/bermuda.md) | Bermuda's global options, Find My accessories, Tiles |
 | [Proxies](docs/proxies.md) | proxy health by floor and room, what each proxy hears, the self-test |
 | [Calibration](docs/calibration.md) | proxies calibrate each other; apply into Sextant or into Bermuda |
@@ -88,11 +88,11 @@ token, in Home Assistant's own theme and unit system. Eight pages:
 - Floor election by competition between floors, scaled by proximity and a
   per-floor bias.
 - Proxy calibration with 3D heights, written into Bermuda if you like.
-- Truth marks: say where a tracker really is and Sextant finds the settings
+- Truth marks: say where a thing really is and Sextant finds the settings
   that fit it, and reports accuracy in metres.
 - Bermuda management from the panel: track, untrack, Find My accessories,
   Tiles followed across address rotation (with the fork).
-- Four sensors per tracker, a map card, services and a websocket push per
+- Four sensors per thing, a map card, services and a websocket push per
   cycle. Pure numpy, no SciPy.
 
 ## AI-assisted development
@@ -103,7 +103,7 @@ docs. What keeps that honest is the test bed: every change runs in the
 author's house before it ships, with more than 60 Bluetooth proxies
 (ESPHome and Shelly), 16 tracked people, pets, phones, watches and Tiles,
 and 21 rooms with 12 spots across three floors. The author sets the
-direction, watches what the trackers do on the real floor plan, and
+direction, watches what the things do on the real floor plan, and
 decides what ships. Expect the codebase to read the way an AI writes it:
 long comments explaining why, a consistent shape from file to file, and a
 test for nearly everything. Bugs are still bugs, whoever typed them;

@@ -1,7 +1,7 @@
 """
 Read Bermuda's per-scanner distances without enabling its entities.
 
-Sextant historically sourced its tracker<->receiver distances by enumerating
+Sextant historically sourced its thing<->receiver distances by enumerating
 ``sensor.<device>_distance_to_<scanner>`` from the state machine. Bermuda
 creates those entities *disabled by default* precisely because there is one per
 (tracked device x scanner) pair: on a 60-proxy install that is thousands of
@@ -349,7 +349,7 @@ def async_build_slug_map(hass) -> dict[tuple[str, str], tuple[str, str]]:
 
     device_prefix is the tracked device's CURRENT slug. scanner_slug is
     resolved GLOBALLY across every device's adverts, not just the one
-    device_prefix being mapped: a newly-tracked device (a replaced tracker
+    device_prefix being mapped: a newly-tracked device (a replaced thing
     collar, say) may only have been HEARD by a handful of scanners so far,
     while a long-tracked device has been heard by nearly all of them. Since a
     scanner's slug depends only on its own name, borrowing it from whichever

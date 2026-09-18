@@ -4,7 +4,7 @@
 A plan drawn for a builder carries far more ink than a positioning map
 needs: a tile hatch over every floor, room names, room dimensions, a
 title block. All of it competes with what Sextant draws on top - the
-rooms you drew, the proxies, the trackers, the spots the Advice page
+rooms you drew, the proxies, the things, the spots the Advice page
 suggests - and on a phone it wins.
 
 What separates a wall from the rest is mostly weight. A wall is the

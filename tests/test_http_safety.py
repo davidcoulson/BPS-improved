@@ -156,7 +156,7 @@ def test_all_api_views_require_auth_static_stays_public():
                 api_views.append(obj)
             elif obj.url.startswith("/sextant/"):
                 static_views.append(obj)
-    # save_text, upload_tracker_icon, cords, selftest, map (read_text was retired: nothing used it).
+    # save_text, upload_thing_icon, cords, selftest, map (read_text was retired: nothing used it).
     assert len(api_views) == 5, [v.__name__ for v in api_views]
     for v in api_views:
         assert getattr(v, "requires_auth", None) is True, f"{v.__name__} ({v.url})"
@@ -176,7 +176,7 @@ def test_delete_traversal_still_blocked(tmp_path):
     assert outside.exists()  # '../' collapsed to basename; the real file survives
 
 
-# --- tracker ref-power trim (issue #92), now a websocket command ------------- #
+# --- thing ref-power trim (issue #92), now a websocket command ------------- #
 from sextant import ws as ws_mod
 
 
@@ -193,7 +193,7 @@ class _Conn:
 
 def _tune(hass, **fields):
     conn = _Conn()
-    run(ws_mod.ws_tracker_tune(hass, conn, {"id": 1, "type": "sextant/tracker/tune", **fields}))
+    run(ws_mod.ws_thing_tune(hass, conn, {"id": 1, "type": "sextant/thing/tune", **fields}))
     return conn
 
 
@@ -209,17 +209,17 @@ def test_tune_sets_and_persists_offset(tmp_path):
     hass = make_hass(tmp_path); _seed(hass)
     conn = _tune(hass, entity="phone", ref_offset_db=3.5)
     assert conn.results[-1]["ref_offset_db"] == 3.5
-    assert _layout(hass)["tracker_ref_offsets"] == {"phone": 3.5}
+    assert _layout(hass)["thing_ref_offsets"] == {"phone": 3.5}
 
 
 def test_tune_zero_or_null_clears_the_entry(tmp_path):
     hass = make_hass(tmp_path); _seed(hass)
     _tune(hass, entity="phone", ref_offset_db=3.5)
     _tune(hass, entity="phone", ref_offset_db=0)
-    assert _layout(hass)["tracker_ref_offsets"] == {}
+    assert _layout(hass)["thing_ref_offsets"] == {}
     _tune(hass, entity="phone", ref_offset_db=-2)
     _tune(hass, entity="phone", ref_offset_db=None)
-    assert _layout(hass)["tracker_ref_offsets"] == {}
+    assert _layout(hass)["thing_ref_offsets"] == {}
 
 
 def test_tune_preserves_the_rest_of_the_layout(tmp_path):
@@ -233,7 +233,7 @@ def test_tune_rejects_bad_input(tmp_path):
     hass = make_hass(tmp_path); _seed(hass)
     assert _tune(hass, entity="phone", ref_offset_db=99).errors
     assert _tune(hass, entity="phone", ref_offset_db=float("nan")).errors
-    assert _layout(hass).get("tracker_ref_offsets", {}) == {}
+    assert _layout(hass).get("thing_ref_offsets", {}) == {}
 
 
 def test_tune_without_a_layout_is_rejected(tmp_path):

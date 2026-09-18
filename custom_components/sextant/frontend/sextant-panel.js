@@ -3,17 +3,17 @@
  *
  * One websocket subscription (sextant/subscribe) feeds every mode; the
  * request/response commands in ws.py do the rest. Modes:
- *   live         the floor plan with trackers, trails and a history scrubber
+ *   live         the floor plan with things, trails and a history scrubber
  *   edit         the floor-plan editor
- *   trackers     what Bermuda tracks, and what it hears but does not
+ *   things     what Bermuda tracks, and what it hears but does not
  *   bermuda      Bermuda's own things: global options, FindMy, Tiles
  *   proxies      proxy health, grouped by floor and room, plus the self-test
  *   calibration  proxy calibration runs
  *   tuning       stability KPI, live tuning, history retention
  */
 import { LitElement, html, css, nothing } from "./lit.js";
-import { SextantMap, trackerColor } from "./sextant-map.js";
-import { sharedStyles, widgetStyles, fmtAge, fmtNum, toast, confirmDialog, ensureHaComponents, uiSwitch, uiSelect, uiButton, callWS, sortFloors, trackerName, proxyName, fmtLen, fmtSpeed, classIcon } from "./sextant-ui.js";
+import { SextantMap, thingColor } from "./sextant-map.js";
+import { sharedStyles, widgetStyles, fmtAge, fmtNum, toast, confirmDialog, ensureHaComponents, uiSwitch, uiSelect, uiButton, callWS, sortFloors, thingName, proxyName, fmtLen, fmtSpeed, classIcon } from "./sextant-ui.js";
 
 // The backend registers the panel at /sextant/v/<version>/sextant-panel.js
 // (older releases used ?v=<version>), so a page loaded before an update carries
@@ -32,7 +32,7 @@ import "./sextant-edit.js";
 const MODES = [
   ["live", "Live", "mdi:map-marker-radius"],
   ["edit", "Edit", "mdi:vector-polygon"],
-  ["trackers", "Trackers", "mdi:tag-multiple"],
+  ["things", "Things", "mdi:tag-multiple"],
   ["bermuda", "Bermuda", "mdi:bluetooth-settings"],
   ["proxies", "Proxies", "mdi:access-point-network"],
   ["calibration", "Calibration", "mdi:tune-vertical"],
@@ -40,12 +40,12 @@ const MODES = [
   ["advice", "Advice", "mdi:lightbulb-on-outline"],
 ];
 const FLOOR_MODES = new Set(["live", "edit", "proxies", "calibration"]);
-// Pages that change the layout, the trackers or Bermuda, or expose every
+// Pages that change the layout, the things or Bermuda, or expose every
 // address the house hears: administrators only (the backend refuses the
 // commands too; this just keeps the tabs out of a non-admin's way).
-const ADMIN_MODES = new Set(["edit", "trackers", "bermuda", "calibration", "tuning"]);
+const ADMIN_MODES = new Set(["edit", "things", "bermuda", "calibration", "tuning"]);
 // Modes from before the page split (3.7.0) still stored in the browser.
-const MODE_ALIASES = { devices: "trackers", health: "proxies" };
+const MODE_ALIASES = { devices: "things", health: "proxies", trackers: "things" };
 const REPO_URL = "https://github.com/davidcoulson/sextant";
 
 export function mapUrlFor(floorName, maps) {
@@ -189,7 +189,7 @@ class SextantPanel extends LitElement {
       case "edit":
         return html`<sextant-edit .hass=${this.hass} .data=${this._data} .floor=${this._floor} .narrow=${this.narrow} .spots=${this._spots || []}
                                   @layout-changed=${() => this._onLayoutChanged()} @floor-changed=${(e) => { this._floor = e.detail; }}></sextant-edit>`;
-      case "trackers":
+      case "things":
       case "bermuda":
         return html`<sextant-devices .hass=${this.hass} .data=${this._data} .positions=${this._positions} .section=${this._mode}
                                      @layout-changed=${() => this._onLayoutChanged()}></sextant-devices>`;
@@ -282,9 +282,9 @@ class SextantLive extends LitElement {
     super();
     this._selected = null;
     this._links = null;
-    this._marking = false;  // waiting for the click that says where the tracker really is
+    this._marking = false;  // waiting for the click that says where the thing really is
     this._truth = null;     // the last mark's evaluation {mark, rows, current_weight}
-    this._marks = [];       // the selected tracker's marks
+    this._marks = [];       // the selected thing's marks
     this._blend = null;     // slider value while it is being dragged (0..100)
     this._options = { circles: false, fingerprint: false, trails: true, grid: "off", labels: true, subzones: true, receiverLabels: false, image: true };
     try { Object.assign(this._options, JSON.parse(localStorage.getItem("sextant.live.options") || "{}")); } catch { /* ignore */ }
@@ -292,11 +292,11 @@ class SextantLive extends LitElement {
     this._scrub = null;   // seconds, absolute
     this._icons = new Map();
     this._optionsOpen = false; // the map-options sheet, phone-width only
-    // On a phone the map starts collapsed below the tracker list - "where is
+    // On a phone the map starts collapsed below the thing list - "where is
     // everything" reads faster as text than as a floor plan on a small
-    // screen. Selecting a tracker opens it (that's when the spatial view
+    // screen. Selecting a thing opens it (that's when the spatial view
     // earns its space); the list header also offers it as a plain toggle,
-    // for a look at the whole floor without focusing any one tracker.
+    // for a look at the whole floor without focusing any one thing.
     // Meaningless above 720px, where the map and the list sit side by side.
     this._mapOpen = false;
   }
@@ -312,12 +312,12 @@ class SextantLive extends LitElement {
   firstUpdated() {
     this._map = new SextantMap(this.renderRoot.querySelector("canvas"), {
       fetch: (url) => this.hass.fetchWithAuth(url),
-      onSelect: (hit) => { this._select(hit?.kind === "tracker" ? hit.ent : null); },
+      onSelect: (hit) => { this._select(hit?.kind === "thing" ? hit.ent : null); },
       onMapClick: (m) => this._placeMark(m),
     });
     this._linksTimer = setInterval(() => { if (this._selected) this._loadLinks(); }, 10000);
     this._pushFloor();
-    this._pushTrackers();
+    this._pushThings();
   }
 
   disconnectedCallback() { super.disconnectedCallback(); this._map?.destroy(); clearInterval(this._linksTimer); }
@@ -326,7 +326,7 @@ class SextantLive extends LitElement {
     if (ent !== this._selected) { this._truth = null; this._marking = false; this._blend = null; }
     this._selected = ent;
     if (ent) {
-      this._mapOpen = true; // a phone: the map opens under this tracker's details
+      this._mapOpen = true; // a phone: the map opens under this thing's details
       // On a phone the list (13+ rows) is taller than the space it is given
       // and scrolls on its own; without this the detail card lands below
       // the fold of that scroller and the tap looks like it did nothing.
@@ -346,7 +346,7 @@ class SextantLive extends LitElement {
     this._map?.setMarks(mine.map((m) => ({ x: m.x, y: m.y, label: `mark ${m.id}` })));
   }
 
-  /** The map click while marking: record where the selected tracker really is, then evaluate. */
+  /** The map click while marking: record where the selected thing really is, then evaluate. */
   _placeMark(m) {
     if (!this._marking || !this._selected) return false;
     this._marking = false;
@@ -370,19 +370,19 @@ class SextantLive extends LitElement {
 
   async _applyRow(ent, row) {
     const r = await callWS(this, this.hass, { type: "sextant/truth/apply", entity: ent, weight: row.weight, gain: row.gain });
-    if (r) { toast(this, `${this._label(ent)}: ${r.estimator}${r.estimator === "fused" ? ` at ${Math.round(r.fp_weight * 100)}% fingerprint` : ""}, gain ×${fmtNum(r.tracker_gain, 2)}`); this._blend = null; this.dispatchEvent(new CustomEvent("layout-changed")); }
+    if (r) { toast(this, `${this._label(ent)}: ${r.estimator}${r.estimator === "fused" ? ` at ${Math.round(r.fp_weight * 100)}% fingerprint` : ""}, gain ×${fmtNum(r.thing_gain, 2)}`); this._blend = null; this.dispatchEvent(new CustomEvent("layout-changed")); }
   }
 
-  /** The blend in force for a tracker, 0..1: its own weight, else what the tuning means. */
+  /** The blend in force for a thing, 0..1: its own weight, else what the tuning means. */
   _blendOf(ent) {
-    const own = this.data?.layout?.tracker_fp_weights?.[ent];
+    const own = this.data?.layout?.thing_fp_weights?.[ent];
     if (typeof own === "number") return own;
-    const est = this.data?.layout?.tracker_estimators?.[ent] || this.data?.layout?.tuning?.position_estimator || "geometric";
+    const est = this.data?.layout?.thing_estimators?.[ent] || this.data?.layout?.tuning?.position_estimator || "geometric";
     return est === "geometric" ? 0 : est === "fingerprint" ? 1 : (this.data?.layout?.tuning?.fingerprint_weight ?? 0.5);
   }
 
   async _setBlend(ent, value) {
-    const r = await callWS(this, this.hass, { type: "sextant/tracker/tune", entity: ent, fp_weight: value });
+    const r = await callWS(this, this.hass, { type: "sextant/thing/tune", entity: ent, fp_weight: value });
     if (r) { this._blend = null; this.dispatchEvent(new CustomEvent("layout-changed")); }
   }
 
@@ -394,7 +394,7 @@ class SextantLive extends LitElement {
   updated(changed) {
     if (!this._map) return;
     if (changed.has("data") || changed.has("floor")) this._pushFloor();
-    if (changed.has("positions") || changed.has("floor") || changed.has("data") || changed.has("_scrub") || changed.has("_history")) this._pushTrackers();
+    if (changed.has("positions") || changed.has("floor") || changed.has("data") || changed.has("_scrub") || changed.has("_history")) this._pushThings();
     if (changed.has("floor") || changed.has("_marks")) this._pushMarks();
     if (changed.has("_options")) this._map.setOptions(this._options);
   }
@@ -410,26 +410,26 @@ class SextantLive extends LitElement {
   }
 
   _icon(ent) {
-    const src = this.data?.layout?.tracker_icons?.[ent];
+    const src = this.data?.layout?.thing_icons?.[ent];
     if (!src) return null;
     let img = this._icons.get(src);
     if (!img) { img = new Image(); img.src = src.startsWith("/") ? src : `/sextant/${src}`; img.onload = () => this._map?.invalidate(); this._icons.set(src, img); }
     return img;
   }
 
-  _pushTrackers() {
+  _pushThings() {
     const rows = (this.positions?.positions || []).filter((p) => p.floor === this.floor);
-    const classes = this.data?.layout?.tracker_classes || {};
-    const colors = this.data?.layout?.tracker_colors || {};
-    let trackers = rows.map((p) => ({ ...p, icon: this._icon(p.ent), mdi: classIcon(classes[p.ent]), color: colors[p.ent] || null, label: this._label(p.ent) }));
-    // Scrubbing: replace the live dot of the scrubbed tracker with the past one.
+    const classes = this.data?.layout?.thing_classes || {};
+    const colors = this.data?.layout?.thing_colors || {};
+    let things = rows.map((p) => ({ ...p, icon: this._icon(p.ent), mdi: classIcon(classes[p.ent]), color: colors[p.ent] || null, label: this._label(p.ent) }));
+    // Scrubbing: replace the live dot of the scrubbed thing with the past one.
     const h = this._history;
     if (h && this._scrub != null && h.ent) {
       const f = this._floorObj();
       const at = this._pointAt(h, this._scrub);
-      trackers = trackers.filter((t) => t.ent !== h.ent);
+      things = things.filter((t) => t.ent !== h.ent);
       if (at && at.f === this.floor && f?.scale) {
-        trackers.push({ ent: h.ent, cords: [at.x * f.scale, at.y * f.scale], zone: at.z, conf: 1, label: `${this._label(h.ent)} · ${new Date(this._scrub * 1000).toLocaleTimeString()}`, icon: this._icon(h.ent), mdi: classIcon(classes[h.ent]), color: colors[h.ent] || null });
+        things.push({ ent: h.ent, cords: [at.x * f.scale, at.y * f.scale], zone: at.z, conf: 1, label: `${this._label(h.ent)} · ${new Date(this._scrub * 1000).toLocaleTimeString()}`, icon: this._icon(h.ent), mdi: classIcon(classes[h.ent]), color: colors[h.ent] || null });
       }
       this._map.clearTrails();
       if (f?.scale) {
@@ -437,17 +437,17 @@ class SextantLive extends LitElement {
         this._map.setTrail(h.ent, pts);
       }
     }
-    this._map.setTrackers(trackers);
+    this._map.setThings(things);
     this._map.setOffline(this.positions?.offline_receivers || []);
   }
 
-  _label(ent) { return trackerName(this.data, ent); }
+  _label(ent) { return thingName(this.data, ent); }
 
-  /** The same disc the map draws: the tracker's hue, with its custom icon, its class icon, or initials. */
+  /** The same disc the map draws: the thing's hue, with its custom icon, its class icon, or initials. */
   _avatar(ent) {
-    const color = trackerColor(ent, this.data?.layout?.tracker_colors?.[ent]);
-    const src = this.data?.layout?.tracker_icons?.[ent];
-    const mdi = classIcon(this.data?.layout?.tracker_classes?.[ent]);
+    const color = thingColor(ent, this.data?.layout?.thing_colors?.[ent]);
+    const src = this.data?.layout?.thing_icons?.[ent];
+    const mdi = classIcon(this.data?.layout?.thing_classes?.[ent]);
     return html`<span class="avatar" style="background: ${color}">
       ${src ? html`<img src=${src.startsWith("/") ? src : `/sextant/${src}`} alt="">` : mdi ? html`<ha-icon icon=${mdi}></ha-icon>` : html`<span class="initials">${this._label(ent).slice(0, 2).toUpperCase()}</span>`}
     </span>`;
@@ -489,12 +489,12 @@ class SextantLive extends LitElement {
     const h = this._history;
     const switches = [
       ["image", "Map image", "Show or hide the floor-plan drawing behind the rooms"],
-      ["labels", "Labels", "Room and tracker names"],
-      ["trails", "Trails", "Each tracker's recent path"],
+      ["labels", "Labels", "Room and thing names"],
+      ["trails", "Trails", "Each thing's recent path"],
       ["subzones", "Spots", "Draw the spots (a couch, a desk, a bedside table)"],
       ["receiverLabels", "Proxy names", "Name every proxy on the map, not just the one under the pointer"],
       ["circles", "Range circles", "The distance each proxy measured, as a circle: the fix is where they meet"],
-      ["fingerprint", "Fingerprint fix", "Where the fingerprint estimator alone would put each tracker (dashed), next to the published fix"],
+      ["fingerprint", "Fingerprint fix", "Where the fingerprint estimator alone would put each thing (dashed), next to the published fix"],
     ];
     const gridPicker = uiSelect({ label: "Grid", value: this._options.grid, options: [{ value: "off", label: "No grid" }, { value: "m", label: "Metres" }, { value: "ft", label: "Feet" }], onChange: (v) => this._setOption("grid", v), style: "min-width: 120px" });
     const fitButton = uiButton({ label: "Fit map", kind: "text", icon: "mdi:fit-to-screen", onClick: () => this._map.fit() });
@@ -502,7 +502,7 @@ class SextantLive extends LitElement {
       <div class="quick-actions">
         ${uiButton({ label: "Self-test", kind: "outline", icon: "mdi:clipboard-check-outline", onClick: () => this._goto("proxies") })}
         ${this._isAdmin() ? html`
-          ${uiButton({ label: "New tracker", kind: "outline", icon: "mdi:plus-circle-outline", onClick: () => this._goto("trackers") })}
+          ${uiButton({ label: "New thing", kind: "outline", icon: "mdi:plus-circle-outline", onClick: () => this._goto("things") })}
           ${uiButton({ label: "Calibrate", kind: "outline", icon: "mdi:tune-vertical", onClick: () => this._goto("calibration") })}` : nothing}
       </div>
       <div class="stage ${this._mapOpen ? "" : "collapsed"}"><canvas></canvas>
@@ -535,7 +535,7 @@ class SextantLive extends LitElement {
           </div>` : nothing}
       </div>
       <aside class="side">
-        <h3>Trackers <span class="muted">${rows.length}</span>
+        <h3>Things <span class="muted">${rows.length}</span>
           <span class="narrow-only maptoggle">${uiButton({
             label: this._mapOpen ? "Hide map" : "Show map",
             icon: this._mapOpen ? "mdi:map-minus" : "mdi:map-outline",
@@ -587,10 +587,10 @@ class SextantLive extends LitElement {
 
   _renderBlend(sel) {
     const ent = sel.ent;
-    const own = this.data?.layout?.tracker_fp_weights?.[ent];
+    const own = this.data?.layout?.thing_fp_weights?.[ent];
     const value = this._blend != null ? this._blend : Math.round(this._blendOf(ent) * 100);
     const what = value <= 0 ? "geometric only" : value >= 100 ? "fingerprint only" : `fused, ${value}% fingerprint`;
-    return html`<div class="blend" title="How this tracker's position is estimated: the geometric fit from proxy distances, the fingerprint match against the proxies' references, or a blend. Applies on the next cycle.">
+    return html`<div class="blend" title="How this thing's position is estimated: the geometric fit from proxy distances, the fingerprint match against the proxies' references, or a blend. Applies on the next cycle.">
       <span class="muted small">Geometric</span>
       <input type="range" min="0" max="100" step="5" .value=${String(value)}
              @input=${(e) => { this._blend = Number(e.target.value); }}
@@ -607,7 +607,7 @@ class SextantLive extends LitElement {
     const rows = (t?.rows || []).slice(0, 6);
     return html`<div class="truth">
       ${this._marking ? html`<div class="marking">Click the spot on the map where ${this._label(ent)} really is. ${uiButton({ label: "Cancel", kind: "text", onClick: () => { this._marking = false; } })}</div>`
-        : html`<div class="row">${uiButton({ label: "It's actually here…", icon: "mdi:map-marker-check", onClick: () => { this._marking = true; }, title: "Tell Sextant where this tracker really is; it re-solves the last few minutes under every setting and shows which fits best" })}
+        : html`<div class="row">${uiButton({ label: "It's actually here…", icon: "mdi:map-marker-check", onClick: () => { this._marking = true; }, title: "Tell Sextant where this thing really is; it re-solves the last few minutes under every setting and shows which fits best" })}
             ${this._marks.length ? html`<span class="muted small">${this._marks.length} mark${this._marks.length === 1 ? "" : "s"}</span>` : nothing}</div>`}
       ${t ? html`<div class="card inner">
         <h4>Mark ${t.mark.id} <span class="muted small">${t.mark.samples} cycles re-solved · now ${Math.round((t.current_weight ?? 0) * 100)}% fingerprint</span></h4>
@@ -686,7 +686,7 @@ class SextantLive extends LitElement {
     .opts-sheet .chipwrap > ha-formfield, .opts-sheet .chipwrap > label.inline { width: 100%; justify-content: space-between; }
     /* Small buttons a phone user reaches for right away: jump straight to
        the page that does the thing, instead of hunting through the mode
-       tabs. Calibration and adding a tracker are admin actions - offered
+       tabs. Calibration and adding a thing are admin actions - offered
        only when this user could reach those pages at all. */
     .quick-actions button { display: flex; align-items: center; gap: 6px; }
     .side h3 { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -697,7 +697,7 @@ class SextantLive extends LitElement {
          it would stay reserved even once nothing is in it. The list comes
          first ("where is everything", read as text) and the map - fixed at
          about half the screen so it is worth looking at once open - sits
-         below it, above the selected tracker's own detail card. */
+         below it, above the selected thing's own detail card. */
       :host { display: flex; flex-direction: column; }
       .quick-actions { order: 0; display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 10px; background: var(--card-background-color); border-bottom: 1px solid var(--divider-color); }
       .side { order: 1; flex: 1 1 auto; min-height: 0; overflow: auto; border-left: 0; border-top: 1px solid var(--divider-color); max-height: none; }

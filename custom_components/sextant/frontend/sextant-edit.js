@@ -18,7 +18,7 @@ const TOOLS = [
   ["receiver", "Proxy", "mdi:access-point-plus", "Place a proxy: pick one Bermuda knows, then click the map"],
   ["zone", "Room", "mdi:vector-polygon", "Draw a room: click corners, close on the first one"],
   ["subzone", "Spot", "mdi:vector-rectangle", "Draw a spot (a couch, a desk, a bedside table) inside a room"],
-  ["nogo", "No-go", "mdi:cancel", "Draw an area trackers can never be in (a void, a wall)"],
+  ["nogo", "No-go", "mdi:cancel", "Draw an area things can never be in (a void, a wall)"],
   ["measure", "Scale", "mdi:ruler", "Set the map scale from a known distance"],
 ];
 // Layers that can be locked against selection and dragging, so a finished
@@ -436,7 +436,7 @@ class SextantEdit extends LitElement {
           ${uiField({ label: "Correction ×", type: "number", step: 0.001, min: 0.5, max: 2, value: item.correction ?? "", onChange: (v) => this._edit("correction", v), style: "width: 150px" })}
         </div>
         <div class="muted small">${item.unmatched ? "Bermuda does not report this proxy right now." : "Linked."} x ${fmtNum(item.cords?.x, 0)}, y ${fmtNum(item.cords?.y, 0)}</div>` : nothing}
-      ${sel.kind === "zone" ? uiSwitch({ label: "No-go area (trackers can never be here)", checked: !!item.no_go, onChange: (v) => this._edit("no_go", v) }) : nothing}
+      ${sel.kind === "zone" ? uiSwitch({ label: "No-go area (things can never be here)", checked: !!item.no_go, onChange: (v) => this._edit("no_go", v) }) : nothing}
       ${sel.kind === "subzone" ? html`
         <div class="row">
           ${uiSelect({ label: "Parent room", value: item.parent || "", options: [{ value: "", label: "none" }, ...zones.map((z) => ({ value: z.zone_id, label: z.entity_id }))], onChange: (v) => this._edit("parent", v || null), style: "flex: 1" })}

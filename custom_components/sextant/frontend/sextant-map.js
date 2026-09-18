@@ -2,10 +2,10 @@
  * Sextant map: one canvas renderer shared by the panel and the Lovelace card.
  *
  * Draws a floor (image, zones, sub-zones, no-go areas, receivers) and the
- * trackers on it, with pan/zoom, and - in edit mode - lets the host move
+ * things on it, with pan/zoom, and - in edit mode - lets the host move
  * receivers, drag polygon vertices, add vertices on edges and draw new
  * polygons. It owns no data model: the host hands it a floor object in the
- * layout's own shape (pixel coordinates of the floor image), tracker rows
+ * layout's own shape (pixel coordinates of the floor image), thing rows
  * from the positions payload, and receives edits back through callbacks.
  *
  * Coordinate frames: "map" = floor image pixels (what the layout stores);
@@ -17,11 +17,11 @@ const RECEIVER_SIZE = 10;
 const RECEIVER_SIZE_EDIT = 13;   // proxies are the things people drag: give them a target
 const VERTEX_SIZE = 6;
 const HIT_SLOP = 8;
-const TRACKER_RADIUS = 12;
+const THING_RADIUS = 12;
 const HUES = [205, 25, 140, 95, 320, 45, 260, 180, 0, 60];
 
 // --- Material Design Icons on the canvas ------------------------------------
-// The panel classes trackers (person, dog, phone...) and draws that class's
+// The panel classes things (person, dog, phone...) and draws that class's
 // MDI icon in the dot. Canvas cannot render <ha-icon>, but Home Assistant
 // resolves an icon name to SVG path data for us: render one off-screen,
 // read the path out of its shadow DOM, and keep it. Callers get null until
@@ -52,23 +52,23 @@ export function mdiPath(name, onReady) {
   return null;
 }
 
-/** A tracker's colour: the one it was given (#rrggbb), else its automatic hue. */
-export function trackerColor(ent, custom) {
-  return custom && /^#[0-9a-f]{6}$/i.test(custom) ? custom : `hsl(${trackerHue(ent)}, 70%, 45%)`;
+/** A thing's colour: the one it was given (#rrggbb), else its automatic hue. */
+export function thingColor(ent, custom) {
+  return custom && /^#[0-9a-f]{6}$/i.test(custom) ? custom : `hsl(${thingHue(ent)}, 70%, 45%)`;
 }
 
 /** The same colour with an alpha (and optionally darkened, for the halo). */
-export function trackerRgba(ent, custom, alpha, darker = false) {
+export function thingRgba(ent, custom, alpha, darker = false) {
   if (custom && /^#[0-9a-f]{6}$/i.test(custom)) {
     const n = parseInt(custom.slice(1), 16);
     const f = darker ? 0.8 : 1;
     return `rgba(${Math.round((n >> 16) * f)}, ${Math.round(((n >> 8) & 255) * f)}, ${Math.round((n & 255) * f)}, ${alpha})`;
   }
-  const hue = trackerHue(ent);
+  const hue = thingHue(ent);
   return darker ? `hsla(${hue}, 80%, 40%, ${alpha})` : `hsla(${hue}, 70%, 45%, ${alpha})`;
 }
 
-export function trackerHue(name) {
+export function thingHue(name) {
   let h = 0;
   for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
   return HUES[h % HUES.length];
@@ -215,17 +215,17 @@ export class SextantMap {
     this.floor = null;
     this.image = null;
     this.imageUrl = null;
-    this.trackers = [];
+    this.things = [];
     this.trails = new Map();
     this.offline = new Set();
-    this.marks = [];   // truth marks of the focused tracker on this floor: [{x, y, label}]
+    this.marks = [];   // truth marks of the focused thing on this floor: [{x, y, label}]
     this.suggestions = [];  // advised proxy spots on this floor: [{x, y, label}]
     this.options = { circles: false, trails: true, fingerprint: false, grid: "off", labels: true, subzones: true, image: true, focus: null };
     this.authFetch = host.fetch || null; // (url) => Promise<Response>, e.g. hass.fetchWithAuth
     this.locks = { zone: false, subzone: false, receiver: false }; // edit mode: locked kinds cannot be selected or dragged
     this.mode = "view";
     this.tool = "select";
-    this.selection = null; // {kind:'receiver'|'zone'|'subzone'|'tracker', index, vertex?}
+    this.selection = null; // {kind:'receiver'|'zone'|'subzone'|'thing', index, vertex?}
     this.hover = null;
     this.draft = null; // points of a polygon being drawn
     this.view = { k: 1, tx: 0, ty: 0 };
@@ -266,7 +266,7 @@ export class SextantMap {
     this.invalidate();
   }
 
-  setTrackers(rows) { this.trackers = rows || []; this.invalidate(); }
+  setThings(rows) { this.things = rows || []; this.invalidate(); }
   setTrail(ent, points) { if (points) this.trails.set(ent, points); else this.trails.delete(ent); this.invalidate(); }
   clearTrails() { this.trails.clear(); this.invalidate(); }
   setOffline(slugs) { this.offline = new Set(slugs || []); this.invalidate(); }
@@ -358,7 +358,7 @@ export class SextantMap {
       this.invalidate();
       return;
     }
-    if (this.mode === "edit" && hit && e.button === 0 && hit.kind !== "tracker") {
+    if (this.mode === "edit" && hit && e.button === 0 && hit.kind !== "thing") {
       this.selection = hit;
       if (this.host.onSelect) this.host.onSelect(hit);
       const m = this.toMap(p);
@@ -369,7 +369,7 @@ export class SextantMap {
     }
     // A host placing a truth mark takes the click before selection does.
     if (this.mode !== "edit" && e.button === 0 && this.host.onMapClick && this.host.onMapClick(this.toMap(p), hit)) return;
-    if (hit && hit.kind === "tracker" && e.button === 0 && this.mode !== "edit") {
+    if (hit && hit.kind === "thing" && e.button === 0 && this.mode !== "edit") {
       this.selection = hit;
       if (this.host.onSelect) this.host.onSelect(hit);
     } else if (this.mode !== "edit" && this.host.onSelect && !hit) {
@@ -487,10 +487,10 @@ export class SextantMap {
     const m = this.toMap(p);
     const slop = HIT_SLOP / this.view.k;
     if (this.mode !== "edit") {
-      for (let i = this.trackers.length - 1; i >= 0; i--) {
-        const t = this.trackers[i];
+      for (let i = this.things.length - 1; i >= 0; i--) {
+        const t = this.things[i];
         if (!t.cords) continue;
-        if (Math.hypot(t.cords[0] - m.x, t.cords[1] - m.y) <= (TRACKER_RADIUS + 4) / this.view.k) return { kind: "tracker", index: i, ent: t.ent };
+        if (Math.hypot(t.cords[0] - m.x, t.cords[1] - m.y) <= (THING_RADIUS + 4) / this.view.k) return { kind: "thing", index: i, ent: t.ent };
       }
     }
     const edit = this.mode === "edit";
@@ -566,7 +566,7 @@ export class SextantMap {
       ctx.restore();
       this._drawSuggestions(ctx);
     }
-    if (this.mode !== "edit") { this._drawTrackers(ctx); this._drawMarks(ctx); }
+    if (this.mode !== "edit") { this._drawThings(ctx); this._drawMarks(ctx); }
     ctx.restore();
   }
 
@@ -598,7 +598,7 @@ export class SextantMap {
       const selected = this.selection && this.selection.kind === kind && this.selection.index === index;
       const hovered = this.hover && this.hover.kind === kind && this.hover.index === index;
       const noGo = !!item.no_go;
-      const hue = kind === "subzone" ? null : trackerHue(item.entity_id || "");
+      const hue = kind === "subzone" ? null : thingHue(item.entity_id || "");
       ctx.beginPath();
       pts.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
       if (pts.length >= 3) ctx.closePath();
@@ -726,7 +726,7 @@ export class SextantMap {
     pts.forEach((p, i) => this._handle(ctx, p, (i === 0 ? VERTEX_SIZE * 1.3 : VERTEX_SIZE) / k, "#ffd166", "#5a4400"));
   }
 
-  /** Truth marks: a pin where the user said the focused tracker really was. */
+  /** Truth marks: a pin where the user said the focused thing really was. */
   _drawSuggestions(ctx) {
     // Where the Advice page says a proxy would help: a magenta target, in
     // both modes. Drawn over a scrim (see draw()), numbered so a whole
@@ -767,14 +767,14 @@ export class SextantMap {
     }
   }
 
-  _drawTrackers(ctx) {
+  _drawThings(ctx) {
     const k = this.view.k;
     const focus = this.options.focus || null;
-    for (const t of this.trackers) {
+    for (const t of this.things) {
       if (!t.cords) continue;
       const custom = t.color || null;
-      const color = trackerColor(t.ent, custom);
-      const paint = (a, dark = false) => trackerRgba(t.ent, custom, a, dark);
+      const color = thingColor(t.ent, custom);
+      const paint = (a, dark = false) => thingRgba(t.ent, custom, a, dark);
       const focused = focus && t.ent === focus;
       ctx.save();
       if (focus && !focused) ctx.globalAlpha = 0.28;   // everything but the one you clicked fades back
@@ -808,10 +808,10 @@ export class SextantMap {
         ctx.beginPath(); ctx.arc(t.raw[0], t.raw[1], 4 / k, 0, Math.PI * 2);
         ctx.fillStyle = paint(0.6); ctx.fill();
       }
-      const selected = focused || (this.selection && this.selection.kind === "tracker" && this.selection.ent === t.ent);
-      const r = (focused ? TRACKER_RADIUS * 1.6 : TRACKER_RADIUS) / k;
+      const selected = focused || (this.selection && this.selection.kind === "thing" && this.selection.ent === t.ent);
+      const r = (focused ? THING_RADIUS * 1.6 : THING_RADIUS) / k;
       if (focused) {
-        // A halo that does not scale with zoom, so the focused tracker is findable at any zoom level.
+        // A halo that does not scale with zoom, so the focused thing is findable at any zoom level.
         ctx.beginPath(); ctx.arc(t.cords[0], t.cords[1], r * 2.6, 0, Math.PI * 2);
         ctx.strokeStyle = paint(0.9, true); ctx.lineWidth = 3 / k; ctx.setLineDash([8 / k, 5 / k]); ctx.stroke(); ctx.setLineDash([]);
       }

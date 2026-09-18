@@ -142,7 +142,7 @@ def test_mark_gap_breaks_the_next_segment():
     t0 = 1_000_000.0
     h.record(ENT, t0, 0.0, 0.0, FLOOR, SCALE)
     h.record(ENT, t0 + 5, 5.0, 0.0, FLOOR, SCALE)
-    h.mark_gap(ENT)                      # tracker pruned for absence
+    h.mark_gap(ENT)                      # thing pruned for absence
     h.record(ENT, t0 + 600, 40.0, 0.0, FLOOR, SCALE)
     # 2 = the device really was unheard across it, not merely a new polyline.
     assert all_points(h)["gap"] == [1, 0, H.GAP_DROPOUT]
@@ -232,7 +232,7 @@ def test_decimation_never_drops_a_gap_or_a_floor_change():
     assert set(got["floors"][i] for i in got["f"]) == {"A", "B"}
 
 
-def test_query_of_an_unknown_tracker_is_empty_not_an_error():
+def test_query_of_an_unknown_thing_is_empty_not_an_error():
     got = hist().query("nobody", 0, 1e12, 100)
     assert got["count"] == 0 and got["t"] == []
 
@@ -316,7 +316,7 @@ def test_expired_day_segments_are_pruned(tmp_path):
     assert H.list_day_keys(d) == [H.day_key(now)]
 
 
-def test_drop_entity_rewrites_segments_without_that_tracker(tmp_path):
+def test_drop_entity_rewrites_segments_without_that_thing(tmp_path):
     d = str(tmp_path / "hist")
     import time as _t
     now = _t.time()
@@ -342,9 +342,9 @@ def test_drop_entity_removes_a_segment_it_empties(tmp_path):
     assert not os.path.exists(H.segment_path(d, H.day_key(now)) + ".tmp")
 
 
-def test_forget_drops_only_that_trackers_queued_rows():
+def test_forget_drops_only_that_things_queued_rows():
     # A clear must not be undone by a flush of rows queued moments earlier —
-    # and must not take the other trackers' rows down with it.
+    # and must not take the other things' rows down with it.
     h = hist()
     t0 = 1_000_000.0
     h.record("a", t0, 0.0, 0.0, FLOOR, SCALE)
@@ -403,8 +403,8 @@ def seeded_hass(tmp_path, **layout):
 def test_index_lists_what_is_retained(tmp_path):
     hass, h, _ = seeded_hass(tmp_path)
     body = _call(ws_mod.ws_history_index, hass)
-    assert [t["ent"] for t in body["trackers"]] == [ENT]
-    assert body["trackers"][0]["points"] == h.retained(ENT)["points"]
+    assert [t["ent"] for t in body["things"]] == [ENT]
+    assert body["things"][0]["points"] == h.retained(ENT)["points"]
     assert body["config"]["max_age"] == H.DEFAULT_MAX_AGE
 
 

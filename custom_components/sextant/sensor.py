@@ -52,7 +52,7 @@ def migrate_renamed_sensor_kinds(hass):
 
 
 def find_bermuda_via_device(hass, entity):
-    """Identifier of the Bermuda device that owns this tracker's distance_to
+    """Identifier of the Bermuda device that owns this thing's distance_to
     sensors, so the Sextant device can nest under it (via_device). None when it
     can't be resolved (e.g. Bermuda not loaded yet) — the Sextant device then just
     stands on its own.
@@ -64,7 +64,7 @@ def find_bermuda_via_device(hass, entity):
         if e.platform == "bermuda" and e.device_id and e.entity_id.startswith(prefix):
             dev = dev_reg.async_get(e.device_id)
             if dev and dev.identifiers:
-                # Prefer a bermuda identifier so the link points at the tracker
+                # Prefer a bermuda identifier so the link points at the thing
                 # device even if it carries identifiers from several integrations.
                 berm = [i for i in dev.identifiers if i[0] == "bermuda"]
                 return berm[0] if berm else next(iter(dev.identifiers))
@@ -98,8 +98,8 @@ def ensure_sensors_for_entity(hass, entity, sensors_cache, new_sensors):
         new_sensors.append(sensor)
 
 
-def tracker_of_unique_id(unique_id):
-    """The tracker slug behind a per-tracker Sextant unique_id, else None."""
+def thing_of_unique_id(unique_id):
+    """The thing slug behind a per-thing Sextant unique_id, else None."""
     if not unique_id:
         return None
     for suffix, _label in SENSOR_KINDS:
@@ -108,13 +108,13 @@ def tracker_of_unique_id(unique_id):
     return None
 
 
-def _sextant_device(hass, dev_reg, tracker):
-    """The ``<tracker> (Sextant)`` device, looked up the way the running core wants.
+def _sextant_device(hass, dev_reg, thing):
+    """The ``<thing> (Sextant)`` device, looked up the way the running core wants.
 
     2026.9 deprecates async_get_device(identifiers=...) in favour of the
     per-config-entry lookup; older cores only have the former.
     """
-    identifier = ("sextant", tracker)
+    identifier = ("sextant", thing)
     by_identifier = getattr(dev_reg, "async_get_device_by_identifier", None)
     entries = getattr(getattr(hass, "config_entries", None), "async_entries", None)
     if by_identifier is not None and entries is not None:
@@ -126,10 +126,10 @@ def _sextant_device(hass, dev_reg, tracker):
     return dev_reg.async_get_device(identifiers={identifier})
 
 
-def _remove_sextant_device(hass, tracker):
-    """Drop the ``<tracker> (Sextant)`` device once none of its entities remain."""
+def _remove_sextant_device(hass, thing):
+    """Drop the ``<thing> (Sextant)`` device once none of its entities remain."""
     dev_reg = dr.async_get(hass)
-    device = _sextant_device(hass, dev_reg, tracker)
+    device = _sextant_device(hass, dev_reg, thing)
     if device is None:
         return False
     ent_reg = er.async_get(hass)
@@ -140,41 +140,41 @@ def _remove_sextant_device(hass, tracker):
 
 
 @callback
-def remove_sensors_for_trackers(hass, trackers, reason="untracked"):
-    """Remove the Sextant sensors and device of each tracker in ``trackers``.
+def remove_sensors_for_things(hass, things, reason="untracked"):
+    """Remove the Sextant sensors and device of each thing in ``things``.
 
-    Cache object, registry entry, state and the per-tracker device all go.
-    Called from the Trackers page's untrack (ws bermuda/track with ``remove``)
+    Cache object, registry entry, state and the per-thing device all go.
+    Called from the Things page's untrack (ws bermuda/track with ``remove``)
     and from the reconcile below. Removing the registry entry makes HA retire
     the live entity too, so this is the whole cleanup. Returns the number of
     registry entries removed.
     """
-    trackers = [t for t in trackers if t]
-    if not trackers:
+    things = [t for t in things if t]
+    if not things:
         return 0
     sensors_cache = hass.data.get("sextant_sensors") or {}
     ent_reg = er.async_get(hass)
     states = getattr(hass, "states", None)
     removed = 0
-    for tracker in trackers:
+    for thing in things:
         for suffix, _label in SENSOR_KINDS:
-            entity_id = f"sensor.{tracker}_{suffix}"
+            entity_id = f"sensor.{thing}_{suffix}"
             sensors_cache.pop(entity_id, None)
             if ent_reg.async_get(entity_id) is not None:
                 ent_reg.async_remove(entity_id)
                 removed += 1
             if getattr(states, "get", None) is not None and states.get(entity_id) is not None:
                 states.async_remove(entity_id)
-        _remove_sextant_device(hass, tracker)
-    _LOGGER.info("Removed the Sextant sensors of %d %s tracker(s): %s", len(trackers), reason, ", ".join(trackers))
+        _remove_sextant_device(hass, thing)
+    _LOGGER.info("Removed the Sextant sensors of %d %s thing(s): %s", len(things), reason, ", ".join(things))
     return removed
 
 
 @callback
 def prune_sensors_for_untracked(hass, tracked):
-    """Reconcile Sextant's sensors against the set of trackers Bermuda reports.
+    """Reconcile Sextant's sensors against the set of things Bermuda reports.
 
-    ``tracked`` must be Bermuda's FULL tracked set (never the trackers heard
+    ``tracked`` must be Bermuda's FULL tracked set (never the things heard
     this cycle: a phone that is out for the day is still tracked). Anything
     Sextant still carries for a device outside it is an orphan: a device
     untracked while HA was down, or before this reconcile existed, whose
@@ -199,16 +199,16 @@ def prune_sensors_for_untracked(hass, tracked):
     for entry in list(ent_reg.entities.values()):
         if entry.platform != "sextant" or entry.entity_id == ACCURACY_ENTITY_ID:
             continue
-        tracker = tracker_of_unique_id(entry.unique_id)
-        if tracker is not None and tracker not in tracked:
-            stale.add(tracker)
+        thing = thing_of_unique_id(entry.unique_id)
+        if thing is not None and thing not in tracked:
+            stale.add(thing)
     for entity_id, sensor in list((hass.data.get("sextant_sensors") or {}).items()):
         if entity_id == ACCURACY_ENTITY_ID:
             continue
-        tracker = tracker_of_unique_id(getattr(sensor, "unique_id", None))
-        if tracker is not None and tracker not in tracked:
-            stale.add(tracker)
-    removed = remove_sensors_for_trackers(hass, sorted(stale), reason="no longer tracked") if stale else 0
+        thing = thing_of_unique_id(getattr(sensor, "unique_id", None))
+        if thing is not None and thing not in tracked:
+            stale.add(thing)
+    removed = remove_sensors_for_things(hass, sorted(stale), reason="no longer tracked") if stale else 0
     hass.data["sextant_pruned_for"] = tracked
     return removed
 
@@ -237,12 +237,12 @@ def get_filtered_entities(hass):
 
     Only entities from the `bermuda` integration count. Other integrations also
     expose `_distance_to_` sensors (e.g. an ESPHome mmWave presence sensor's
-    `..._distance_to_detection_object`); those aren't trackers and must not get
+    `..._distance_to_detection_object`); those aren't things and must not get
     Sextant zone/floor sensors or a device.
     """
     # Prefer what Bermuda says it is TRACKING over what happens to have an
     # entity. Bermuda ships its per-scanner distance entities disabled, so a
-    # states scan finds none of them and Sextant would create no per-tracker
+    # states scan finds none of them and Sextant would create no per-thing
     # sensors at all. The API answer is the same set, minus that dependency.
     tracked = bermuda_source.async_get_tracked_device_prefixes(hass)
     if tracked is not None:
@@ -273,7 +273,7 @@ class CustomDistanceSensor(SensorEntity):
         # Group each tracked device's Sextant sensors under their own device rather
         # than one shared "BLE Positioning System" bucket. All four sensors for
         # a tracked device share the same identifier, so they land together, and
-        # via_device nests that device under its Bermuda tracker device.
+        # via_device nests that device under its Bermuda thing device.
         if device_key:
             info = DeviceInfo(
                 identifiers={("sextant", device_key)},
@@ -336,12 +336,12 @@ class SextantAccuracySensor(SensorEntity):
 
 
 @callback
-def ensure_sensors_for_trackers(hass, trackers):
-    """Create the sensors of any tracker in ``trackers`` that has none yet.
+def ensure_sensors_for_things(hass, things):
+    """Create the sensors of any thing in ``things`` that has none yet.
 
-    Called from the positioning loop with the trackers Bermuda reports, so
+    Called from the positioning loop with the things Bermuda reports, so
     a device added to Bermuda after setup gets its zone/floor sensors on the
-    next cycle. O(trackers) dictionary lookups in steady state; the registry
+    next cycle. O(things) dictionary lookups in steady state; the registry
     is only touched when something is actually missing.
     """
     sensors_cache = hass.data.get("sextant_sensors")
@@ -349,10 +349,10 @@ def ensure_sensors_for_trackers(hass, trackers):
     if sensors_cache is None or add_entities is None:
         return
     new_sensors = []
-    for entity in trackers:
+    for entity in things:
         ensure_sensors_for_entity(hass, entity, sensors_cache, new_sensors)
     if new_sensors:
-        _LOGGER.info("Creating Sextant sensors for %d tracker(s) added since setup", len(new_sensors) // len(SENSOR_KINDS) or 1)
+        _LOGGER.info("Creating Sextant sensors for %d thing(s) added since setup", len(new_sensors) // len(SENSOR_KINDS) or 1)
         add_entities(new_sensors, update_before_add=True)
         normalize_sextant_registry_entity_ids_from_cache(hass)
 
@@ -477,7 +477,7 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
             _LOGGER.info("Removing stale Sextant registry entity: %s", entity_id)
             entity_registry.async_remove(entity_id)
 
-    # Kept so the positioning loop can create sensors for a tracker that
+    # Kept so the positioning loop can create sensors for a thing that
     # appears AFTER setup (a device added in Bermuda while HA runs): with
     # Bermuda's distance entities disabled, the state listener below never
     # sees such a device, and it would be positioned but have no sensors
@@ -485,7 +485,7 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
     hass.data["sextant_add_entities"] = async_add_entities
 
     new_sensors = []
-    # The global accuracy diagnostic (once), before the per-tracker sensors.
+    # The global accuracy diagnostic (once), before the per-thing sensors.
     if ACCURACY_ENTITY_ID not in hass.data["sextant_sensors"]:
         accuracy = SextantAccuracySensor()
         hass.data["sextant_sensors"][ACCURACY_ENTITY_ID] = accuracy
@@ -505,7 +505,7 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
         every state change in all of HA (the busiest event there is). It must be
         O(1) for the overwhelming majority of those events. Only a newly-ADDED
         ``sensor.*_distance_to_*`` entity (``old_state`` is None) can introduce a
-        new tracker; the constant value-updates of existing distance sensors and
+        new thing; the constant value-updates of existing distance sensors and
         every unrelated entity are skipped cheaply. Without this filter the
         handler ran a full states + entity-registry scan on every state change
         and stalled the event loop (issue #51).
@@ -534,7 +534,7 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
         old_unsub()
     hass.data["sextant_state_listener_unsub"] = hass.bus.async_listen("state_changed", state_changed_listener)
 
-    # The state_changed hook above can only spot a new tracker when a distance
+    # The state_changed hook above can only spot a new thing when a distance
     # ENTITY appears. With those entities disabled none ever appears, so a
     # device newly tracked in Bermuda would never get Sextant sensors. Subscribe to
     # Bermuda's coordinator as well - it is a plain DataUpdateCoordinator, so
@@ -548,9 +548,9 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
         # Cheap guard: only do the (registry-walking) discovery when the set of
         # tracked devices has actually changed.
         tracked = bermuda_source.async_get_tracked_device_prefixes(hass)
-        if tracked is None or tracked == hass.data.get("sextant_known_trackers"):
+        if tracked is None or tracked == hass.data.get("sextant_known_things"):
             return
-        hass.data["sextant_known_trackers"] = set(tracked)
+        hass.data["sextant_known_things"] = set(tracked)
 
         new_sensors = []
         for entity in sorted(tracked):
@@ -569,7 +569,7 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
         Sextant and Bermuda both load at startup and the order is not guaranteed.
         If Bermuda's config entry is not ready when this platform sets up,
         async_subscribe returns None - and without a retry Sextant would sit with
-        no per-tracker sensors forever, because the state_changed hook it used
+        no per-thing sensors forever, because the state_changed hook it used
         to rely on never fires for disabled distance entities.
         """
         if hass.data.get("sextant_sensors") is None:

@@ -6,7 +6,7 @@ import sextant
 from sextant import fingerprint as fp
 
 from conftest import make_hass
-from test_positioning import _Sensor, _reset_tracker_state, _square_layout, run
+from test_positioning import _Sensor, _reset_thing_state, _square_layout, run
 
 # Four receivers on the corners of a 10 m square, 100 px/m, all advertising.
 ADDR = {"a": "aa:00:00:00:00:01", "b": "aa:00:00:00:00:02", "c": "aa:00:00:00:00:03", "d": "aa:00:00:00:00:04"}
@@ -72,7 +72,7 @@ def test_build_references_uses_placed_receivers_only_and_adds_self():
     assert abs(a2["vector"][ADDR["c"]] - 0.5 * math.hypot(10, 10)) < 1e-9
 
 
-def test_match_lands_on_the_receiver_the_tracker_stands_at():
+def test_match_lands_on_the_receiver_the_thing_stands_at():
     db = fp.ReferenceDB(); db.ingest(_ranging())
     refs = fp.build_references(_layout_with_addresses(), db.vectors())["F"]
     m = fp.match(_vector_at(0.0, 0.0), refs, k=3)
@@ -87,7 +87,7 @@ def test_match_lands_on_the_receiver_the_tracker_stands_at():
 def test_match_uses_missing_receivers_as_evidence_and_tolerates_nothing():
     db = fp.ReferenceDB(); db.ingest(_ranging())
     refs = fp.build_references(_layout_with_addresses(), db.vectors())["F"]
-    # Only receiver a hears the tracker, close: nothing else can place it.
+    # Only receiver a hears the thing, close: nothing else can place it.
     m = fp.match({ADDR["a"]: 1.0}, refs, k=3, missing_m=12.0)
     assert m["refs"][0][0] == refs[0]["slug"]
     assert fp.match({}, refs) is None
@@ -105,7 +105,7 @@ def test_similarity_is_zero_for_identical_vectors_and_grows_with_disagreement():
 def test_fuse_blends_fix_and_confidence_and_falls_back():
     db = fp.ReferenceDB(); db.ingest(_ranging())
     refs = fp.build_references(_layout_with_addresses(), db.vectors())["F"]
-    spec = {"mode": "fused", "tracker": _vector_at(0.0, 0.0), "refs": refs,
+    spec = {"mode": "fused", "thing": _vector_at(0.0, 0.0), "refs": refs,
             "k": 3, "missing_m": 12.0, "weight": 0.5, "floor_weight": 0.5}
     fix, conf, tele = sextant._fuse_fingerprint(spec, (1000.0, 1000.0), 0.2)
     assert tele["refs"] and 0 < fix[0] < 1000 and conf > 0.2
@@ -119,12 +119,12 @@ def test_fuse_blends_fix_and_confidence_and_falls_back():
     assert abs(fix3[0] - fix2[0]) < 1e-9
     # No spec, or no match: geometric passes through untouched.
     assert sextant._fuse_fingerprint(None, (1.0, 2.0), 0.3) == ((1.0, 2.0), 0.3, None)
-    spec["tracker"] = {}
+    spec["thing"] = {}
     assert sextant._fuse_fingerprint(spec, (1.0, 2.0), 0.3) == ((1.0, 2.0), 0.3, None)
 
 
 def test_full_cycle_fused_mode_publishes_and_places_with_one_receiver(monkeypatch):
-    _reset_tracker_state()
+    _reset_thing_state()
     hass = make_hass()
     hass.data["sextant_sensors"] = {f"sensor.e_sextant_{k}": _Sensor() for k in ("zone", "nearest_zone", "floor", "sub_zone")}
     monkeypatch.setattr(sextant, "_fingerprint_db", fp.ReferenceDB())
@@ -147,16 +147,16 @@ def test_full_cycle_fused_mode_publishes_and_places_with_one_receiver(monkeypatc
     assert entry["estimator"] == "fused"
     assert entry["fp"]["refs"] and entry["fp"]["conf"] > 0
     assert entry["zone"] == "Kitchen"
-    # A single receiver hearing the tracker cannot be trilaterated, but the
+    # A single receiver hearing the thing cannot be trilaterated, but the
     # fingerprint still places it (at that receiver) instead of going dark.
-    _reset_tracker_state()
+    _reset_thing_state()
     hass.data["sextant_sensors"] = {f"sensor.e_sextant_{k}": _Sensor() for k in ("zone", "nearest_zone", "floor", "sub_zone")}
     entry = cycle(0.5, 0.5, only_first=True)
     assert entry["rms_m"] is None and entry["fp"]["refs"][0][0] == layout["floor"][0]["receivers"][0]["entity_id"]
 
 
 def test_geometric_mode_never_touches_the_reference_db(monkeypatch):
-    _reset_tracker_state()
+    _reset_thing_state()
     hass = make_hass()
     calls = []
     monkeypatch.setattr(sextant.bermuda_source, "async_get_scanner_ranging", lambda *a, **k: calls.append(1))
@@ -167,15 +167,15 @@ def test_geometric_mode_never_touches_the_reference_db(monkeypatch):
     assert calls == [1]
 
 
-# --- Auto-gain: the tracker/reference range ratio and the learned gain -------
+# --- Auto-gain: the thing/reference range ratio and the learned gain -------
 
-def test_match_reports_the_tracker_to_reference_range_ratio():
+def test_match_reports_the_thing_to_reference_range_ratio():
     refs = [{"slug": "a", "address": ADDR["a"], "x": 0.0, "y": 0.0,
              "vector": {ADDR["a"]: fp.SELF_DISTANCE_M, ADDR["b"]: 5.0, ADDR["c"]: 7.0, ADDR["d"]: 5.0}}]
-    # The tracker sits on receiver a and reads every range twice as long as the
+    # The thing sits on receiver a and reads every range twice as long as the
     # reference does: the references are built too short by a factor of two.
-    tracker = {ADDR["a"]: 1.0, ADDR["b"]: 10.0, ADDR["c"]: 14.0, ADDR["d"]: 10.0}
-    m = fp.match(tracker, refs)
+    thing = {ADDR["a"]: 1.0, ADDR["b"]: 10.0, ADDR["c"]: 14.0, ADDR["d"]: 10.0}
+    m = fp.match(thing, refs)
     assert m["shared"] == 3                      # the reference's own self entry is not evidence
     assert abs(m["ratio"] - 2.0) < 1e-9
     # Too few receivers in common: no ratio, but still a fix.
@@ -201,7 +201,7 @@ def test_reference_db_learns_the_gain_slowly_and_within_bounds():
 
 
 def test_learned_gain_converges_on_references_that_read_short():
-    """Probes advertising hotter than the trackers: every reference range is
+    """Probes advertising hotter than the things: every reference range is
     half the truth. Closing the loop (references rebuilt with the learned
     gain each cycle) walks the gain to 2 and holds it there."""
     layout = {"floor": [{"name": "F", "scale": 100.0, "receivers": [
@@ -215,18 +215,18 @@ def test_learned_gain_converges_on_references_that_read_short():
     vectors = {}
     for (tx, rx), d in truth.items():
         vectors.setdefault(tx, {})[rx] = d * 0.5    # the probes read short
-    tracker = {ADDR["a"]: 0.8, ADDR["b"]: 10.0, ADDR["c"]: 14.1, ADDR["d"]: 10.0}  # on receiver a, true ranges
+    thing = {ADDR["a"]: 0.8, ADDR["b"]: 10.0, ADDR["c"]: 14.1, ADDR["d"]: 10.0}  # on receiver a, true ranges
     db = fp.ReferenceDB()
     for _ in range(400):
         refs = fp.build_references(layout, vectors, gain=db.learned_gain)
-        m = fp.match(tracker, refs["F"])
+        m = fp.match(thing, refs["F"])
         db.learn(m["ratio"], m["conf"])
     assert abs(db.learned_gain - 2.0) < 0.1
     refs = fp.build_references(layout, vectors, gain=db.learned_gain)
-    assert abs(fp.match(tracker, refs["F"])["ratio"] - 1.0) < 0.05
+    assert abs(fp.match(thing, refs["F"])["ratio"] - 1.0) < 0.05
 
 
-def test_each_tracker_learns_its_own_gain_on_top_of_the_shared_one():
+def test_each_thing_learns_its_own_gain_on_top_of_the_shared_one():
     db = fp.ReferenceDB()
     for _ in range(20):
         db.learn(2.0, conf=1.0, entity="tile")
@@ -246,7 +246,7 @@ def test_trust_falls_with_scale_disagreement():
 
 
 def test_fused_fix_discounts_a_mis_scaled_match(monkeypatch):
-    spec = {"mode": "fused", "tracker": {"a": 1.0}, "refs": [], "k": 3, "missing_m": 12.0, "weight": 0.5, "floor_weight": 0.5, "gain": 1.0}
+    spec = {"mode": "fused", "thing": {"a": 1.0}, "refs": [], "k": 3, "missing_m": 12.0, "weight": 0.5, "floor_weight": 0.5, "gain": 1.0}
     geo = (0.0, 0.0)
     match = {"x": 100.0, "y": 0.0, "conf": 0.5, "score": 0.3, "refs": [], "ratio": 1.0}
     monkeypatch.setattr(sextant.fingerprint, "match", lambda *a, **k: dict(match))
@@ -257,12 +257,12 @@ def test_fused_fix_discounts_a_mis_scaled_match(monkeypatch):
     assert fix[0] == 0.0 and tel["trust"] == 0.0            # a factor-of-three disagreement: geometric only
 
 
-def test_tracker_estimator_override(monkeypatch):
-    layout = {"tuning": {"position_estimator": "fused"}, "tracker_estimators": {"tile": "geometric", "bad": "nope"}}
-    assert sextant._tracker_estimator(layout, "tile") == "geometric"
-    assert sextant._tracker_estimator(layout, "phone") == "fused"
-    assert sextant._tracker_estimator(layout, "bad") == "fused"     # an unknown value falls back to the tuning
-    assert sextant._fingerprint_wanted({"tuning": {"position_estimator": "geometric"}, "tracker_estimators": {"tile": "fused"}})
+def test_thing_estimator_override(monkeypatch):
+    layout = {"tuning": {"position_estimator": "fused"}, "thing_estimators": {"tile": "geometric", "bad": "nope"}}
+    assert sextant._thing_estimator(layout, "tile") == "geometric"
+    assert sextant._thing_estimator(layout, "phone") == "fused"
+    assert sextant._thing_estimator(layout, "bad") == "fused"     # an unknown value falls back to the tuning
+    assert sextant._fingerprint_wanted({"tuning": {"position_estimator": "geometric"}, "thing_estimators": {"tile": "fused"}})
     assert not sextant._fingerprint_wanted({"tuning": {"position_estimator": "geometric"}})
 
 
@@ -271,11 +271,11 @@ def test_saved_gains_seed_a_fresh_database_but_never_a_learned_one():
     saved = sextant._fingerprint_db
     sextant._fingerprint_db = db
     try:
-        sextant._restore_fp_gains({"learned_gain": 0.41, "tracker_gain": {"tile": 0.9, "bad": "x"}})
-        assert db.learned_gain == 0.41 and db.gain_for("tile") == 0.41 * 0.9 and "bad" not in db.tracker_gain
+        sextant._restore_fp_gains({"learned_gain": 0.41, "thing_gain": {"tile": 0.9, "bad": "x"}})
+        assert db.learned_gain == 0.41 and db.gain_for("tile") == 0.41 * 0.9 and "bad" not in db.thing_gain
         db.learn(2.0, conf=1.0, entity="tile")
-        before = (db.learned_gain, db.tracker_gain["tile"])
-        sextant._restore_fp_gains({"learned_gain": 3.0, "tracker_gain": {"tile": 3.0}})
-        assert (db.learned_gain, db.tracker_gain["tile"]) == before      # already learned this run: kept
+        before = (db.learned_gain, db.thing_gain["tile"])
+        sextant._restore_fp_gains({"learned_gain": 3.0, "thing_gain": {"tile": 3.0}})
+        assert (db.learned_gain, db.thing_gain["tile"]) == before      # already learned this run: kept
     finally:
         sextant._fingerprint_db = saved

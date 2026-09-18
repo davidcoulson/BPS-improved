@@ -9,7 +9,7 @@
  */
 import { LitElement, html, css, nothing } from "./lit.js";
 import { pointInPolygon } from "./sextant-map.js";
-import { sharedStyles, widgetStyles, fmtAge, fmtNum, toast, callWS, confirmDialog, uiField, uiSelect, uiSwitch, uiButton, sortFloors, trackerName, proxyName, fmtLen } from "./sextant-ui.js";
+import { sharedStyles, widgetStyles, fmtAge, fmtNum, toast, callWS, confirmDialog, uiField, uiSelect, uiSwitch, uiButton, sortFloors, thingName, proxyName, fmtLen } from "./sextant-ui.js";
 
 const QUIET_SECS = 120;   // online, but nothing heard for this long: "quiet"
 
@@ -19,14 +19,14 @@ const TUNING_LABELS = {
   fingerprint_weight: ["Fingerprint share of the fix", "0 is the trilateration alone, 1 the fingerprint alone"],
   fingerprint_floor_weight: ["Fingerprint share of floor confidence", "how much the fingerprint match counts in the floor election"],
   fingerprint_k: ["References averaged per fix", "the best-matching proxies whose positions are averaged"],
-  fingerprint_missing_m: ["Not heard counts as (m)", "a proxy that does not hear the tracker is treated as this far away"],
-  fingerprint_ref_gain: ["Reference gain", "probe beacons hotter (<1) or cooler (>1) than the trackers"],
-  fingerprint_auto_gain: ["Learn reference gain from trackers", "walk the gain in from every match, published per fix as fp.gain"],
+  fingerprint_missing_m: ["Not heard counts as (m)", "a proxy that does not hear the thing is treated as this far away"],
+  fingerprint_ref_gain: ["Reference gain", "probe beacons hotter (<1) or cooler (>1) than the things"],
+  fingerprint_auto_gain: ["Learn reference gain from things", "walk the gain in from every match, published per fix as fp.gain"],
   fingerprint_marks: ["Truth marks as references", "each mark from the Live page is also a fingerprint reference at that point"],
   distance_estimator: ["Distance estimator", "bermuda = Bermuda's smoothed distance; median = the median of the recent raw RSSI samples"],
   median_window_secs: ["Median window (s)", "only samples newer than this feed the median"],
   median_min_samples: ["Median minimum samples", "fewer than this falls back to Bermuda's distance"],
-  solver_max_receivers: ["Nearest proxies per solve", "0 uses every proxy that hears the tracker"],
+  solver_max_receivers: ["Nearest proxies per solve", "0 uses every proxy that hears the thing"],
   solver_max_range: ["Drop readings beyond (m)", "once three proxies remain; 0 never drops"],
   solver_near_always: ["Always use proxies within (m)", "proxies this close count whatever the cap"],
   zone_hysteresis: ["Room hysteresis", "off publishes the instantaneous room every cycle"],
@@ -40,7 +40,7 @@ const TUNING_LABELS = {
   subzone_switch_secs: ["Spot switch dwell (s)", "a spot change waits this long"],
   subzone_enter_prob: ["Spot entry share", "the smoothed share of the fix inside a spot needed to enter it"],
   subzone_unlock_margin: ["Leave spot outside by (m)", "the fix must sit this far outside a spot before leaving it"],
-  anchor_max_m: ["Anchor within (m)", "one proxy reading closer than this can anchor the tracker; 0 turns anchoring off"],
+  anchor_max_m: ["Anchor within (m)", "one proxy reading closer than this can anchor the thing; 0 turns anchoring off"],
   anchor_ratio: ["Others at least × farther", "every other proxy must read at least this many times farther"],
   anchor_secs: ["Anchor after (s)", "the condition must hold this long"],
   anchor_release_m: ["Release beyond (m)", "the anchor lets go once the reading opens past this"],
@@ -193,7 +193,7 @@ class SextantHealth extends LitElement {
     const r = await callWS(this, this.hass, { type: "sextant/kpi/baseline/save", name, hours: this._kpiHours });
     this._busy = null;
     if (r) {
-      toast(this, `Saved baseline "${r.name}" (${r.trackers} trackers, ${this._kpiHours} h)`);
+      toast(this, `Saved baseline "${r.name}" (${r.things} things, ${this._kpiHours} h)`);
       this._baselineName = "";
       await this._loadBaselines();
       this._baseline = r.name;
@@ -347,16 +347,16 @@ class SextantHealth extends LitElement {
       ${(diag.unmatched_receivers || []).length ? html`<details open><summary>Naming mismatches (${diag.unmatched_receivers.length})</summary>
         <ul class="plain">${diag.unmatched_receivers.map((u) => html`<li><b>${u.entity_id}</b> on ${u.floor}${u.suggested ? html` → suggested <code>${u.suggested}</code>` : nothing}</li>`)}</ul></details>` : nothing}
       <details @toggle=${(e) => { if (e.target.open && !this._linking) this._loadLinking(); }}><summary>What each proxy hears right now</summary>
-        <p class="small muted">One row per placed proxy: which trackers it currently reports a distance for, and how far. <b>live</b> = it heard a tracked device in the last minute; <b>silent</b> = it is fine but nothing tracked is in its range right now (normal for a proxy in an empty room; worth a look only if it stays silent while people walk past it); <b>unmatched</b> = no Bermuda proxy has that name, so fix the placement on the Edit page. Unplaced proxies are not shown because their readings are never used.</p>
+        <p class="small muted">One row per placed proxy: which things it currently reports a distance for, and how far. <b>live</b> = it heard a tracked device in the last minute; <b>silent</b> = it is fine but nothing tracked is in its range right now (normal for a proxy in an empty room; worth a look only if it stays silent while people walk past it); <b>unmatched</b> = no Bermuda proxy has that name, so fix the placement on the Edit page. Unplaced proxies are not shown because their readings are never used.</p>
         ${this._linking ? html`<div class="wrap"><table>
-          <tr><th>Proxy</th><th>Status</th><th class="num">Reporting</th><th>Trackers heard</th></tr>
+          <tr><th>Proxy</th><th>Status</th><th class="num">Reporting</th><th>Things heard</th></tr>
           ${(this._linking.placed || []).map((p) => {
             const rows = (p.sensors || p.readings || []).filter((d) => d.state != null && d.state !== "unknown" && d.state !== "unavailable");
             return html`<tr>
               <td>${proxyName(this.data, p.address || p.entity_id || p.receiver || p.slug)}<br><span class="muted small">${p.floor || ""}</span></td>
               <td><span class="pill ${p.status === "live" ? "ok" : "warn"}">${p.status}</span></td>
               <td class="num">${p.reporting_count ?? rows.length} / ${p.sensor_count ?? (p.sensors || []).length}</td>
-              <td class="small">${rows.length ? rows.map((d) => `${trackerName(this.data, d.device || d.entity)} ${fmtLen(Number(d.state ?? d.distance), this.hass)}`).join(" · ") : html`<span class="muted">nothing tracked in range</span>`}</td>
+              <td class="small">${rows.length ? rows.map((d) => `${thingName(this.data, d.device || d.entity)} ${fmtLen(Number(d.state ?? d.distance), this.hass)}`).join(" · ") : html`<span class="muted">nothing tracked in range</span>`}</td>
             </tr>`;
           })}
         </table></div>` : html`<div class="muted small">Loading…</div>`}
@@ -546,16 +546,16 @@ class SextantHealth extends LitElement {
     const moreIsBetter = (v) => v == null ? "—" : html`<span class=${v > 0 ? "good" : v < 0 ? "bad" : ""}>${v > 0 ? "+" : "−"}${fmtAge(Math.abs(v))}</span>`;
     const sz = d?.summary?.sextant_room;
     const baselineOptions = [{ value: "", label: "no baseline" }, ...this._baselines.map((b) => ({ value: b.name, label: `${b.name} · ${b.hours} h · ${(b.saved_at || "").slice(0, 10)}` }))];
-    const name = (e) => trackerName(this.data, e.replace(/^sensor\./, "").replace(/_sextant_room$/, ""));
+    const name = (e) => thingName(this.data, e.replace(/^sensor\./, "").replace(/_sextant_room$/, ""));
     return html`<section class="card wide">
       <h3>Stability</h3>
       <div class="row">
         ${uiSelect({ label: "Window", value: this._kpiHours, options: [1, 3, 6, 12, 24, 48].map((h) => ({ value: h, label: `${h} h` })), onChange: (v) => { this._kpiHours = Number(v); }, style: "min-width: 110px" })}
         ${uiSelect({ label: "Compare with", value: this._baseline, options: baselineOptions, onChange: (v) => { this._baseline = v; }, style: "min-width: 240px" })}
         ${uiButton({ label: this._busy === "kpi" ? "Computing…" : "Compute", kind: "primary", disabled: this._busy === "kpi", onClick: () => this._runKpi() })}
-        ${s.sextant_room ? html`<span class="pill">${s.sextant_room.changes_per_tracker_hour} room changes / tracker-h</span>
+        ${s.sextant_room ? html`<span class="pill">${s.sextant_room.changes_per_thing_hour} room changes / thing-h</span>
           <span class="pill">flip ratio ${s.sextant_room.flip_ratio}</span><span class="pill">median dwell ${fmtAge(s.sextant_room.median_of_median_dwell_s)}</span>` : nothing}
-        ${sz ? html`<span class="pill" title="this window minus the baseline">vs ${k.baseline.name}: ${lessIsBetter(sz.changes_per_tracker_hour, 2)} chg/tracker-h · ${lessIsBetter(sz.flip_ratio, 0, 100)} flip pts · ${moreIsBetter(sz.median_of_median_dwell_s)} dwell</span>` : nothing}
+        ${sz ? html`<span class="pill" title="this window minus the baseline">vs ${k.baseline.name}: ${lessIsBetter(sz.changes_per_thing_hour, 2)} chg/thing-h · ${lessIsBetter(sz.flip_ratio, 0, 100)} flip pts · ${moreIsBetter(sz.median_of_median_dwell_s)} dwell</span>` : nothing}
       </div>
       <div class="row">
         ${uiField({ label: "Save this window as a baseline", value: this._baselineName, placeholder: "e.g. fused 2026-09-17", onChange: (v) => { this._baselineName = v; }, style: "width: 260px" })}
@@ -563,7 +563,7 @@ class SextantHealth extends LitElement {
         ${this._baseline ? uiButton({ label: "Delete baseline", kind: "danger", onClick: () => this._deleteBaseline(this._baseline) }) : nothing}
       </div>
       ${ents.length ? html`<div class="wrap"><table>
-        <tr><th>Tracker</th><th class="num">chg/h</th><th class="num">flip %</th><th class="num">dwell</th><th class="num">&lt;60 s %</th><th class="num">dead</th>${d ? html`<th class="num">Δ chg/h</th><th class="num">Δ flip pts</th><th class="num">Δ dwell</th>` : nothing}</tr>
+        <tr><th>Thing</th><th class="num">chg/h</th><th class="num">flip %</th><th class="num">dwell</th><th class="num">&lt;60 s %</th><th class="num">dead</th>${d ? html`<th class="num">Δ chg/h</th><th class="num">Δ flip pts</th><th class="num">Δ dwell</th>` : nothing}</tr>
         ${ents.map(([e, m]) => html`<tr><td>${name(e)}</td><td class="num">${fmtNum(m.changes_per_hour, 1)}</td><td class="num">${m.flip_ratio != null ? fmtNum(m.flip_ratio * 100, 0) : "—"}</td><td class="num">${fmtAge(m.median_dwell_s)}</td><td class="num">${m.short_dwell_ratio != null ? fmtNum(m.short_dwell_ratio * 100, 0) : "—"}</td><td class="num">${m.dead}</td>${d ? html`<td class="num">${lessIsBetter(d.entities?.[e]?.changes_per_hour, 1)}</td><td class="num">${lessIsBetter(d.entities?.[e]?.flip_ratio, 0, 100)}</td><td class="num">${moreIsBetter(d.entities?.[e]?.median_dwell_s)}</td>` : nothing}</tr>`)}
       </table></div>` : k ? html`<div class="muted small">No room sensors in the recorder window.</div>` : nothing}
     </section>`;
@@ -578,15 +578,15 @@ class SextantHealth extends LitElement {
 
   _renderAccuracy() {
     const a = this._accuracy;
-    const rows = Object.entries(a?.trackers || {}).sort((x, y) => y[1].mean_m - x[1].mean_m);
+    const rows = Object.entries(a?.things || {}).sort((x, y) => y[1].mean_m - x[1].mean_m);
     return html`<section class="card wide">
       <h3>Accuracy <span class="muted small">against your truth marks</span></h3>
-      <p class="small muted">Every mark (Live page, "It's actually here…") re-solved under the settings in force now: how far each tracker lands from where you said it was, and how often it gets the room right.</p>
+      <p class="small muted">Every mark (Live page, "It's actually here…") re-solved under the settings in force now: how far each thing lands from where you said it was, and how often it gets the room right.</p>
       <div class="row">${uiButton({ label: this._busy === "accuracy" ? "Evaluating…" : "Evaluate marks", kind: "primary", disabled: this._busy === "accuracy", onClick: () => this._runAccuracy() })}
         ${a ? html`<span class="pill">${(a.marks || []).length} mark${(a.marks || []).length === 1 ? "" : "s"}</span>` : nothing}</div>
       ${rows.length ? html`<div class="wrap"><table>
-        <tr><th>Tracker</th><th class="num">Marks</th><th class="num">Mean error</th><th class="num">Right room</th></tr>
-        ${rows.map(([e, m]) => html`<tr><td>${trackerName(this.data, e)}</td><td class="num">${m.marks}</td><td class="num">${fmtLen(m.mean_m, this.hass)}</td><td class="num">${Math.round(m.room_ok * 100)}%</td></tr>`)}
+        <tr><th>Thing</th><th class="num">Marks</th><th class="num">Mean error</th><th class="num">Right room</th></tr>
+        ${rows.map(([e, m]) => html`<tr><td>${thingName(this.data, e)}</td><td class="num">${m.marks}</td><td class="num">${fmtLen(m.mean_m, this.hass)}</td><td class="num">${Math.round(m.room_ok * 100)}%</td></tr>`)}
       </table></div>` : a ? html`<div class="muted small">No marks yet.</div>` : nothing}
     </section>`;
   }
@@ -625,7 +625,7 @@ class SextantHealth extends LitElement {
   }
 
   async _clearHistory(entity) {
-    if (!confirmDialog(entity ? `Forget the recorded positions of ${trackerName(this.data, entity)}?` : "Forget every tracker's recorded positions?")) return;
+    if (!confirmDialog(entity ? `Forget the recorded positions of ${thingName(this.data, entity)}?` : "Forget every thing's recorded positions?")) return;
     const r = await callWS(this, this.hass, { type: "sextant/history/clear", ...(entity ? { entity } : {}) });
     if (r) toast(this, `History cleared (${r.removed} file${r.removed === 1 ? "" : "s"} rewritten)`);
   }
@@ -636,7 +636,7 @@ class SextantHealth extends LitElement {
       <h3>Position history</h3>
       <p class="small muted">The scrubber on the Live page replays these; this is only where they can be forgotten.</p>
       <div class="row">
-        ${uiSelect({ label: "Tracker", value: this._histEnt || "", options: [{ value: "", label: "every tracker" }, ...ents.map((e) => ({ value: e, label: trackerName(this.data, e) }))], onChange: (v) => { this._histEnt = v; }, style: "min-width: 220px" })}
+        ${uiSelect({ label: "Thing", value: this._histEnt || "", options: [{ value: "", label: "every thing" }, ...ents.map((e) => ({ value: e, label: thingName(this.data, e) }))], onChange: (v) => { this._histEnt = v; }, style: "min-width: 220px" })}
         ${uiButton({ label: "Clear history", kind: "danger", onClick: () => this._clearHistory(this._histEnt || null) })}
       </div>
     </section>`;

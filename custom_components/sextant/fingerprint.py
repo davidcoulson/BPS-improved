@@ -3,10 +3,10 @@
 Every receiver that advertises (an ESPHome iBeacon, a Shelly) is heard by
 every other receiver, so Bermuda continuously measures a labelled vector of
 ranges at a known position - one per placed receiver, refreshed for free.
-A tracker's own vector of ranges can be matched against those reference
-vectors by similarity, and the tracker placed at a weighted average of the
+A thing's own vector of ranges can be matched against those reference
+vectors by similarity, and the thing placed at a weighted average of the
 best-matching receivers' positions. Nothing here uses a path-loss model to
-turn a range into geometry: a wall that makes receiver X read a tracker
+turn a range into geometry: a wall that makes receiver X read a thing
 long makes X read the reference receivers behind that wall long too, and
 the comparison cancels it. That is what ESPresense Companion and
 room-assistant lean on, and it is what a dense receiver layout is good at.
@@ -14,7 +14,7 @@ room-assistant lean on, and it is what a dense receiver layout is good at.
 The trilateration keeps its job; this module produces a second opinion
 (a fix and a per-floor confidence) that __init__ fuses with the geometric
 fit according to the ``position_estimator`` tuning. It can also place a
-tracker that only ONE receiver hears, where trilateration has nothing.
+thing that only ONE receiver hears, where trilateration has nothing.
 
 All functions are pure so the match can run in the executor.
 """
@@ -24,7 +24,7 @@ from __future__ import annotations
 import math
 from collections import deque
 
-# A receiver does not hear itself, but a tracker standing at a receiver
+# A receiver does not hear itself, but a thing standing at a receiver
 # hears it very close: the reference vector gets this self-range.
 SELF_DISTANCE_M = 0.5
 # Reference ranges are medians over this many refreshes: the receivers do
@@ -34,24 +34,24 @@ REF_SAMPLES = 12
 # Pairs not heard within this many seconds are not sampled.
 REF_MAX_AGE_SECS = 60.0
 # Log-ratio at which a single receiver's disagreement costs half the
-# confidence: ln(2) = the reference and the tracker differ by a factor 2.
+# confidence: ln(2) = the reference and the thing differ by a factor 2.
 SCORE_SCALE = math.log(2.0)
 # References scoring worse than this multiple of the best are not averaged
 # in, even inside the k cut - a poor third neighbour would drag the fix.
 NEIGHBOUR_SCORE_RATIO = 3.0
 
 # Auto-gain: each accepted match moves the learned reference gain by
-# ratio ** (LEARN_ALPHA * conf); at one match per tracker per cycle, a
-# household of trackers walks a factor-of-two error off in a few minutes
+# ratio ** (LEARN_ALPHA * conf); at one match per thing per cycle, a
+# household of things walks a factor-of-two error off in a few minutes
 # and then hovers, never runs away (clamped).
 LEARN_ALPHA = 0.02
 LEARNED_GAIN_MIN = 0.25
 LEARNED_GAIN_MAX = 4.0
-# Every radio reads differently (a watch weak, a Tile hot): each tracker also learns its own
-# multiplier on the shared gain, faster, since it only ever affects that tracker.
-TRACKER_LEARN_ALPHA = 0.1
-# A match whose tracker/reference range ratio is this far from 1 (a factor of three) says nothing
-# about where the tracker is; the fusion weight falls linearly to zero there.
+# Every radio reads differently (a watch weak, a Tile hot): each thing also learns its own
+# multiplier on the shared gain, faster, since it only ever affects that thing.
+THING_LEARN_ALPHA = 0.1
+# A match whose thing/reference range ratio is this far from 1 (a factor of three) says nothing
+# about where the thing is; the fusion weight falls linearly to zero there.
 TRUST_SCALE = math.log(3.0)
 MIN_SHARED_FOR_RATIO = 3   # receivers both vectors need before a ratio is trusted
 
@@ -65,21 +65,21 @@ class ReferenceDB:
         self.stamp = None
         # Multiplies the configured reference gain (see learn()).
         self.learned_gain = 1.0
-        # Per-tracker multiplier on top of learned_gain (see learn(entity=...)).
-        self.tracker_gain = {}
+        # Per-thing multiplier on top of learned_gain (see learn(entity=...)).
+        self.thing_gain = {}
         # References from truth marks (truth.mark_reference), in probe scale.
         self.extra_refs = []
 
     def gain_for(self, entity=None):
-        """The learned gain for one tracker: the shared gain times its own multiplier."""
-        return self.learned_gain * self.tracker_gain.get(entity, 1.0)
+        """The learned gain for one thing: the shared gain times its own multiplier."""
+        return self.learned_gain * self.thing_gain.get(entity, 1.0)
 
     def learn(self, ratio, conf=1.0, alpha=LEARN_ALPHA, entity=None):
-        """Fold one match's tracker/reference range ratio into the learned gain.
+        """Fold one match's thing/reference range ratio into the learned gain.
 
-        ``ratio`` > 1 means the tracker reads farther than the reference the
+        ``ratio`` > 1 means the thing reads farther than the reference the
         matcher paired it with, i.e. the references are built too short and
-        the gain should rise. A tracker is rarely exactly at a reference, so
+        the gain should rise. A thing is rarely exactly at a reference, so
         single ratios scatter either side of the truth; the exponent is
         small and scaled by the match confidence so only the average moves
         the gain. Returns the new gain.
@@ -89,8 +89,8 @@ class ReferenceDB:
         weight = max(0.0, min(1.0, float(conf)))
         self.learned_gain = min(LEARNED_GAIN_MAX, max(LEARNED_GAIN_MIN, self.learned_gain * ratio ** (alpha * weight)))
         if entity is not None:
-            own = self.tracker_gain.get(entity, 1.0) * ratio ** (TRACKER_LEARN_ALPHA * weight)
-            self.tracker_gain[entity] = min(LEARNED_GAIN_MAX, max(LEARNED_GAIN_MIN, own))
+            own = self.thing_gain.get(entity, 1.0) * ratio ** (THING_LEARN_ALPHA * weight)
+            self.thing_gain[entity] = min(LEARNED_GAIN_MAX, max(LEARNED_GAIN_MIN, own))
         return self.learned_gain
 
     def ingest(self, ranging, max_age=REF_MAX_AGE_SECS):
@@ -137,7 +137,7 @@ class ReferenceDB:
 
 
 def trust(ratio):
-    """How much a match with this tracker/reference range ratio should weigh: 1 at a ratio of 1,
+    """How much a match with this thing/reference range ratio should weigh: 1 at a ratio of 1,
     falling to 0 at a factor of TRUST_SCALE either way. None (no ratio) is trusted in full."""
     if not isinstance(ratio, (int, float)) or isinstance(ratio, bool) or not ratio > 0 or not math.isfinite(ratio):
         return 1.0
@@ -157,13 +157,13 @@ def build_references(layout, vectors, gain=1.0, extra=None):
     A placed receiver becomes a reference when it carries a scanner address
     and at least one other placed receiver has ranged it. The vector is
     keyed by receiving scanner address and holds metres on the same scale
-    the tracker's readings use: Bermuda's estimate, times that receiver's
+    the thing's readings use: Bermuda's estimate, times that receiver's
     calibration correction (exactly what update_receiver_radii applies to a
-    tracker's reading from the same receiver), times ``gain`` - the knob for
-    a probe beacon that transmits hotter or cooler than the trackers do.
+    thing's reading from the same receiver), times ``gain`` - the knob for
+    a probe beacon that transmits hotter or cooler than the things do.
     The receiver's own entry is SELF_DISTANCE_M. ``extra`` adds references
     that are not receivers (truth marks: a known point with the vector a
-    tracker read there, stored in probe scale), scaled by the same gain.
+    thing read there, stored in probe scale), scaled by the same gain.
     """
     floors = (layout or {}).get("floor") if isinstance(layout, dict) else None
     if not floors or not isinstance(vectors, dict):
@@ -218,7 +218,7 @@ def build_references(layout, vectors, gain=1.0, extra=None):
     return refs_by_floor
 
 
-def tracker_vector(layout):
+def thing_vector(layout):
     """{rx_address: metres} from this cycle's per-receiver readings, all floors."""
     vector = {}
     floors = (layout or {}).get("floor") if isinstance(layout, dict) else None
@@ -234,22 +234,22 @@ def tracker_vector(layout):
     return vector
 
 
-def similarity(tracker, reference, missing_m):
+def similarity(thing, reference, missing_m):
     """Weighted RMS log-ratio between two range vectors; lower is closer.
 
     Over the union of receivers: a receiver hearing only one of the two
     counts as hearing the other at ``missing_m`` (out of range is
-    information - a receiver hearing the tracker at 3 m but not the
+    information - a receiver hearing the thing at 3 m but not the
     reference says the reference is far from it). Near receivers weigh
     more: they carry the geometry, far ones mostly carry the noise. None
     when there is nothing to compare.
     """
-    keys = set(tracker) | set(reference)
+    keys = set(thing) | set(reference)
     if not keys:
         return None
     num = den = 0.0
     for rx in keys:
-        dt = tracker.get(rx)
+        dt = thing.get(rx)
         dr = reference.get(rx)
         if dt is None and dr is None:
             continue
@@ -266,21 +266,21 @@ def similarity(tracker, reference, missing_m):
     return math.sqrt(num / den)
 
 
-def match(tracker, refs, k=3, missing_m=12.0):
-    """Place a tracker vector against one floor's references.
+def match(thing, refs, k=3, missing_m=12.0):
+    """Place a thing vector against one floor's references.
 
     Returns None when nothing can be compared, else
     {"x", "y", "conf", "score", "refs": [(slug, score), ...]} where the fix
     is the inverse-score-weighted mean of the best ``k`` references (within
     NEIGHBOUR_SCORE_RATIO of the best) and ``conf`` in (0, 1] falls with
     the best score: 0.5 when the closest reference still disagrees with the
-    tracker by a factor of two on average.
+    thing by a factor of two on average.
     """
-    if not tracker or not refs:
+    if not thing or not refs:
         return None
     scored = []
     for ref in refs:
-        s = similarity(tracker, ref["vector"], missing_m)
+        s = similarity(thing, ref["vector"], missing_m)
         if s is not None:
             scored.append((s, ref))
     if not scored:
@@ -295,13 +295,13 @@ def match(tracker, refs, k=3, missing_m=12.0):
         x += w * r["x"]
         y += w * r["y"]
     conf = 1.0 / (1.0 + (best / SCORE_SCALE) ** 2)
-    # Gain evidence: over the receivers that heard BOTH the tracker and the
+    # Gain evidence: over the receivers that heard BOTH the thing and the
     # best reference (never the reference's own self entry), the median of
-    # tracker / reference. Independent of the score's weighting on purpose.
+    # thing / reference. Independent of the score's weighting on purpose.
     best_ref = scored[0][1]
     logs = [
-        math.log(tracker[rx] / best_ref["vector"][rx])
-        for rx in tracker
+        math.log(thing[rx] / best_ref["vector"][rx])
+        for rx in thing
         if rx in best_ref["vector"] and rx != best_ref.get("address") and best_ref["vector"][rx] > 0
     ]
     ratio = math.exp(_median(logs)) if len(logs) >= MIN_SHARED_FOR_RATIO else None

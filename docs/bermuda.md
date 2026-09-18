@@ -28,7 +28,7 @@ reads each Tile's ID over Bluetooth, but on the Private ID Tiles seen so
 far that ID rotates with the address, so the switch stays off unless your
 Tiles keep a stable ID. Ringing a Tile needs the Tile account's
 authentication and is not possible from here. Name a Tile from the
-Trackers page ("Kitchen keys") so the map does not show an address.
+Things page ("Kitchen keys") so the map does not show an address.
 
 **Find My accessories** (AirTags and licensed tags) rotate on a key
 schedule. Export the accessory's pairing keys (`master_key`, `skn`, `sks`,

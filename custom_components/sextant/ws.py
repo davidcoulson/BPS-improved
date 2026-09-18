@@ -5,7 +5,7 @@ couriered token. The rebuilt panel is a native Home Assistant panel, so it
 talks over the authenticated websocket like the rest of the frontend: one
 subscription for positions (``sextant/subscribe``, in __init__) and the
 request/response commands below for everything else. The HTTP views stay
-for file uploads (a map image, a tracker icon), the legacy editor and the
+for file uploads (a map image, a thing icon), the legacy editor and the
 eval tools.
 
 Every command answers with a plain JSON-able dict, or an error whose
@@ -80,12 +80,12 @@ def _manifest_version() -> str | None:
         return None
 
 
-def _tracker_names(hass, entities, layout=None) -> dict:
+def _thing_names(hass, entities, layout=None) -> dict:
     """{slug: display name} for the tracked entities.
 
     Bermuda's device name first ("Fry", "David's Phone"), then whatever the
     user renamed the device to in Home Assistant, then the name typed in
-    Sextant's own tracker dialog (layout "tracker_names"), which wins.
+    Sextant's own thing dialog (layout "thing_names"), which wins.
     """
     names = {}
     for info in (bermuda_source.async_get_tracked_devices(hass) or {}).values():
@@ -110,7 +110,7 @@ def _tracker_names(hass, entities, layout=None) -> dict:
                     break
     except Exception:  # noqa: BLE001 - no registries (tests), Bermuda's names stand
         pass
-    overrides = layout.get("tracker_names") if isinstance(layout, dict) else None
+    overrides = layout.get("thing_names") if isinstance(layout, dict) else None
     if isinstance(overrides, dict):
         for slug, name in overrides.items():
             if isinstance(name, str) and name.strip():
@@ -143,7 +143,7 @@ async def ws_layout_get(hass, connection, msg):
     except Exception:  # noqa: BLE001 - a missing folder is an empty list
         maps = []
     try:
-        icons = await hass.async_add_executor_job(core.list_tracker_icons, icons_path)
+        icons = await hass.async_add_executor_job(core.list_thing_icons, icons_path)
     except Exception:  # noqa: BLE001
         icons = []
     tracked = bermuda_source.async_get_tracked_device_prefixes(hass)
@@ -163,7 +163,7 @@ async def ws_layout_get(hass, connection, msg):
         "entities": sorted(tracked),
         # Display names: what Bermuda calls the device, overridden by the name
         # the user gave the device in Home Assistant (device registry).
-        "names": _safe(lambda: _tracker_names(hass, tracked, layout), {}),
+        "names": _safe(lambda: _thing_names(hass, tracked, layout), {}),
         # The installed integration version: the panel compares it with the
         # module it is running and offers a reload when they differ.
         "app_version": await hass.async_add_executor_job(_manifest_version),
@@ -184,13 +184,13 @@ def merge_editor_layout(current, incoming):
 
     The Edit page works on a copy of the layout taken when it loaded and
     sends the whole copy back on Save. Everything outside ``floor`` (tuning,
-    tracker names, classes, colours, heights, the auto-calibration flag) is
+    thing names, classes, colours, heights, the auto-calibration flag) is
     written by other pages and by the backend, and inside a floor the
     per-proxy ``correction`` and the ``calibration`` stamp are written by
     calibration - none of which the editor edits. Taking them from the
     current layout means a Save can no longer wipe corrections that auto
     calibration applied five minutes earlier, or a colour picked on the
-    Trackers page while the editor sat open (that is what happened).
+    Things page while the editor sat open (that is what happened).
     Receivers are matched by entity_id; one the editor added has no
     correction yet, one it deleted takes its correction with it.
     """
@@ -276,24 +276,24 @@ async def ws_tuning_set(hass, connection, msg):
 
 
 @websocket_api.websocket_command({
-    vol.Required("type"): "sextant/tracker/tune",
+    vol.Required("type"): "sextant/thing/tune",
     vol.Required("entity"): str,
     vol.Optional("ref_offset_db"): vol.Any(None, vol.Coerce(float)),
     vol.Optional("height"): vol.Any(None, vol.Coerce(float)),
     vol.Optional("icon"): vol.Any(None, str),
     vol.Optional("name"): vol.Any(None, str),
-    vol.Optional("tracker_class"): vol.Any(None, str),
+    vol.Optional("thing_class"): vol.Any(None, str),
     vol.Optional("estimator"): vol.Any(None, "", "geometric", "fingerprint", "fused"),
     vol.Optional("fp_weight"): vol.Any(None, vol.Coerce(float)),
     vol.Optional("color"): vol.Any(None, str),
 })
 @websocket_api.require_admin
 @websocket_api.async_response
-async def ws_tracker_tune(hass, connection, msg):
-    """Per-tracker settings, each applied on its own: ref-power trim (dB),
+async def ws_thing_tune(hass, connection, msg):
+    """Per-thing settings, each applied on its own: ref-power trim (dB),
     carry height (m), map icon, display name, class (person, dog, phone...
     the panel draws an icon per class) and position estimator (geometric,
-    fingerprint or fused for this tracker alone; null follows the tuning).
+    fingerprint or fused for this thing alone; null follows the tuning).
     A null clears the field."""
     core = _core()
     entity = msg["entity"]
@@ -304,21 +304,21 @@ async def ws_tracker_tune(hass, connection, msg):
             return _error(connection, msg, "No layout saved yet")
         if "ref_offset_db" in msg:
             raw = msg["ref_offset_db"]
-            offsets = data.get("tracker_ref_offsets")
+            offsets = data.get("thing_ref_offsets")
             if not isinstance(offsets, dict):
                 offsets = {}
             if raw is None or raw == 0.0:
                 offsets.pop(entity, None)
                 changes["ref_offset_db"] = 0.0
             else:
-                if not math.isfinite(raw) or abs(raw) > core.TRACKER_REF_OFFSET_MAX_DB:
-                    return _error(connection, msg, f"ref_offset_db must be within +/-{core.TRACKER_REF_OFFSET_MAX_DB} dB")
+                if not math.isfinite(raw) or abs(raw) > core.THING_REF_OFFSET_MAX_DB:
+                    return _error(connection, msg, f"ref_offset_db must be within +/-{core.THING_REF_OFFSET_MAX_DB} dB")
                 offsets[entity] = float(raw)
                 changes["ref_offset_db"] = float(raw)
-            data["tracker_ref_offsets"] = offsets
+            data["thing_ref_offsets"] = offsets
         if "height" in msg:
             raw = msg["height"]
-            heights = data.get("tracker_heights")
+            heights = data.get("thing_heights")
             if not isinstance(heights, dict):
                 heights = {}
             if raw is None:
@@ -329,10 +329,10 @@ async def ws_tracker_tune(hass, connection, msg):
                     return _error(connection, msg, "height must be between 0 and 5 m")
                 heights[entity] = float(raw)
                 changes["height"] = float(raw)
-            data["tracker_heights"] = heights
+            data["thing_heights"] = heights
         if "color" in msg:
             raw = (msg["color"] or "").strip().lower()
-            colors = data.get("tracker_colors")
+            colors = data.get("thing_colors")
             if not isinstance(colors, dict):
                 colors = {}
             if raw:
@@ -341,21 +341,21 @@ async def ws_tracker_tune(hass, connection, msg):
                 colors[entity] = raw
             else:
                 colors.pop(entity, None)
-            data["tracker_colors"] = colors
+            data["thing_colors"] = colors
             changes["color"] = raw or None
         if "icon" in msg:
-            icons = data.get("tracker_icons")
+            icons = data.get("thing_icons")
             if not isinstance(icons, dict):
                 icons = {}
             if msg["icon"]:
                 icons[entity] = msg["icon"]
             else:
                 icons.pop(entity, None)
-            data["tracker_icons"] = icons
+            data["thing_icons"] = icons
             changes["icon"] = msg["icon"] or None
         if "fp_weight" in msg:
             raw = msg["fp_weight"]
-            weights = data.get("tracker_fp_weights")
+            weights = data.get("thing_fp_weights")
             if not isinstance(weights, dict):
                 weights = {}
             if raw is None:
@@ -366,18 +366,18 @@ async def ws_tracker_tune(hass, connection, msg):
                     return _error(connection, msg, "fp_weight must be between 0 (geometric) and 1 (fingerprint)")
                 weights[entity] = round(float(raw), 3)
                 changes["fp_weight"] = weights[entity]
-            data["tracker_fp_weights"] = weights
+            data["thing_fp_weights"] = weights
         if "estimator" in msg:
-            estimators = data.get("tracker_estimators")
+            estimators = data.get("thing_estimators")
             if not isinstance(estimators, dict):
                 estimators = {}
             if msg["estimator"]:
                 estimators[entity] = msg["estimator"]
             else:
                 estimators.pop(entity, None)
-            data["tracker_estimators"] = estimators
+            data["thing_estimators"] = estimators
             changes["estimator"] = msg["estimator"] or None
-        for key, store in (("name", "tracker_names"), ("tracker_class", "tracker_classes")):
+        for key, store in (("name", "thing_names"), ("thing_class", "thing_classes")):
             if key in msg:
                 values = data.get(store)
                 if not isinstance(values, dict):
@@ -444,10 +444,10 @@ async def _evaluate_mark(hass, core, mark, weights=None, gains=None):
 
 
 def _current_weight(core, layout, entity):
-    w = core._tracker_fp_weight(layout, entity)
+    w = core._thing_fp_weight(layout, entity)
     if w is not None:
         return w
-    est = core._tracker_estimator(layout, entity)
+    est = core._thing_estimator(layout, entity)
     return 0.0 if est == "geometric" else 1.0 if est == "fingerprint" else core._tuning(layout, "fingerprint_weight")
 
 
@@ -472,7 +472,7 @@ async def ws_truth_mark(hass, connection, msg):
     since = time.time() - max(30.0, float(msg["window_secs"]))
     samples = core._truth_buffer.samples(msg["entity"], since=since, floor=msg["floor"])
     if len(samples) < truth_mod.MIN_SAMPLES:
-        return _error(connection, msg, f"Only {len(samples)} recent cycle(s) placed this tracker on {msg['floor']}; wait a minute with it in place and try again")
+        return _error(connection, msg, f"Only {len(samples)} recent cycle(s) placed this thing on {msg['floor']}; wait a minute with it in place and try again")
     store = await load_truth(hass)
     mark = {
         "id": int(store.get("next_id") or 1), "entity": msg["entity"], "floor": msg["floor"],
@@ -511,8 +511,8 @@ async def ws_truth_delete(hass, connection, msg):
 @websocket_api.require_admin
 @websocket_api.async_response
 async def ws_truth_evaluate(hass, connection, msg):
-    """Every mark (or one tracker's, or one mark) re-solved under the settings in force
-    now: the accuracy figure per tracker, plus the full sweep for a single mark."""
+    """Every mark (or one thing's, or one mark) re-solved under the settings in force
+    now: the accuracy figure per thing, plus the full sweep for a single mark."""
     core = _core()
     store = await load_truth(hass)
     data = get_layout(hass)
@@ -530,7 +530,7 @@ async def ws_truth_evaluate(hass, connection, msg):
         row = rows[0] if rows else None
         by_mark[mark["id"]] = (mark["entity"], row)
         per_mark.append({**_mark_public(mark), "current": row})
-    connection.send_result(msg["id"], {"trackers": truth_mod.summarize(by_mark), "marks": per_mark})
+    connection.send_result(msg["id"], {"things": truth_mod.summarize(by_mark), "marks": per_mark})
 
 
 @websocket_api.websocket_command({
@@ -542,7 +542,7 @@ async def ws_truth_evaluate(hass, connection, msg):
 @websocket_api.require_admin
 @websocket_api.async_response
 async def ws_truth_apply(hass, connection, msg):
-    """Make an evaluated row the tracker's settings: its blend weight, and the gain
+    """Make an evaluated row the thing's settings: its blend weight, and the gain
     multiplier folded into its learned gain (and remembered across restarts)."""
     core = _core()
     entity, weight, gain = msg["entity"], float(msg["weight"]), float(msg["gain"])
@@ -552,17 +552,17 @@ async def ws_truth_apply(hass, connection, msg):
         data = get_layout_for_edit(hass)
         if not isinstance(data, dict):
             return _error(connection, msg, "No layout saved yet")
-        weights = data.get("tracker_fp_weights") if isinstance(data.get("tracker_fp_weights"), dict) else {}
+        weights = data.get("thing_fp_weights") if isinstance(data.get("thing_fp_weights"), dict) else {}
         weights[entity] = round(weight, 3)
-        data["tracker_fp_weights"] = weights
-        seeds = data.get("tracker_fp_gains") if isinstance(data.get("tracker_fp_gains"), dict) else {}
-        new_gain = core._fingerprint_db.tracker_gain.get(entity, seeds.get(entity, 1.0)) * gain
+        data["thing_fp_weights"] = weights
+        seeds = data.get("thing_fp_gains") if isinstance(data.get("thing_fp_gains"), dict) else {}
+        new_gain = core._fingerprint_db.thing_gain.get(entity, seeds.get(entity, 1.0)) * gain
         new_gain = min(fingerprint_mod.LEARNED_GAIN_MAX, max(fingerprint_mod.LEARNED_GAIN_MIN, new_gain))
         seeds[entity] = round(new_gain, 4)
-        data["tracker_fp_gains"] = seeds
-        core._fingerprint_db.tracker_gain[entity] = new_gain
+        data["thing_fp_gains"] = seeds
+        core._fingerprint_db.thing_gain[entity] = new_gain
         await save_layout(hass, data)
-    connection.send_result(msg["id"], {"entity": entity, "fp_weight": weights[entity], "tracker_gain": seeds[entity], "estimator": truth_mod.estimator_for(weight)})
+    connection.send_result(msg["id"], {"entity": entity, "fp_weight": weights[entity], "thing_gain": seeds[entity], "estimator": truth_mod.estimator_for(weight)})
 
 
 # --- history -----------------------------------------------------------------
@@ -585,7 +585,7 @@ async def ws_history_index(hass, connection, msg):
     connection.send_result(msg["id"], {
         "now": time.time(),
         "config": dict(hist.cfg),
-        "trackers": [dict(hist.retained(e) or {}, ent=e) for e in hist.entities()],
+        "things": [dict(hist.retained(e) or {}, ent=e) for e in hist.entities()],
         "disk": {"files": files, "bytes": size},
     })
 
@@ -838,7 +838,7 @@ async def ws_kpi_baselines(hass, connection, msg):
     rows = [
         {
             "name": name, "saved_at": b.get("saved_at"), "hours": b.get("hours"), "summary": b.get("summary"),
-            "trackers": len(b.get("entities") or {}),
+            "things": len(b.get("entities") or {}),
         }
         for name, b in baselines.items() if isinstance(b, dict)
     ]
@@ -871,7 +871,7 @@ async def ws_kpi_baseline_save(hass, connection, msg):
         "entities": result["entities"], "summary": result["summary"],
     }
     await save_kpi_baselines(hass, baselines)
-    connection.send_result(msg["id"], {"name": name, "saved_at": result["generated_at"], "trackers": len(result["entities"])})
+    connection.send_result(msg["id"], {"name": name, "saved_at": result["generated_at"], "things": len(result["entities"])})
 
 
 @websocket_api.websocket_command({vol.Required("type"): "sextant/kpi/baseline/delete", vol.Required("name"): str})
@@ -929,14 +929,14 @@ async def ws_bermuda_track(hass, connection, msg):
     slugs = _tracked_slugs_for(hass, remove) if remove else []
     devices = await bermuda_source.async_set_tracked_devices(hass, add=add, remove=remove)
     if devices is not None and slugs:
-        from .sensor import remove_sensors_for_trackers  # noqa: PLC0415 - sensor imports this package
+        from .sensor import remove_sensors_for_things  # noqa: PLC0415 - sensor imports this package
 
-        remove_sensors_for_trackers(hass, slugs)
+        remove_sensors_for_things(hass, slugs)
     _bermuda_result(connection, msg, None if devices is None else {"configured_devices": devices})
 
 
 def _tracked_slugs_for(hass, keys):
-    """Tracker slugs of the tracked devices named by address, unique_id or slug."""
+    """Thing slugs of the tracked devices named by address, unique_id or slug."""
     wanted = {str(k).lower() for k in keys}
     slugs = []
     for address, dev in (bermuda_source.async_get_tracked_devices(hass) or {}).items():
@@ -1155,7 +1155,7 @@ async def ws_advice(hass, connection, msg):
 
 COMMANDS = (
     ws_advice,
-    ws_layout_get, ws_layout_save, ws_tuning_set, ws_tracker_tune,
+    ws_layout_get, ws_layout_save, ws_tuning_set, ws_thing_tune,
     ws_history_index, ws_history_get, ws_history_clear,
     ws_calibration_status, ws_calibration_action, ws_selftest, ws_scanner_linking, ws_receivers, ws_beacon_links,
     ws_adjust_zones, ws_scanner_ignore, ws_kpi, ws_kpi_baselines, ws_kpi_baseline_save, ws_kpi_baseline_delete,

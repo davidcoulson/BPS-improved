@@ -5,7 +5,7 @@
 ![The Tuning page: the stability KPI with saved baselines above every tuning knob grouped by what it affects](../img/screenshots/sextant-tuning.png)
 
 The **stability KPI** reads the recorder for any window and reports, per
-tracker, room changes per hour, the share that were A → B → A flips, and
+thing, room changes per hour, the share that were A → B → A flips, and
 the median dwell. Save a window as a named baseline and compare later
 windows against it; the deltas turn green where the window is better. Every
 [tuning key](tuning.md#tuning-reference) is below it with a plain label, its meaning
@@ -26,8 +26,8 @@ distances in metres.
 | `fingerprint_floor_weight` | 0.5 | fingerprint share of a floor's confidence |
 | `fingerprint_k` | 3 | references averaged per fix |
 | `fingerprint_missing_m` | 12 | how far "not heard" counts as |
-| `fingerprint_ref_gain` | 1.0 | probe beacons hotter (<1) or cooler (>1) than trackers |
-| `fingerprint_auto_gain` | true | learn the rest of that gain from the trackers |
+| `fingerprint_ref_gain` | 1.0 | probe beacons hotter (<1) or cooler (>1) than things |
+| `fingerprint_auto_gain` | true | learn the rest of that gain from the things |
 | `fingerprint_marks` | true | truth marks double as fingerprint references |
 | `distance_estimator` | `bermuda` | `bermuda` or `median` |
 | `median_window_secs` | 15 | samples newer than this feed the median |
@@ -58,6 +58,6 @@ distances in metres.
 | `calibration_target` | `sextant` | where Apply writes: `sextant` or `bermuda` |
 
 Two more live at the top level of the layout: `position_timeout` (seconds
-before an unheard tracker leaves the map, 300) and `tracker_height` (the
-default carry height in metres, 1.0; per-tracker heights come from the
-Trackers page).
+before an unheard thing leaves the map, 300) and `thing_height` (the
+default carry height in metres, 1.0; per-thing heights come from the
+Things page).

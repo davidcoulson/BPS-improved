@@ -4,11 +4,11 @@ Room-stability KPI for Sextant: how often the published zone/floor sensors chang
 
 Positional error in metres is hard to measure on a live install (there is no
 ground truth for a phone in a pocket), but the thing automations actually
-suffer from is easy to measure: a tracker that is not moving must not change
+suffer from is easy to measure: a thing that is not moving must not change
 room. This reads the Home Assistant recorder history for every ``_sextant_zone``
 and ``_sextant_floor`` sensor and reports, per sensor:
 
-  changes/h      state changes per tracker-hour (lower is better)
+  changes/h      state changes per thing-hour (lower is better)
   flip%          share of changes that are an A -> B -> A round trip within
                  the next change - the signature of boundary flapping
   median dwell   median seconds a state was held before changing
@@ -79,7 +79,7 @@ def compute_metrics(rows, window_hours=None):
     value does not count as a change.
 
     ``window_hours`` normalises the change rate; when omitted the span of the
-    rows themselves is used, which under-counts for a tracker that was quiet
+    rows themselves is used, which under-counts for a thing that was quiet
     at either end of the window.
     """
     seq = []
@@ -148,7 +148,7 @@ def summarise(per_entity):
         out[suffix.lstrip("_")] = {
             "entities": len(members),
             "changes": changes,
-            "changes_per_tracker_hour": round(changes / hours, 2) if hours else None,
+            "changes_per_thing_hour": round(changes / hours, 2) if hours else None,
             "flip_ratio": round(flips / changes, 3) if changes else None,
             "median_of_median_dwell_s": round(statistics.median(dwells), 1) if dwells else None,
         }
@@ -258,14 +258,14 @@ def print_report(per_entity, summary, baseline=None):
     for kind, s in summary.items():
         line = (
             f"{kind:<12} {s['entities']} sensors, {s['changes']} changes, "
-            f"{s['changes_per_tracker_hour']} per tracker-hour, "
+            f"{s['changes_per_thing_hour']} per thing-hour, "
             f"flip ratio {s['flip_ratio']}, median dwell {s['median_of_median_dwell_s']} s"
         )
         base_summary = {canonical("_" + k).lstrip("_"): v for k, v in ((baseline or {}).get("summary") or {}).items()}
         if kind in base_summary:
             b = base_summary[kind]
-            if b.get("changes_per_tracker_hour") is not None and s["changes_per_tracker_hour"] is not None:
-                line += f"   (was {b['changes_per_tracker_hour']}/h, flip {b.get('flip_ratio')})"
+            if b.get("changes_per_thing_hour") is not None and s["changes_per_thing_hour"] is not None:
+                line += f"   (was {b['changes_per_thing_hour']}/h, flip {b.get('flip_ratio')})"
         print(line)
 
 

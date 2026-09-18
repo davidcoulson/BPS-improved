@@ -85,7 +85,7 @@ def test_min_weight_radius_tames_a_spuriously_short_reading():
         (140.0, 400.0, 260.0),
         (400.0, 400.0, math.hypot(260, 260)),
     ]
-    liar = (100.0, 100.0, 0.01)          # claims the tracker is basically on it
+    liar = (100.0, 100.0, 0.01)          # claims the thing is basically on it
     honest = (140.0, 140.0, 20.0)        # 0.5 m at 40 px/m, corroborated
     pts = far + [liar, honest]
     d_unclamped = math.dist(sextant.trilaterate(pts), truth)
@@ -94,15 +94,15 @@ def test_min_weight_radius_tames_a_spuriously_short_reading():
 
 
 # --------------------------------------------------------------------------- #
-# Tracker height + slant correction
+# Thing height + slant correction
 # --------------------------------------------------------------------------- #
-def test_tracker_height_default_and_override():
-    assert sextant._tracker_height({}) == sextant.TRACKER_HEIGHT_M
-    assert sextant._tracker_height({"tracker_height": 0.3}) == 0.3
-    assert sextant._tracker_height({"tracker_height": 99}) == sextant.TRACKER_HEIGHT_M  # out of range
+def test_thing_height_default_and_override():
+    assert sextant._thing_height({}) == sextant.THING_HEIGHT_M
+    assert sextant._thing_height({"thing_height": 0.3}) == 0.3
+    assert sextant._thing_height({"thing_height": 99}) == sextant.THING_HEIGHT_M  # out of range
 
 
-def _run_radii(state, unit="m", height=None, tracker_height=None):
+def _run_radii(state, unit="m", height=None, thing_height=None):
     class St:
         def __init__(self):
             self.state = state
@@ -115,8 +115,8 @@ def _run_radii(state, unit="m", height=None, tracker_height=None):
     if height is not None:
         rec["height"] = height
     data = {"floor": [{"name": "F", "scale": SCALE, "receivers": [rec]}]}
-    if tracker_height is not None:
-        data["tracker_height"] = tracker_height
+    if thing_height is not None:
+        data["thing_height"] = thing_height
     run(sextant.update_receiver_radii(Hass(), {"entity": "phone", "data": data}))
     return rec
 
@@ -380,7 +380,7 @@ def test_robust_loss_beats_linear_on_an_outlier():
 def test_collapsed_radius_cannot_hijack_the_fix():
     # THE 1.7.0 regression scenario: a height-corrected receiver whose filtered
     # slant latched below dz collapses its projected radius to the 0.5 m floor
-    # while the tracker is really ~5.7 m away. In a realistic mesh (8 honest
+    # while the thing is really ~5.7 m away. In a realistic mesh (8 honest
     # receivers at 1.5-5 m), weighting by the PROJECTION (old, 4-tuple
     # behaviour) hands the collapsed receiver dominant 1/r^2 weight and drags
     # the fix ~3 m toward it — the observed live swings. Weighting by the
@@ -412,7 +412,7 @@ def test_jump_weight_ignores_sub_clamp_noise():
     # Steady radius: fully trusted (above or below the clamp).
     assert sextant._jump_weight(100.0, 100.0, min_wr) == 1.0
     assert sextant._jump_weight(2.0, 2.0, min_wr) == 1.0
-    # Sub-clamp bouncing is RSSI noise, not motion: a tracker genuinely next
+    # Sub-clamp bouncing is RSSI noise, not motion: a thing genuinely next
     # to a receiver (readings jittering 0.05 <-> 0.45 m) must keep its most
     # informative receiver at full weight — the clamp exists to protect this.
     # (The slant-collapse case needs no gate: the projection floor keeps a
@@ -427,35 +427,35 @@ def test_jump_weight_ignores_sub_clamp_noise():
 
 
 def test_projection_floor_never_exceeds_raw_slant():
-    # A receiver at ~tracker height (dz ~ 0) has no singularity: an honest
+    # A receiver at ~thing height (dz ~ 0) has no singularity: an honest
     # 0.2 m reading must stay 0.2 m, not get inflated to the 0.5 m floor.
-    r = _run_radii("0.2", height=1.0)  # tracker_height default 1.0 -> dz = 0
+    r = _run_radii("0.2", height=1.0)  # thing_height default 1.0 -> dz = 0
     assert abs(r["cords"]["r"] - 0.2 * SCALE) < 1e-9
 
 
 # --------------------------------------------------------------------------- #
-# Per-tracker height
+# Per-thing height
 # --------------------------------------------------------------------------- #
-def test_tracker_height_per_tracker_precedence():
-    data = {"tracker_height": 0.7, "tracker_heights": {"ankle": 0.1, "bogus": 99}}
-    # Per-tracker entry wins over the global override.
-    assert sextant._tracker_height(data, "ankle") == 0.1
+def test_thing_height_per_thing_precedence():
+    data = {"thing_height": 0.7, "thing_heights": {"ankle": 0.1, "bogus": 99}}
+    # Per-thing entry wins over the global override.
+    assert sextant._thing_height(data, "ankle") == 0.1
     # Unknown / no entity falls back to the global override.
-    assert sextant._tracker_height(data, "phone") == 0.7
-    assert sextant._tracker_height(data) == 0.7
-    # Out-of-range per-tracker value falls through to the global.
-    assert sextant._tracker_height(data, "bogus") == 0.7
+    assert sextant._thing_height(data, "phone") == 0.7
+    assert sextant._thing_height(data) == 0.7
+    # Out-of-range per-thing value falls through to the global.
+    assert sextant._thing_height(data, "bogus") == 0.7
     # Nothing configured at all: the 1.0 m default.
-    assert sextant._tracker_height({}, "ankle") == sextant.TRACKER_HEIGHT_M
-    assert sextant._tracker_height({"tracker_heights": "junk"}, "ankle") == sextant.TRACKER_HEIGHT_M
+    assert sextant._thing_height({}, "ankle") == sextant.THING_HEIGHT_M
+    assert sextant._thing_height({"thing_heights": "junk"}, "ankle") == sextant.THING_HEIGHT_M
     # Bools are ints in Python: a hand-edited true/false must fall through,
     # not read as a valid 1.0/0.0 m height (frontend rejects them too).
-    assert sextant._tracker_height({"tracker_height": 0.7,
-                                "tracker_heights": {"x": False}}, "x") == 0.7
-    assert sextant._tracker_height({"tracker_height": True}) == sextant.TRACKER_HEIGHT_M
+    assert sextant._thing_height({"thing_height": 0.7,
+                                "thing_heights": {"x": False}}, "x") == 0.7
+    assert sextant._thing_height({"thing_height": True}) == sextant.THING_HEIGHT_M
 
 
-def test_per_tracker_height_feeds_slant_correction():
+def test_per_thing_height_feeds_slant_correction():
     # Same reading, receiver at 2.2 m: an ankle beacon (0.1 m) has a larger
     # vertical leg than the default 1.0 m, so its horizontal radius is shorter.
     class St:
@@ -473,32 +473,32 @@ def test_per_tracker_height_feeds_slant_correction():
         return rec["cords"]["r"]
 
     r_default = radius({})                                   # dz = 1.2
-    r_ankle = radius({"tracker_heights": {"ankle": 0.1}})    # dz = 2.1
+    r_ankle = radius({"thing_heights": {"ankle": 0.1}})    # dz = 2.1
     assert abs(r_default - math.sqrt(2.3**2 - 1.2**2) * SCALE) < 0.1
     assert abs(r_ankle - math.sqrt(2.3**2 - 2.1**2) * SCALE) < 0.1
     assert r_ankle < r_default
 
 
 # --------------------------------------------------------------------------- #
-# Per-tracker ref-power trim (issue #92)
+# Per-thing ref-power trim (issue #92)
 # --------------------------------------------------------------------------- #
 def test_ref_offset_reads_and_validates():
-    data = {"tracker_ref_offsets": {"cat": -6.0, "big": 99, "boolish": True, "txt": "3"}}
-    assert sextant._tracker_ref_offset(data, "cat") == -6.0
-    assert sextant._tracker_ref_offset(data, "big") == 0.0        # out of range
-    assert sextant._tracker_ref_offset(data, "boolish") == 0.0    # bool is not a number here
-    assert sextant._tracker_ref_offset(data, "txt") == 0.0        # wrong type
-    assert sextant._tracker_ref_offset(data, "unknown") == 0.0    # no entry
-    assert sextant._tracker_ref_offset({}, "cat") == 0.0
-    assert sextant._tracker_ref_offset({"tracker_ref_offsets": "junk"}, "cat") == 0.0
+    data = {"thing_ref_offsets": {"cat": -6.0, "big": 99, "boolish": True, "txt": "3"}}
+    assert sextant._thing_ref_offset(data, "cat") == -6.0
+    assert sextant._thing_ref_offset(data, "big") == 0.0        # out of range
+    assert sextant._thing_ref_offset(data, "boolish") == 0.0    # bool is not a number here
+    assert sextant._thing_ref_offset(data, "txt") == 0.0        # wrong type
+    assert sextant._thing_ref_offset(data, "unknown") == 0.0    # no entry
+    assert sextant._thing_ref_offset({}, "cat") == 0.0
+    assert sextant._thing_ref_offset({"thing_ref_offsets": "junk"}, "cat") == 0.0
 
 
 def test_ref_offset_distance_factor_matches_path_loss_model():
     # delta dB scales distance by 10 ** (delta / (10 * attenuation)).
     n = sextant.PATH_LOSS_EXPONENT
-    assert sextant._tracker_distance_factor({}, "cat") == 1.0     # unset = no-op
-    f_up = sextant._tracker_distance_factor({"tracker_ref_offsets": {"cat": 6.0}}, "cat")
-    f_dn = sextant._tracker_distance_factor({"tracker_ref_offsets": {"cat": -6.0}}, "cat")
+    assert sextant._thing_distance_factor({}, "cat") == 1.0     # unset = no-op
+    f_up = sextant._thing_distance_factor({"thing_ref_offsets": {"cat": 6.0}}, "cat")
+    f_dn = sextant._thing_distance_factor({"thing_ref_offsets": {"cat": -6.0}}, "cat")
     assert abs(f_up - 10 ** (6.0 / (10 * n))) < 1e-12
     assert f_up > 1.0 and f_dn < 1.0                          # + reads farther, - nearer
     assert abs(f_up * f_dn - 1.0) < 1e-12                     # symmetric in dB
@@ -506,7 +506,7 @@ def test_ref_offset_distance_factor_matches_path_loss_model():
 
 def test_ref_trim_scales_the_live_radius():
     # A -6 dB trim must shrink the radius by the model's factor; the election
-    # distance is scaled the same way (a per-tracker constant).
+    # distance is scaled the same way (a per-thing constant).
     class St:
         state = "4.0"
         attributes = {"unit_of_measurement": "m"}
@@ -518,7 +518,7 @@ def test_ref_trim_scales_the_live_radius():
         rec = {"entity_id": "probe", "cords": {"x": 0, "y": 0}}
         data = {"floor": [{"name": "F", "scale": SCALE, "receivers": [rec]}]}
         if offsets is not None:
-            data["tracker_ref_offsets"] = offsets
+            data["thing_ref_offsets"] = offsets
         run(sextant.update_receiver_radii(Hass(), {"entity": "cat", "data": data}))
         return rec
 
@@ -528,7 +528,7 @@ def test_ref_trim_scales_the_live_radius():
     assert abs(plain["cords"]["r"] - 4.0 * SCALE) < 1e-6
     assert abs(trimmed["cords"]["r"] - 4.0 * factor * SCALE) < 1e-6
     assert abs(trimmed["distance"] - 4.0 * factor) < 1e-9
-    # Another tracker's trim must not leak onto this one.
+    # Another thing's trim must not leak onto this one.
     other = run_with({"dog": -6.0})
     assert abs(other["cords"]["r"] - 4.0 * SCALE) < 1e-6
 
@@ -967,7 +967,7 @@ def test_stationary_lock_holds_the_zone_and_releases_when_clearly_away():
     assert seen[-1] == ("Dining", False)
 
 
-def test_stationary_lock_releases_when_the_tracker_keeps_moving():
+def test_stationary_lock_releases_when_the_thing_keeps_moving():
     sextant._zone_state.clear()
     for t in (0.0, 10.0, 20.0, 30.0):
         zone, locked = _elect("e", 50, t)
@@ -1040,7 +1040,7 @@ def _cycle(hass, layout, x_m, y_m):
     return next(item for item in sextant.apitricords if item["ent"] == "e")
 
 
-def _reset_tracker_state():
+def _reset_thing_state():
     for d in (sextant._floor_probability, sextant._floor_challenge, sextant._floor_dark_cycles, sextant._floor_since,
               sextant._kf_position_state, sextant._zone_state, sextant._subzone_state):
         d.clear()
@@ -1051,7 +1051,7 @@ def _reset_tracker_state():
 
 
 def test_full_cycle_publishes_a_stable_zone_and_the_raw_one(monkeypatch):
-    _reset_tracker_state()
+    _reset_thing_state()
     hass = make_hass()
     sensors = {f"sensor.e_sextant_{k}": _Sensor() for k in ("room", "nearest_room", "floor", "spot")}
     hass.data["sextant_sensors"] = sensors
@@ -1082,7 +1082,7 @@ def test_full_cycle_publishes_a_stable_zone_and_the_raw_one(monkeypatch):
 
 
 def test_full_cycle_with_hysteresis_off_publishes_instantly(monkeypatch):
-    _reset_tracker_state()
+    _reset_thing_state()
     hass = make_hass()
     hass.data["sextant_sensors"] = {f"sensor.e_sextant_{k}": _Sensor() for k in ("zone", "nearest_zone", "floor", "sub_zone")}
     layout = _square_layout({"zone_hysteresis": False})
@@ -1115,7 +1115,7 @@ def test_proximity_weighting_favours_the_floor_with_the_nearest_receiver():
 def test_full_cycle_floor_switches_on_proximity_when_fits_tie(monkeypatch):
     """Two floors explain the receivers equally well (open foyer); the one
     whose receivers are nearest must win the election within the dwell."""
-    _reset_tracker_state()
+    _reset_thing_state()
     hass = make_hass()
     hass.data["sextant_sensors"] = {f"sensor.e_sextant_{k}": _Sensor() for k in ("zone", "nearest_zone", "floor", "sub_zone")}
     import copy
@@ -1146,7 +1146,7 @@ def test_full_cycle_floor_switches_on_proximity_when_fits_tie(monkeypatch):
         entry = cycle(2.0, 5.0, "U")
     assert entry["floor"] == "U"
     # Move to the floor below: the incumbent keeps solving (all its receivers
-    # still hear the tracker through the slab), so only proximity separates them.
+    # still hear the thing through the slab), so only proximity separates them.
     seen = []
     for _ in range(12):
         clock["t"] += 10
@@ -1161,7 +1161,7 @@ def test_solves_run_through_the_executor(monkeypatch):
     """The per-floor fits are the cycle's CPU work and must go through
     hass.async_add_executor_job, with the election and publish staying on
     the loop (they touch hass state)."""
-    _reset_tracker_state()
+    _reset_thing_state()
     hass = make_hass()
     hass.data["sextant_sensors"] = {f"sensor.e_sextant_{k}": _Sensor() for k in ("zone", "nearest_zone", "floor", "sub_zone")}
     calls = []
@@ -1225,7 +1225,7 @@ def test_websocket_command_is_registered_once(monkeypatch):
     assert all(hasattr(c, "_ws_schema") for c in commands)          # each carries its schema
 
 
-def test_sensors_are_created_for_a_tracker_added_after_setup(monkeypatch):
+def test_sensors_are_created_for_a_thing_added_after_setup(monkeypatch):
     """A device added to Bermuda while HA runs is positioned from the next
     cycle; its zone/floor sensors must appear then too, not at the next restart."""
     import sextant.sensor as sensor_mod
@@ -1235,16 +1235,16 @@ def test_sensors_are_created_for_a_tracker_added_after_setup(monkeypatch):
     hass.data["sextant_add_entities"] = lambda ents, update_before_add=False: added.extend(ents)
     monkeypatch.setattr(sensor_mod, "find_bermuda_via_device", lambda *a, **k: None)
     monkeypatch.setattr(sensor_mod, "normalize_sextant_registry_entity_ids_from_cache", lambda *a, **k: None)
-    sensor_mod.ensure_sensors_for_trackers(hass, ["tile_24d1093b0211"])
+    sensor_mod.ensure_sensors_for_things(hass, ["tile_24d1093b0211"])
     assert sorted(hass.data["sextant_sensors"]) == sorted(
         f"sensor.tile_24d1093b0211_{suffix}" for suffix, _ in sensor_mod.SENSOR_KINDS)
     assert len(added) == len(sensor_mod.SENSOR_KINDS)
     # Steady state: nothing new, nothing added, no registry work.
-    sensor_mod.ensure_sensors_for_trackers(hass, ["tile_24d1093b0211"])
+    sensor_mod.ensure_sensors_for_things(hass, ["tile_24d1093b0211"])
     assert len(added) == len(sensor_mod.SENSOR_KINDS)
     # Without the callback (platform not set up yet) it is a no-op.
     hass.data.pop("sextant_add_entities")
-    sensor_mod.ensure_sensors_for_trackers(hass, ["other"])
+    sensor_mod.ensure_sensors_for_things(hass, ["other"])
     assert "sensor.other_sextant_room" not in hass.data["sextant_sensors"]
 
 
@@ -1297,7 +1297,7 @@ def test_subzone_holds_while_the_zone_is_locked_and_follows_the_zone():
     t = 1000.0
     for dt in (0, 10, 30, 31):
         _sub("e", (300, 250), t + dt)
-    # The tracker is declared still by the zone election: even a fix that
+    # The thing is declared still by the zone election: even a fix that
     # wandered off keeps the sub-zone.
     assert _sub("e", (300, 600), t + 100, locked=True) == ("Sofa", "Living")
     assert _sub("e", (300, 600), t + 200, locked=True) == ("Sofa", "Living")
@@ -1358,7 +1358,7 @@ def test_subzone_probs_come_from_the_election_state():
 
 # --- Near-field anchor -----------------------------------------------------------
 
-def test_anchor_snaps_a_tracker_sitting_on_one_proxy_and_releases_with_hysteresis():
+def test_anchor_snaps_a_thing_sitting_on_one_proxy_and_releases_with_hysteresis():
     layout = {"floor": [{"name": "F", "scale": 100.0, "zones": [], "subzones": [], "receivers": []}], "tuning": {"anchor_secs": 20}}
     def rx(near, far=2.0, third=2.5):
         return [

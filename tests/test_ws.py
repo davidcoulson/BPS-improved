@@ -68,22 +68,22 @@ def test_layout_save_validates_then_persists(tmp_path):
     assert st.get_layout(hass)["floor"][0]["name"] == "F"
 
 
-def test_tuning_set_and_tracker_tune_write_the_layout(tmp_path):
+def test_tuning_set_and_thing_tune_write_the_layout(tmp_path):
     hass = _hass_with_layout(tmp_path, _layout())
     conn = _Conn()
     run(ws.ws_tuning_set(hass, conn, {"id": 4, "type": "sextant/tuning/set", "settings": {"position_estimator": "fused"}}))
     assert conn.results[-1][1]["tuning"] == {"zone_switch_secs": 30, "position_estimator": "fused"}
     run(ws.ws_tuning_set(hass, conn, {"id": 5, "type": "sextant/tuning/set", "settings": {"nope": 1}}))
     assert "unknown tuning key" in conn.errors[-1][2]
-    run(ws.ws_tracker_tune(hass, conn, {"id": 6, "type": "sextant/tracker/tune", "entity": "fry",
+    run(ws.ws_thing_tune(hass, conn, {"id": 6, "type": "sextant/thing/tune", "entity": "fry",
                                         "ref_offset_db": 3.0, "height": 0.3, "icon": "/local/sextant_icons/cat.png"}))
     layout = st.get_layout(hass)
-    assert layout["tracker_ref_offsets"] == {"fry": 3.0} and layout["tracker_heights"] == {"fry": 0.3}
-    assert layout["tracker_icons"] == {"fry": "/local/sextant_icons/cat.png"}
-    run(ws.ws_tracker_tune(hass, conn, {"id": 7, "type": "sextant/tracker/tune", "entity": "fry", "ref_offset_db": None, "height": None}))
+    assert layout["thing_ref_offsets"] == {"fry": 3.0} and layout["thing_heights"] == {"fry": 0.3}
+    assert layout["thing_icons"] == {"fry": "/local/sextant_icons/cat.png"}
+    run(ws.ws_thing_tune(hass, conn, {"id": 7, "type": "sextant/thing/tune", "entity": "fry", "ref_offset_db": None, "height": None}))
     layout = st.get_layout(hass)
-    assert layout["tracker_ref_offsets"] == {} and layout["tracker_heights"] == {}
-    run(ws.ws_tracker_tune(hass, conn, {"id": 8, "type": "sextant/tracker/tune", "entity": "fry", "height": 9.0}))
+    assert layout["thing_ref_offsets"] == {} and layout["thing_heights"] == {}
+    run(ws.ws_thing_tune(hass, conn, {"id": 8, "type": "sextant/thing/tune", "entity": "fry", "height": 9.0}))
     assert "height" in conn.errors[-1][2]
 
 
@@ -133,7 +133,7 @@ def test_bermuda_commands_pass_through_the_management_api(tmp_path, monkeypatch)
     run(ws.ws_bermuda_track(hass, conn, {"id": 2, "type": "sextant/bermuda/track", "add": ["aa"], "remove": []}))
     assert calls == [("track", ["aa"], [])] and conn.results[-1][1]["configured_devices"] == ["AA"]
     # Untracking takes the device's Sextant sensors and device with it, resolved
-    # from the address the Trackers page sends to the slug the sensors carry.
+    # from the address the Things page sends to the slug the sensors carry.
     from homeassistant.helpers import device_registry as dr
     from homeassistant.helpers import entity_registry as er
     api.async_get_tracked_devices = lambda _h: {"aa": {"name": "A", "slug": "phone"}, "bb": {"name": "B", "slug": "watch"}}
@@ -185,13 +185,13 @@ def test_kpi_deltas_compare_entities_and_summaries_present_on_both_sides():
     from sextant import kpi
     current = {"entities": {"sensor.a_sextant_zone": {"changes_per_hour": 4.0, "flip_ratio": 0.2, "median_dwell_s": 300.0, "dead": 0},
                             "sensor.new_sextant_zone": {"changes_per_hour": 1.0}},
-               "summary": {"sextant_zone": {"changes_per_tracker_hour": 5.0, "flip_ratio": 0.3, "median_of_median_dwell_s": 200.0}}}
+               "summary": {"sextant_zone": {"changes_per_thing_hour": 5.0, "flip_ratio": 0.3, "median_of_median_dwell_s": 200.0}}}
     baseline = {"entities": {"sensor.a_sextant_zone": {"changes_per_hour": 10.0, "flip_ratio": 0.5, "median_dwell_s": 100.0, "dead": 1}},
-                "summary": {"sextant_zone": {"changes_per_tracker_hour": 8.0, "flip_ratio": 0.4, "median_of_median_dwell_s": 150.0}}}
+                "summary": {"sextant_zone": {"changes_per_thing_hour": 8.0, "flip_ratio": 0.4, "median_of_median_dwell_s": 150.0}}}
     d = kpi.deltas(current, baseline)
     # keys come back under the current names, whatever the recording called them
     assert d["entities"] == {"sensor.a_sextant_room": {"changes_per_hour": -6.0, "flip_ratio": -0.3, "median_dwell_s": 200.0, "dead": -1}}
-    assert d["summary"] == {"sextant_room": {"changes_per_tracker_hour": -3.0, "flip_ratio": -0.1, "median_of_median_dwell_s": 50.0}}
+    assert d["summary"] == {"sextant_room": {"changes_per_thing_hour": -3.0, "flip_ratio": -0.1, "median_of_median_dwell_s": 50.0}}
     assert kpi.deltas({}, None) == {"entities": {}, "summary": {}}
 
 
@@ -200,10 +200,10 @@ def test_kpi_baselines_are_saved_listed_compared_and_deleted(tmp_path, monkeypat
     windows = iter([
         {"hours": 12.0, "generated_at": "2026-09-17T05:00:00+00:00",
          "entities": {"sensor.a_sextant_zone": {"changes_per_hour": 10.0, "flip_ratio": 0.5, "median_dwell_s": 100.0, "dead": 0}},
-         "summary": {"sextant_zone": {"changes_per_tracker_hour": 10.0, "flip_ratio": 0.5, "median_of_median_dwell_s": 100.0}}},
+         "summary": {"sextant_zone": {"changes_per_thing_hour": 10.0, "flip_ratio": 0.5, "median_of_median_dwell_s": 100.0}}},
         {"hours": 12.0, "generated_at": "2026-09-17T17:00:00+00:00",
          "entities": {"sensor.a_sextant_zone": {"changes_per_hour": 4.0, "flip_ratio": 0.2, "median_dwell_s": 300.0, "dead": 0}},
-         "summary": {"sextant_zone": {"changes_per_tracker_hour": 4.0, "flip_ratio": 0.2, "median_of_median_dwell_s": 300.0}}},
+         "summary": {"sextant_zone": {"changes_per_thing_hour": 4.0, "flip_ratio": 0.2, "median_of_median_dwell_s": 300.0}}},
     ])
 
     windows = list(windows)
@@ -215,11 +215,11 @@ def test_kpi_baselines_are_saved_listed_compared_and_deleted(tmp_path, monkeypat
     run(ws.ws_kpi_baseline_save(hass, conn, {"id": 1, "type": "sextant/kpi/baseline/save", "name": "  ", "hours": 12}))
     assert conn.errors and "name" in conn.errors[-1][2]
     run(ws.ws_kpi_baseline_save(hass, conn, {"id": 2, "type": "sextant/kpi/baseline/save", "name": "geometric", "hours": 12}))
-    assert conn.results[-1][1] == {"name": "geometric", "saved_at": "2026-09-17T05:00:00+00:00", "trackers": 1}
+    assert conn.results[-1][1] == {"name": "geometric", "saved_at": "2026-09-17T05:00:00+00:00", "things": 1}
     assert (tmp_path / ".storage" / "sextant_kpi_baselines").exists() or run(st.load_kpi_baselines(hass))["geometric"]["hours"] == 12
     run(ws.ws_kpi_baselines(hass, conn, {"id": 3, "type": "sextant/kpi/baselines"}))
     rows = conn.results[-1][1]["baselines"]
-    assert [r["name"] for r in rows] == ["geometric"] and rows[0]["trackers"] == 1 and rows[0]["hours"] == 12
+    assert [r["name"] for r in rows] == ["geometric"] and rows[0]["things"] == 1 and rows[0]["hours"] == 12
     run(ws.ws_kpi(hass, conn, {"id": 4, "type": "sextant/kpi", "hours": 12, "baseline": "nope"}))
     assert conn.errors[-1][2].startswith("no KPI baseline")
     run(ws.ws_kpi(hass, conn, {"id": 5, "type": "sextant/kpi", "hours": 12, "baseline": "geometric"}))
@@ -246,14 +246,14 @@ def test_scanner_ranging_passes_through_and_explains_a_missing_api(tmp_path, mon
     assert "scanner_ranging" in conn.errors[-1][2]
 
 
-def test_tracker_names_come_from_bermuda_tidied_and_user_renames_win(tmp_path, monkeypatch):
+def test_thing_names_come_from_bermuda_tidied_and_user_renames_win(tmp_path, monkeypatch):
     hass = _hass_with_layout(tmp_path, _layout())
     monkeypatch.setattr(ws.bermuda_source, "async_get_tracked_devices", lambda _h: {
         "aa": {"slug": "fry", "name": "Fry"},
         "bb": {"slug": "private_ble_device_david_s_phone", "name": "Private BLE Device David's Phone"},
         "cc": {"slug": "private_ble_jack_watch", "name": "Private BLE Jack Watch"},
     })
-    names = ws._tracker_names(hass, ["fry", "private_ble_device_david_s_phone", "private_ble_jack_watch"])
+    names = ws._thing_names(hass, ["fry", "private_ble_device_david_s_phone", "private_ble_jack_watch"])
     assert names == {"fry": "Fry", "private_ble_device_david_s_phone": "David's Phone", "private_ble_jack_watch": "Jack Watch"}
     assert ws._tidy_device_name("Private BLE Device ").strip()   # a prefix alone never tidies to nothing
     assert ws._tidy_device_name("Fry") == "Fry"
@@ -284,15 +284,15 @@ def test_truth_marks_are_recorded_evaluated_listed_applied_and_deleted(tmp_path,
     assert [m["id"] for m in conn.results[-1][1]["marks"]] == [1] and "samples" in conn.results[-1][1]["marks"][0]
     run(ws.ws_truth_evaluate(hass, conn, {"id": 4, "type": "sextant/truth/evaluate"}))
     summary = conn.results[-1][1]
-    assert summary["trackers"]["phone"]["marks"] == 1 and summary["trackers"]["phone"]["mean_m"] < 0.2
+    assert summary["things"]["phone"]["marks"] == 1 and summary["things"]["phone"]["mean_m"] < 0.2
     run(ws.ws_truth_apply(hass, conn, {"id": 5, "type": "sextant/truth/apply", "entity": "phone", "weight": 0.25, "gain": 1.4}))
     applied = conn.results[-1][1]
-    assert applied["fp_weight"] == 0.25 and applied["estimator"] == "fused" and abs(applied["tracker_gain"] - 1.4) < 1e-6
+    assert applied["fp_weight"] == 0.25 and applied["estimator"] == "fused" and abs(applied["thing_gain"] - 1.4) < 1e-6
     saved = st.get_layout(hass)
-    assert saved["tracker_fp_weights"]["phone"] == 0.25 and saved["tracker_fp_gains"]["phone"] == 1.4
-    run(ws.ws_tracker_tune(hass, conn, {"id": 6, "type": "sextant/tracker/tune", "entity": "phone", "fp_weight": None}))
-    assert "phone" not in st.get_layout(hass)["tracker_fp_weights"]
-    run(ws.ws_tracker_tune(hass, conn, {"id": 7, "type": "sextant/tracker/tune", "entity": "phone", "fp_weight": 1.5}))
+    assert saved["thing_fp_weights"]["phone"] == 0.25 and saved["thing_fp_gains"]["phone"] == 1.4
+    run(ws.ws_thing_tune(hass, conn, {"id": 6, "type": "sextant/thing/tune", "entity": "phone", "fp_weight": None}))
+    assert "phone" not in st.get_layout(hass)["thing_fp_weights"]
+    run(ws.ws_thing_tune(hass, conn, {"id": 7, "type": "sextant/thing/tune", "entity": "phone", "fp_weight": 1.5}))
     assert conn.errors[-1][2].startswith("fp_weight")
     run(ws.ws_truth_evaluate(hass, conn, {"id": 8, "type": "sextant/truth/evaluate", "mark_id": 1}))
     assert conn.results[-1][1]["mark"]["id"] == 1 and len(conn.results[-1][1]["rows"]) >= 1
@@ -306,39 +306,39 @@ def test_every_websocket_handler_is_registered():
     assert handlers <= registered, sorted(handlers - registered)
 
 
-def test_tracker_colour_is_validated_and_stored(tmp_path):
+def test_thing_colour_is_validated_and_stored(tmp_path):
     hass = _hass_with_layout(tmp_path, _layout())
     conn = _Conn()
-    run(ws.ws_tracker_tune(hass, conn, {"id": 1, "type": "sextant/tracker/tune", "entity": "fry", "color": "#6D4C41"}))
-    assert st.get_layout(hass)["tracker_colors"]["fry"] == "#6d4c41" and conn.results[-1][1]["color"] == "#6d4c41"
-    run(ws.ws_tracker_tune(hass, conn, {"id": 2, "type": "sextant/tracker/tune", "entity": "fry", "color": "brown"}))
+    run(ws.ws_thing_tune(hass, conn, {"id": 1, "type": "sextant/thing/tune", "entity": "fry", "color": "#6D4C41"}))
+    assert st.get_layout(hass)["thing_colors"]["fry"] == "#6d4c41" and conn.results[-1][1]["color"] == "#6d4c41"
+    run(ws.ws_thing_tune(hass, conn, {"id": 2, "type": "sextant/thing/tune", "entity": "fry", "color": "brown"}))
     assert conn.errors[-1][2].startswith("color")
-    run(ws.ws_tracker_tune(hass, conn, {"id": 3, "type": "sextant/tracker/tune", "entity": "fry", "color": None}))
-    assert "fry" not in st.get_layout(hass)["tracker_colors"]
+    run(ws.ws_thing_tune(hass, conn, {"id": 3, "type": "sextant/thing/tune", "entity": "fry", "color": None}))
+    assert "fry" not in st.get_layout(hass)["thing_colors"]
 
 
 def test_layout_save_keeps_what_the_server_owns(tmp_path):
     """A Save from the Edit page merges its floors into the current layout: tuning,
-    tracker settings, calibration stamps and per-proxy corrections survive."""
+    thing settings, calibration stamps and per-proxy corrections survive."""
     current = {
         "floor": [{"name": "F", "scale": 100.0, "zones": [], "subzones": [],
                    "calibration": {"applied_at": "t0", "auto": True},
                    "receivers": [{"entity_id": "r0", "cords": {"x": 0, "y": 0}, "correction": 0.9},
                                  {"entity_id": "gone", "cords": {"x": 9, "y": 9}, "correction": 1.2}]}],
-        "tuning": {"zone_switch_secs": 45}, "tracker_colors": {"willow": "#6d4c41"}, "auto_calibration": True,
+        "tuning": {"zone_switch_secs": 45}, "thing_colors": {"willow": "#6d4c41"}, "auto_calibration": True,
     }
     hass = _hass_with_layout(tmp_path, current)
     editor_copy = {  # cloned before the colour and the corrections existed, receiver moved, one added, one deleted
         "floor": [{"name": "F", "scale": 100.0, "zones": [{"zone_id": "z", "entity_id": "Hall", "poly": True, "cords": [{"x": 0, "y": 0}, {"x": 1, "y": 0}, {"x": 1, "y": 1}]}], "subzones": [],
                    "receivers": [{"entity_id": "r0", "cords": {"x": 50, "y": 60}, "height": 1.5, "correction": 0.5},
                                  {"entity_id": "new", "cords": {"x": 1, "y": 2}}]}],
-        "tuning": {}, "tracker_colors": {},
+        "tuning": {}, "thing_colors": {},
     }
     conn = _Conn()
     run(ws.ws_layout_save(hass, conn, {"id": 9, "type": "sextant/layout/save", "layout": editor_copy}))
     assert conn.results and not conn.errors
     saved = st.get_layout(hass)
-    assert saved["tuning"] == {"zone_switch_secs": 45} and saved["tracker_colors"] == {"willow": "#6d4c41"} and saved["auto_calibration"] is True
+    assert saved["tuning"] == {"zone_switch_secs": 45} and saved["thing_colors"] == {"willow": "#6d4c41"} and saved["auto_calibration"] is True
     floor = saved["floor"][0]
     assert floor["calibration"] == {"applied_at": "t0", "auto": True}
     assert [z["entity_id"] for z in floor["zones"]] == ["Hall"]
@@ -386,11 +386,11 @@ def test_advice_reports_rooms_and_unplaced_scanners(tmp_path, monkeypatch):
 
 def test_every_write_and_bermuda_command_requires_admin():
     """Any signed-in user can open a websocket; only administrators may change
-    the layout, tuning, trackers, history or Bermuda, or list every address
+    the layout, tuning, things, history or Bermuda, or list every address
     Bermuda hears. Readers stay open so the Live page works for everyone."""
     admin = {f.__name__ for f in ws.COMMANDS if getattr(f, "_ws_admin", False)}
     open_ = {f.__name__ for f in ws.COMMANDS if not getattr(f, "_ws_admin", False)}
-    assert {"ws_layout_save", "ws_tuning_set", "ws_tracker_tune", "ws_truth_mark", "ws_truth_delete",
+    assert {"ws_layout_save", "ws_tuning_set", "ws_thing_tune", "ws_truth_mark", "ws_truth_delete",
             "ws_truth_apply", "ws_history_clear", "ws_calibration_action", "ws_adjust_zones",
             "ws_kpi_baseline_save", "ws_kpi_baseline_delete"} <= admin
     assert not any(name.startswith("ws_bermuda_") for name in open_)

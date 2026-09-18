@@ -1,6 +1,6 @@
 """The sensor platform: setup creates a room/floor/nearest-room/spot sensor per
 tracked device plus the accuracy diagnostic, migrates pre-3.8 names, drops
-legacy duplicated-name entities and stale entries, and picks up trackers that
+legacy duplicated-name entities and stale entries, and picks up things that
 appear later through the state bus or Bermuda's coordinator."""
 import asyncio
 import types

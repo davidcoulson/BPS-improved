@@ -19,7 +19,7 @@ def _rows(*items):
     ]
 
 
-def test_a_stationary_tracker_scores_zero_changes():
+def test_a_stationary_thing_scores_zero_changes():
     m = kpi.compute_metrics(_rows((0, "Kitchen")), window_hours=1)
     assert m["changes"] == 0
     assert m["changes_per_hour"] == 0
@@ -74,7 +74,7 @@ def test_summary_rolls_up_by_kind():
     s = kpi.summarise(per)
     assert s["sextant_room"]["entities"] == 2
     assert s["sextant_room"]["changes"] == 2
-    assert s["sextant_room"]["changes_per_tracker_hour"] == 1.0  # 2 changes over 2 tracker-hours
+    assert s["sextant_room"]["changes_per_thing_hour"] == 1.0  # 2 changes over 2 thing-hours
     assert s["sextant_room"]["flip_ratio"] == 0.5
     assert s["sextant_floor"]["changes"] == 1
 
@@ -82,7 +82,7 @@ def test_summary_rolls_up_by_kind():
 def test_report_prints_without_error(capsys):
     per = {"sensor.phone_sextant_zone": kpi.compute_metrics(_rows((0, "A"), (60, "B"), (120, "A")), 1)}
     base = {"entities": {"sensor.phone_sextant_zone": {"changes_per_hour": 5.0, "flip_ratio": 0.9}},
-            "summary": {"sextant_zone": {"changes_per_tracker_hour": 5.0, "flip_ratio": 0.9}}}
+            "summary": {"sextant_zone": {"changes_per_thing_hour": 5.0, "flip_ratio": 0.9}}}
     kpi.print_report(per, kpi.summarise(per), base)
     out = capsys.readouterr().out
     assert "sensor.phone_sextant_zone" in out

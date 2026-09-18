@@ -250,3 +250,62 @@ def test_maps_move_out_of_www_and_stay_out(tmp_path):
     assert run(st.migrate_maps_out_of_www(hass)) == 0
     assert not old.exists()  # empty old folder removed
     assert run(st.migrate_maps_out_of_www(hass)) == 0  # and nothing to do without it
+
+
+def test_tracker_keys_are_renamed_to_thing_on_load(tmp_path):
+    """An install from before 3.12.0 keeps its names, colours and heights."""
+    hass = make_hass(tmp_path)
+    hass._store_backing["sextant"] = {
+        "floor": [{"name": "F"}],
+        "tracker_names": {"cat": "Meg"},
+        "tracker_colors": {"cat": "#ff0000"},
+        "tracker_heights": {"cat": 0.2},
+        "tracker_classes": {"cat": "cat"},
+        "tracker_icons": {"cat": "/local/x.png"},
+        "tracker_estimators": {"cat": "fused"},
+        "tracker_fp_weights": {"cat": 0.5},
+        "tracker_ref_offsets": {"cat": 1.0},
+        "tuning": {"zone_switch_secs": 20},
+    }
+    layout = run(st.load_layout(hass))
+
+    assert layout["thing_names"] == {"cat": "Meg"} and "tracker_names" not in layout
+    for key in ("thing_colors", "thing_heights", "thing_classes", "thing_icons",
+                "thing_estimators", "thing_fp_weights", "thing_ref_offsets"):
+        assert key in layout, key
+    assert not [k for k in layout if k.startswith("tracker_")]
+    assert layout["tuning"] == {"zone_switch_secs": 20} and layout["floor"][0]["name"] == "F"
+    # Written back, so the next start has nothing to do.
+    assert "tracker_names" not in hass._store_backing["sextant"]
+    assert run(st.load_layout(hass))["thing_names"] == {"cat": "Meg"}
+
+
+def test_thing_keys_are_renamed_at_every_depth_in_the_other_stores(tmp_path):
+    """The gains, truth and KPI stores carry the old word nested, not on top."""
+    hass = make_hass(tmp_path)
+    hass._store_backing["sextant_fingerprint_gains"] = {"learned_gain": 1.1, "tracker_gain": {"cat": 0.9}}
+    hass._store_backing["sextant_truth"] = {"next_id": 2, "marks": [{"id": 1, "samples": [{"tracker_vec": [1, 2]}]}]}
+    hass._store_backing["sextant_kpi_baselines"] = {
+        "b1": {"summary": {"sextant_room": {"changes_per_tracker_hour": 4.0, "flip_ratio": 0.1}}},
+    }
+
+    gains = run(st.load_fp_gains(hass))
+    assert gains["thing_gain"] == {"cat": 0.9} and "tracker_gain" not in gains and gains["learned_gain"] == 1.1
+
+    truth = run(st.load_truth(hass))
+    assert truth["marks"][0]["samples"][0]["thing_vec"] == [1, 2]
+    assert "tracker_vec" not in truth["marks"][0]["samples"][0]
+
+    kpi = run(st.load_kpi_baselines(hass))
+    summary = kpi["b1"]["summary"]["sextant_room"]
+    assert summary["changes_per_thing_hour"] == 4.0 and "changes_per_tracker_hour" not in summary
+    assert summary["flip_ratio"] == 0.1
+
+
+def test_rename_leaves_a_new_style_layout_alone(tmp_path):
+    hass = make_hass(tmp_path)
+    hass._store_backing["sextant"] = {"floor": [], "thing_names": {"cat": "Meg"}}
+    assert run(st.load_layout(hass))["thing_names"] == {"cat": "Meg"}
+    assert st.rename_thing_keys({"thing_names": {"a": 1}})[1] == 0
+    # An odd shape must not raise.
+    assert st.rename_thing_keys(None)[1] == 0 and st.rename_thing_keys([1, "x"])[1] == 0

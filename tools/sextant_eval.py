@@ -17,7 +17,7 @@ Three subcommands
            pixel-per-metre scale from /api/sextant/read_text once, so scoring can
            report metres.
 
-  score    Read a recording and print metrics per tracker: stationary scatter
+  score    Read a recording and print metrics per thing: stationary scatter
            (CEP50/CEP95 and, with --truth, systematic bias), jumpiness
            (per-tick step length median/p95 — the headline number), floor and
            zone flap counts, and the mean fit residual. Everything is computed
@@ -31,7 +31,7 @@ Three subcommands
            distances (leave-one-out, through the real solver + calibration) and
            compares to its known placed position. Reports CEP50/CEP95 error in
            metres over all receivers. Measures the solver + calibration, not
-           jumpiness, and is an optimistic bound on real tracker accuracy.
+           jumpiness, and is an optimistic bound on real thing accuracy.
            --out saves the raw result; --baseline diffs a saved run.
 
 Typical use
@@ -68,7 +68,7 @@ def _get(url, token, timeout=10):
             body = resp.read().decode("utf-8")
     except urllib.error.HTTPError as e:
         if e.code == 404:
-            return None  # /cords 404s until a tracker has a fix
+            return None  # /cords 404s until a thing has a fix
         raise
     body = body.strip()
     if not body:
@@ -133,7 +133,7 @@ def cmd_record(args):
                     ent = row.get("ent")
                     upd = row.get("updated")
                     if ent is None or upd is None or last_updated.get(ent) == upd:
-                        continue  # not a new fix for this tracker
+                        continue  # not a new fix for this thing
                     last_updated[ent] = upd
                     fh.write(json.dumps({
                         "ent": ent, "updated": upd,
@@ -269,7 +269,7 @@ def _series_metrics(points, floors, scale, truth=None, waypoints=None):
 
 
 def score_entity(samples, scales, truth=None, waypoints=None):
-    """Full metric set for one tracker's samples (both cords and raw)."""
+    """Full metric set for one thing's samples (both cords and raw)."""
     samples = sorted(samples, key=_ts)
     floors = [s.get("floor") for s in samples]
 
@@ -414,7 +414,7 @@ def cmd_score(args):
         return 0
 
     if not result:
-        print("no tracker samples in recording.")
+        print("no thing samples in recording.")
         return 0
 
     for ent, m in result.items():
@@ -451,7 +451,7 @@ def _print_selftest(s, base=None):
     if len(s.get("per_floor", {})) > 1:
         for f, fs in s["per_floor"].items():
             print(f"    floor {f}: solved {fs['solved']}  CEP50 {fs['cep50']:.3f}  CEP95 {fs['cep95']:.3f} m")
-    print("  (Measures the solver + calibration, not jumpiness; optimistic vs a real tracker.)")
+    print("  (Measures the solver + calibration, not jumpiness; optimistic vs a real thing.)")
 
 
 def cmd_selftest(args):

@@ -16,7 +16,7 @@ device, nested beneath its Bermuda device:
 distance (about 30 s, Bermuda's timeout): the clean "who is home" signal.
 `_sextant_room` and `_sextant_floor` hold their value through a grace
 period (`position_timeout`, five minutes by default) so a brief gap does
-not blink someone out of a room; after it the tracker leaves the map and
+not blink someone out of a room; after it the thing leaves the map and
 all three read `unknown`. `sensor.sextant_position_accuracy` is the global
 self-test result.
 
@@ -25,7 +25,7 @@ self-test result.
 ```yaml
 type: custom:sextant-map-card
 floor: Ground Floor
-entities:            # tracker keys as in /api/sextant/cords; omit for every tracker
+entities:            # thing keys as in /api/sextant/cords; omit for every tracked thing
   - davids_phone
 title: Downstairs    # optional
 height: 360          # px
@@ -42,7 +42,7 @@ file in `config/sextant_maps/`) overrides the floor's plan.
 
 ## API
 
-- `GET /api/sextant/cords`: one row per tracker (`ent` is the tracker key)
+- `GET /api/sextant/cords`: one row per thing (`ent` is the thing key)
   with its position (`cords`), confidence, the radii the solver used and
   their fit residual, `floor` and the floor probabilities (`floors`), the
   room (`zone`), the raw room, the lock state and speed, the spot and the
@@ -62,7 +62,7 @@ file in `config/sextant_maps/`) overrides the floor's plan.
   `calibration/status`, `calibration/action`, `history/index`,
   `history/get`, `history/clear`, `kpi`, `kpi/baselines`,
   `kpi/baseline/save`, `kpi/baseline/delete`, `tuning/set`,
-  `tracker/tune`, `selftest`, `truth/mark`, `truth/list`,
+  `thing/tune`, `selftest`, `truth/mark`, `truth/list`,
   `truth/delete`, `truth/evaluate`, `truth/apply`, and under `bermuda/`: `candidates`,
   `tracked`, `track`, `scanners`, `scanner_ranging`, `options`,
   `options/set`, `findmy`, `findmy/add`, `findmy/remove`, `tiles`,
@@ -80,7 +80,7 @@ file in `config/sextant_maps/`) overrides the floor's plan.
 | `sextant.reset_corrections` | `floor` | remove a floor's corrections |
 | `sextant.set_auto_calibration` | `enabled` | continuous calibration on or off |
 | `sextant.set_receiver_heights` | `heights` (slug → m), `default` | proxy mount heights |
-| `sextant.set_tracker_heights` | `heights` (tracker → m) | carry heights |
+| `sextant.set_thing_heights` | `heights` (thing → m) | carry heights |
 | `sextant.set_tuning` | `settings`, `reset` | any [tuning key](tuning.md#tuning-reference); an unknown key or out-of-range value is refused with the allowed range |
 
 ```yaml

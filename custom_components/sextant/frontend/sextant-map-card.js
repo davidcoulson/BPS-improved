@@ -3,10 +3,10 @@
  *
  *   type: custom:sextant-map-card
  *   floor: Ground Floor          # default: the first floor
- *   entities: [fry, leela]       # default: every tracker on that floor
+ *   entities: [fry, leela]       # default: every thing on that floor
  *   height: 420                  # px
  *   circles: false               # solver circles
- *   trails: true                 # recent trail per tracker
+ *   trails: true                 # recent trail per thing
  *   labels: true
  *   subzones: true               # draw the spots
  *   follow: false                # switch floor to follow the first entity
@@ -15,7 +15,7 @@
  */
 import { LitElement, html, css, nothing } from "./lit.js";
 import { SextantMap } from "./sextant-map.js";
-import { sortFloors, classIcon, trackerName } from "./sextant-ui.js";
+import { sortFloors, classIcon, thingName } from "./sextant-ui.js";
 
 function mapUrlFor(floorName, maps) {
   if (!floorName || !maps) return null;
@@ -81,11 +81,11 @@ class SextantMapCard extends LitElement {
     this._map.setOffline(this._positions?.offline_receivers || []);
     const wanted = this._config.entities?.length ? new Set(this._config.entities) : null;
     const rows = (this._positions?.positions || []).filter((p) => p.floor === this._floor && (!wanted || wanted.has(p.ent)));
-    const icons = layout?.tracker_icons || {};
+    const icons = layout?.thing_icons || {};
     this._icons = this._icons || new Map();
-    const classes = layout?.tracker_classes || {};
-    const colors = this._data?.layout?.tracker_colors || {};
-    this._map.setTrackers(rows.map((p) => ({ ...p, icon: this._icon(icons[p.ent]), mdi: classIcon(classes[p.ent]), color: colors[p.ent] || null, label: trackerName(this._data, p.ent) })));
+    const classes = layout?.thing_classes || {};
+    const colors = this._data?.layout?.thing_colors || {};
+    this._map.setThings(rows.map((p) => ({ ...p, icon: this._icon(icons[p.ent]), mdi: classIcon(classes[p.ent]), color: colors[p.ent] || null, label: thingName(this._data, p.ent) })));
     if (this._config.trails) for (const p of rows) this._trail(p);
   }
 
@@ -154,4 +154,4 @@ if (!customElements.get("sextant-map-card")) customElements.define("sextant-map-
 if (!customElements.get("sextant-map-card-editor")) customElements.define("sextant-map-card-editor", SextantMapCardEditor);
 
 window.customCards = window.customCards || [];
-window.customCards.push({ type: "sextant-map-card", name: "Sextant Map", description: "Trackers on a Sextant floor plan, live.", preview: true, documentationURL: "https://github.com/davidcoulson/sextant" });
+window.customCards.push({ type: "sextant-map-card", name: "Sextant Map", description: "Things on a Sextant floor plan, live.", preview: true, documentationURL: "https://github.com/davidcoulson/sextant" });

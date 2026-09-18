@@ -6,7 +6,7 @@
 
 | What | Where |
 |---|---|
-| Layout: floors, rooms, spots, proxies, heights, corrections, tuning, tracker names and classes | `config/.storage/sextant` |
+| Layout: floors, rooms, spots, proxies, heights, corrections, tuning, thing names and classes | `config/.storage/sextant` |
 | Calibration solves and the rolling sample window | `config/.storage/sextant_calibration_state` |
 | Stability baselines | `config/.storage/sextant_kpi_baselines` |
 | Truth marks with their samples | `config/.storage/sextant_truth` |

@@ -1,11 +1,11 @@
-[Sextant](../README.md) › Trackers
+[Sextant](../README.md) › Things
 
-# Trackers
+# Things
 
-![The Trackers page: what is tracked, with its class icon, and everything Bermuda hears but does not track, with where the loudest proxy is](../img/screenshots/sextant-trackers.png)
+![The Things page: what is tracked, with its class icon, and everything Bermuda hears but does not track, with where the loudest proxy is](../img/screenshots/sextant-things.png)
 
 Bermuda's device management without its options flow. The top list is what
-is tracked: click the name or the icon to open the tracker dialog and set a
+is tracked: click the name or the icon to open the thing dialog and set a
 display name, a class (person, dog, cat, phone, watch, keys, tag and more,
 each with its icon on the map), a colour used everywhere it is drawn, a
 photo framed in a circle that replaces the icon, the height it is carried

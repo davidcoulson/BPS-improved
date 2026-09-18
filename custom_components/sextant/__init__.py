@@ -79,9 +79,9 @@ DOMAIN = "sextant"
 OPTION_SHOW_SIDEBAR_PANEL = "show_sidebar_panel"
 OPTION_UPDATE_INTERVAL = "update_interval"
 # Trilateration (scipy least_squares, multi-start) is real CPU work. 1s was
-# fine for a handful of trackers but scales linearly with tracker count and
+# fine for a handful of things but scales linearly with thing count and
 # adds up fast - profiling showed it as the largest chunk of custom-component
-# CPU time on a live instance. 15s still updates a tracker's room/position
+# CPU time on a live instance. 15s still updates a thing's room/position
 # fast enough for presence automations while cutting recompute volume ~15x.
 DEFAULT_UPDATE_INTERVAL = 15
 FRONTEND_PATH = Path(__file__).parent / "frontend"
@@ -100,14 +100,14 @@ secToUpdate = DEFAULT_UPDATE_INTERVAL
 RECEIVER_OFFLINE_SECS = 30
 RECEIVER_DUMP_INTERVAL = 15
 apitricords = []
-# A tracker not detected by any receiver for this long disappears from the
+# A thing not detected by any receiver for this long disappears from the
 # map and its zone/floor sensors go to unknown. Override with a top-level
 # "position_timeout" (seconds) in bpsdata.txt.
 STALE_POSITION_SECS = 300
 
-# --- Stale distance readings (per receiver, per tracker) ----------------------
+# --- Stale distance readings (per receiver, per thing) ----------------------
 # A distance_to sensor keeps its last value when its scanner stops hearing the
-# tracker: the reading goes STUCK rather than unavailable (most visible on
+# thing: the reading goes STUCK rather than unavailable (most visible on
 # Bermuda's unfiltered distance entities, which have no timeout of their own).
 # Fed to the solver, a stuck radius anchors the fix to a receiver that can no
 # longer see the device. Readings older than this are dropped from the solve;
@@ -117,11 +117,11 @@ STALE_POSITION_SECS = 300
 # Raised from 30. Observed live on a real 48-receiver install (using the
 # direct Bermuda API path in bermuda_source.py): "stale, dropped" rejections
 # clustered almost entirely at exactly 30-31s old, with no long tail of much
-# older readings, and enough of them that at least one tracker went unsolved
+# older readings, and enough of them that at least one thing went unsolved
 # for a full 5 minutes and had its position cleared. That tight clustering
 # right on the boundary, rather than a spread of ages, points to real per-pair
 # advertise cadence (some scanner/device pairs just don't hear each other more
-# often than ~30s - common when a BLE tracker throttles its advertise rate
+# often than ~30s - common when a BLE thing throttles its advertise rate
 # while stationary to save battery) landing on a threshold with almost no
 # margin, not to genuinely dead receivers (which would show much larger ages
 # and wouldn't cluster this tightly). 45 gives that normal cadence headroom
@@ -141,7 +141,7 @@ READING_MAX_AGE_SECS = 45
 # The published position is smoothed with a constant-velocity 2D Kalman filter
 # (state [x, y, vx, vy]) instead of a fixed-length moving average. Unlike the
 # old 3-sample mean, the filter carries a motion model, so it lags less while a
-# tracker is walking and settles more while it is still, and it adapts its gain
+# thing is walking and settles more while it is still, and it adapts its gain
 # to the estimated uncertainty rather than weighting every past fix equally.
 #
 # The noise parameters are defined in METRES (and metres/second) and converted
@@ -154,7 +154,7 @@ KF_MEAS_NOISE_M = 1.5        # per-fix position uncertainty (m); larger = smooth
 KF_ACCEL_NOISE_MS2 = 0.5     # expected acceleration (m/s^2); larger = more responsive
 KF_INIT_VEL_UNC_MS = 1.0     # initial velocity uncertainty (m/s) at (re)init
 KF_MAX_DT_S = 10.0           # cap the prediction step so a gap can't blow up P
-KF_MAX_GAP_S = 30.0          # gap beyond which state is reset (tracker was away)
+KF_MAX_GAP_S = 30.0          # gap beyond which state is reset (thing was away)
 # Soft-gate scale for spiky per-receiver distances: a reading whose radius
 # changed by this fraction versus the previous update is down-weighted to 0.5
 # (was a hard 50% discard). Nothing is dropped, so the solver keeps enough
@@ -167,9 +167,9 @@ RADIUS_JUMP_TOL = 0.5
 # wrong (through-wall / body-shadowed) reading can't drag the position — the
 # temporal jump gate only sees a one-tick change and is blind to a steady liar.
 SOLVER_ROBUST_F_SCALE = 0.3
-# Multi-start (see trilaterate()) solves up to 3x per tracker per cycle to
+# Multi-start (see trilaterate()) solves up to 3x per thing per cycle to
 # escape local minima. That's only needed when something could have actually
-# changed since last cycle; a stationary tracker gains nothing from starting
+# changed since last cycle; a stationary thing gains nothing from starting
 # fresh from the centroid every tick when last cycle's own answer is right
 # there. _jump_weight() already scores this per-point (1.0 = unchanged since
 # last update); the minimum across a floor's points must clear this before
@@ -185,7 +185,7 @@ _ALLOWED_MAP_EXTS = {
     ".png", ".jpg", ".jpeg", ".jfif", ".jpe", ".gif", ".webp", ".bmp", ".svg", ".avif",
 }
 MAX_MAP_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB
-# Tracker icons are served from www/ (public, unauthenticated): raster
+# Thing icons are served from www/ (public, unauthenticated): raster
 # images only — an .svg or .html there would run script on HA's own origin.
 _ALLOWED_ICON_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 MAX_ICON_UPLOAD_BYTES = 2 * 1024 * 1024  # 2 MB
@@ -242,30 +242,30 @@ def _safe_maps_child(maps_path, raw_name, allowed_exts=None):
 
 # --- Receiver mount heights (optional per-receiver "height", metres) ---------
 # Bermuda's distance estimates are line-of-sight SLANT ranges, but the map
-# solve is 2D: a ceiling probe reading 2.3 m to a tracker right below it is
+# solve is 2D: a ceiling probe reading 2.3 m to a thing right below it is
 # really ~0.6 m away horizontally. When a receiver's mount height is set in
 # the panel, the vertical leg is removed before trilateration
-# (horizontal = sqrt(slant^2 - dz^2)). Trackers are assumed to be carried at
-# TRACKER_HEIGHT_M above the floor; override with a top-level
-# "tracker_height" (metres) in bpsdata.txt.
-TRACKER_HEIGHT_M = 1.0
+# (horizontal = sqrt(slant^2 - dz^2)). Things are assumed to be carried at
+# THING_HEIGHT_M above the floor; override with a top-level
+# "thing_height" (metres) in bpsdata.txt.
+THING_HEIGHT_M = 1.0
 
-# --- Per-tracker reference-power trim (issue #92) -----------------------------
+# --- Per-thing reference-power trim (issue #92) -----------------------------
 # Bermuda turns RSSI into distance with an exponential path-loss model,
 # d = 10 ** ((ref_power - rssi) / (10 * attenuation)). Cheap beacons vary in
 # transmit power, so one Bermuda ref_power can read consistently long or short
 # for a given tag. Sextant can't change Bermuda's config, but an offset of `delta`
 # dB on ref_power is exactly a MULTIPLICATIVE scale on every distance from that
-# tracker: 10 ** (delta / (10 * attenuation)). So a per-tracker offset (stored
-# in metres-free dB under the top-level "tracker_ref_offsets" map) is applied
+# thing: 10 ** (delta / (10 * attenuation)). So a per-thing offset (stored
+# in metres-free dB under the top-level "thing_ref_offsets" map) is applied
 # here as a distance factor — tunable live from the panel while watching the
 # map, and portable back into Bermuda's own ref_power once a value is found.
 # The exponent below is Bermuda's default attenuation; a user whose Bermuda
 # uses a different one still gets a monotonic trim, just on a slightly
 # different dB scale (this is a relative knob, not a calibrated instrument).
 PATH_LOSS_EXPONENT = 3.0
-TRACKER_REF_OFFSET_MAX_DB = 20.0  # +/- range accepted from the panel/API
-# Slant->horizontal legitimately produces very short radii (tracker nearly
+THING_REF_OFFSET_MAX_DB = 20.0  # +/- range accepted from the panel/API
+# Slant->horizontal legitimately produces very short radii (thing nearly
 # under a ceiling probe). The solver's geometric 1/r^2 weight would explode
 # there and let that one receiver dominate the fit, so for WEIGHTING (not for
 # the residual) radii are clamped to this physical minimum, converted to each
@@ -274,7 +274,7 @@ MIN_WEIGHT_RADIUS_M = 0.5
 
 # --- Floor election by hypothesis competition ---------------------------------
 # The floor used to be elected by the single nearest receiver — one noisy
-# reading through a ceiling could steal the tracker for a cycle (kitchen <->
+# reading through a ceiling could steal the thing for a cycle (kitchen <->
 # bedroom flapping, issue #94). Now every plausible floor is SOLVED and
 # SCORED: the fit's agreement with all of that floor's receivers feeds a
 # smoothed per-floor probability, and the elected floor only changes when a
@@ -291,15 +291,15 @@ FLOOR_DARK_GRACE_CYCLES = 3  # cycles a dark incumbent holds everything frozen
 FLOOR_RESIDUAL_SCALE_M = 2.0 # weighted RMS residual (m) at which fit quality = 0.5
 COVERAGE_TARGET_N = 5.0      # heard receivers at which the coverage term saturates
 
-# No-go zones (issue #60): areas a tracker can't physically be — the upper
+# No-go zones (issue #60): areas a thing can't physically be — the upper
 # footprint of a double-height foyer/great room open to the floor below.
 # When a floor's fit lands in one of its no-go zones the fit is impossible on
 # THAT floor, so its election confidence is multiplied down: the competition
 # then prefers the floor where the same spot is a real room (the open space
-# means that floor's receivers already hear the tracker and solve it as a
+# means that floor's receivers already hear the thing and solve it as a
 # candidate). The penalty only DOWN-WEIGHTS — a no-go floor that is the sole
 # candidate still wins and its position is snapped out to the nearest allowed
-# zone — so a tracker is never left position-less.
+# zone — so a thing is never left position-less.
 NO_GO_CONF_PENALTY = 0.15
 # When snapping a fix out of dead space, grow the no-go footprint by this many
 # pixels before subtracting it from the allowed region, so the snap target's
@@ -308,7 +308,7 @@ NO_GO_CONF_PENALTY = 0.15
 # zone" to covers()-based tests.
 NO_GO_SNAP_MARGIN_PX = 3.0
 
-# Per-tracker election state, all reset when the tracker is pruned:
+# Per-thing election state, all reset when the thing is pruned:
 # smoothed floor probabilities (entity -> {floor name: P}), the pending
 # challenge (a floor out-scoring the incumbent, counted per cycle: entity ->
 # {"floor": name, "count": n}), and how many consecutive cycles the incumbent
@@ -319,16 +319,16 @@ _floor_dark_cycles = {}
 # When the incumbent floor was elected (wall clock), for the tenure bonus.
 _floor_since = {}
 
-# Per-tracker Kalman state: entity -> {"x": np.array(4), "P": np.array(4,4),
+# Per-thing Kalman state: entity -> {"x": np.array(4), "P": np.array(4,4),
 # "ts": float, "floor": str}. Reset on floor change, long gap, or prune.
 _kf_position_state = {}
 
-# Per-tracker zone election state (see _elect_zone) and the published
+# Per-thing zone election state (see _elect_zone) and the published
 # sub-zone's dwell state (see _elect_subzone). Reset on floor change and
 # on prune, like the Kalman state.
 _zone_state = {}
 _subzone_state = {}
-# Near-field anchor per tracker: {"slug", "floor", "since", "pending": (slug, since) | None}
+# Near-field anchor per thing: {"slug", "floor", "since", "pending": (slug, since) | None}
 _anchor_state = {}
 
 # --- Runtime tuning (sextant.set_tuning) ------------------------------------------
@@ -363,7 +363,7 @@ TUNING_SPEC = {
     "zone_prob_smoothing": (0.6, float, 0.0, 0.95),     # EMA weight on the previous probability
     "zone_switch_margin": (0.15, float, 0.0, 1.0),      # lead a challenger needs
     "zone_switch_secs": (20.0, float, 0.0, 600.0),      # ...held this long, wall clock
-    "stationary_speed": (0.3, float, 0.0, 5.0),         # m/s; below this the tracker is still
+    "stationary_speed": (0.3, float, 0.0, 5.0),         # m/s; below this the thing is still
     "stationary_secs": (20.0, float, 0.0, 600.0),       # still this long -> zone locked
     "zone_unlock_margin": (1.0, float, 0.0, 20.0),      # m outside the locked zone...
     "zone_unlock_secs": (30.0, float, 0.0, 600.0),      # ...for this long -> unlocked
@@ -393,7 +393,7 @@ TUNING_SPEC = {
     # area/distance sensors are corrected too and Sextant applies nothing twice.
     "calibration_target": ("sextant", str, ("sextant", "bermuda")),
     # Fingerprint fusion (fingerprint.py). "geometric" is the trilateration
-    # alone. "fingerprint" places the tracker at the best-matching reference
+    # alone. "fingerprint" places the thing at the best-matching reference
     # receivers and only falls back to the fit where no reference exists.
     # "fused" blends both: the fix is (1 - fingerprint_weight) x geometric +
     # fingerprint_weight x fingerprint, and each floor's election confidence
@@ -405,16 +405,16 @@ TUNING_SPEC = {
     "fingerprint_floor_weight": (0.5, float, 0.0, 1.0),
     "fingerprint_k": (3, int, 1, 8),                    # references averaged per fix
     "fingerprint_missing_m": (12.0, float, 2.0, 50.0),  # "not heard" counts as this far
-    "fingerprint_ref_gain": (1.0, float, 0.25, 4.0),    # probe beacons hotter (<1) / cooler (>1) than trackers
-    # Learn the rest of that gain from the trackers themselves: every match
-    # yields the median ratio between the tracker's ranges and its best
+    "fingerprint_ref_gain": (1.0, float, 0.25, 4.0),    # probe beacons hotter (<1) / cooler (>1) than things
+    # Learn the rest of that gain from the things themselves: every match
+    # yields the median ratio between the thing's ranges and its best
     # reference's, and the learned factor (fingerprint.ReferenceDB.learn)
     # multiplies fingerprint_ref_gain. Reported per fix as fp.gain.
     "fingerprint_auto_gain": (True, bool),
     # Truth marks ("it is actually here", Live page) double as fingerprint references at
-    # the marked point, in the marking tracker's own scale: off to use only the proxies.
+    # the marked point, in the marking thing's own scale: off to use only the proxies.
     "fingerprint_marks": (True, bool),
-    # Near-field anchor (see _elect_anchor): a tracker one proxy reads at
+    # Near-field anchor (see _elect_anchor): a thing one proxy reads at
     # under anchor_max_m, with every other proxy at least anchor_ratio times
     # farther, for anchor_secs, is placed AT that proxy - a watch on the
     # bedside table next to it, not 1.7 m away where the far proxies' errors
@@ -430,54 +430,54 @@ TUNING_SPEC = {
 # cadence at the top of the loop (the receivers do not move).
 FINGERPRINT_REFRESH_SECS = 20.0
 # The learned gains are written out this often (when they moved), so a restart starts warm
-# instead of walking the shared gain back from 1.0 and every tracker's from scratch.
+# instead of walking the shared gain back from 1.0 and every thing's from scratch.
 FP_GAIN_PERSIST_SECS = 300.0
 _fingerprint_db = fingerprint.ReferenceDB()
-# The last cycles' solver inputs per tracker, for truth marks (truth.py).
+# The last cycles' solver inputs per thing, for truth marks (truth.py).
 _truth_buffer = truth_mod.Buffer()
 
 
-def _tracker_fp_weight(layout, entity):
-    """This tracker's own blend weight (0 = geometric alone, 1 = fingerprint alone; the Live
-    slider, tracker_fp_weights), or None to follow the tuning."""
-    weights = layout.get("tracker_fp_weights") if isinstance(layout, dict) else None
+def _thing_fp_weight(layout, entity):
+    """This thing's own blend weight (0 = geometric alone, 1 = fingerprint alone; the Live
+    slider, thing_fp_weights), or None to follow the tuning."""
+    weights = layout.get("thing_fp_weights") if isinstance(layout, dict) else None
     w = weights.get(entity) if isinstance(weights, dict) else None
     if isinstance(w, (int, float)) and not isinstance(w, bool) and 0.0 <= w <= 1.0:
         return float(w)
     return None
 
 
-def _tracker_estimator(layout, entity):
-    """The position estimator for one tracker: its own blend weight first (0 is geometric,
-    1 fingerprint, between is fused), then its estimator override (tracker_estimators, from
-    the tracker dialog: a Tile the fingerprint makes worse can be geometric only), then the
+def _thing_estimator(layout, entity):
+    """The position estimator for one thing: its own blend weight first (0 is geometric,
+    1 fingerprint, between is fused), then its estimator override (thing_estimators, from
+    the thing dialog: a Tile the fingerprint makes worse can be geometric only), then the
     tuning."""
-    w = _tracker_fp_weight(layout, entity)
+    w = _thing_fp_weight(layout, entity)
     if w is not None:
         return truth_mod.estimator_for(w)
-    overrides = layout.get("tracker_estimators") if isinstance(layout, dict) else None
+    overrides = layout.get("thing_estimators") if isinstance(layout, dict) else None
     own = overrides.get(entity) if isinstance(overrides, dict) else None
     if own in TUNING_SPEC["position_estimator"][2]:
         return own
     return _tuning(layout, "position_estimator")
 
 
-def _seed_tracker_gain(layout, entity):
-    """A gain multiplier applied from a truth mark (tracker_fp_gains) seeds the learned one."""
-    seeds = layout.get("tracker_fp_gains") if isinstance(layout, dict) else None
+def _seed_thing_gain(layout, entity):
+    """A gain multiplier applied from a truth mark (thing_fp_gains) seeds the learned one."""
+    seeds = layout.get("thing_fp_gains") if isinstance(layout, dict) else None
     g = seeds.get(entity) if isinstance(seeds, dict) else None
-    if entity not in _fingerprint_db.tracker_gain and isinstance(g, (int, float)) and not isinstance(g, bool) and g > 0:
-        _fingerprint_db.tracker_gain[entity] = float(g)
+    if entity not in _fingerprint_db.thing_gain and isinstance(g, (int, float)) and not isinstance(g, bool) and g > 0:
+        _fingerprint_db.thing_gain[entity] = float(g)
 
 
 def _fingerprint_wanted(layout):
-    """Whether anything needs the reference DB: the tuning, or any tracker's own override."""
+    """Whether anything needs the reference DB: the tuning, or any thing's own override."""
     if _tuning(layout, "position_estimator") != "geometric":
         return True
-    overrides = layout.get("tracker_estimators") if isinstance(layout, dict) else None
+    overrides = layout.get("thing_estimators") if isinstance(layout, dict) else None
     if isinstance(overrides, dict) and any(v in ("fused", "fingerprint") for v in overrides.values()):
         return True
-    weights = layout.get("tracker_fp_weights") if isinstance(layout, dict) else None
+    weights = layout.get("thing_fp_weights") if isinstance(layout, dict) else None
     return isinstance(weights, dict) and any(isinstance(w, (int, float)) and w > 0 for w in weights.values())
 
 
@@ -492,7 +492,7 @@ def _persist_fp_gains(hass, now_ts):
         return
     _persist_fp_gains.last = now_ts
     snap = {"learned_gain": round(_fingerprint_db.learned_gain, 4),
-            "tracker_gain": {e: round(g, 4) for e, g in _fingerprint_db.tracker_gain.items()}}
+            "thing_gain": {e: round(g, 4) for e, g in _fingerprint_db.thing_gain.items()}}
     if snap == getattr(_persist_fp_gains, "saved", None):
         return
     _persist_fp_gains.saved = snap
@@ -509,11 +509,11 @@ def _restore_fp_gains(saved):
     g = saved.get("learned_gain")
     if isinstance(g, (int, float)) and not isinstance(g, bool) and 0 < g and _fingerprint_db.learned_gain == 1.0:
         _fingerprint_db.learned_gain = min(fingerprint.LEARNED_GAIN_MAX, max(fingerprint.LEARNED_GAIN_MIN, float(g)))
-    for entity, tg in (saved.get("tracker_gain") or {}).items():
-        if isinstance(tg, (int, float)) and not isinstance(tg, bool) and tg > 0 and entity not in _fingerprint_db.tracker_gain:
-            _fingerprint_db.tracker_gain[entity] = min(fingerprint.LEARNED_GAIN_MAX, max(fingerprint.LEARNED_GAIN_MIN, float(tg)))
+    for entity, tg in (saved.get("thing_gain") or {}).items():
+        if isinstance(tg, (int, float)) and not isinstance(tg, bool) and tg > 0 and entity not in _fingerprint_db.thing_gain:
+            _fingerprint_db.thing_gain[entity] = min(fingerprint.LEARNED_GAIN_MAX, max(fingerprint.LEARNED_GAIN_MIN, float(tg)))
     _persist_fp_gains.saved = {"learned_gain": round(_fingerprint_db.learned_gain, 4),
-                               "tracker_gain": {e: round(v, 4) for e, v in _fingerprint_db.tracker_gain.items()}}
+                               "thing_gain": {e: round(v, 4) for e, v in _fingerprint_db.thing_gain.items()}}
 
 
 def _refresh_fingerprint_references(hass, layout, now_ts):
@@ -568,7 +568,7 @@ def _tuning(data, key):
 
 
 def _layout_for(new_global_data, entity):
-    """The layout dict a tracker's per-cycle data was built from (or None)."""
+    """The layout dict a thing's per-cycle data was built from (or None)."""
     for ent in new_global_data:
         if ent.get("entity") == entity:
             return ent.get("data")
@@ -643,28 +643,28 @@ def _select_receivers(entries, max_receivers, max_range, near_always):
     return kept
 
 
-def _tracker_height(data, entity=None):
-    """Assumed tracker height above the floor (m) for slant correction.
+def _thing_height(data, entity=None):
+    """Assumed thing height above the floor (m) for slant correction.
 
-    Precedence: the device's own entry in "tracker_heights" (set per tracker
+    Precedence: the device's own entry in "thing_heights" (set per thing
     in the panel — an ankle beacon at 0.1 m and a phone at 1.0 m need
-    different vertical legs), then the top-level "tracker_height" override,
+    different vertical legs), then the top-level "thing_height" override,
     then the 1.0 m default. Out-of-range/garbage values fall through.
     """
     if isinstance(data, dict):
-        per_tracker = data.get("tracker_heights")
-        if entity is not None and isinstance(per_tracker, dict):
-            configured = per_tracker.get(entity)
+        per_thing = data.get("thing_heights")
+        if entity is not None and isinstance(per_thing, dict):
+            configured = per_thing.get(entity)
             # not-bool: isinstance(True, int) holds in Python, so a hand-edited
             # true/false would otherwise read as a valid 1.0/0.0 m height.
             if isinstance(configured, (int, float)) and not isinstance(configured, bool) \
                     and 0 <= configured <= 5:
                 return float(configured)
-        configured = data.get("tracker_height")
+        configured = data.get("thing_height")
         if isinstance(configured, (int, float)) and not isinstance(configured, bool) \
                 and 0 <= configured <= 5:
             return float(configured)
-    return TRACKER_HEIGHT_M
+    return THING_HEIGHT_M
 
 
 HISTORY_FLUSH_INTERVAL = 60  # s between appends of buffered history to disk
@@ -691,7 +691,7 @@ def _history_lock(hass):
     Without it a Clear can be undone: the periodic flush drains the queue and
     hands it to the executor, the Clear deletes the segments, and then the
     append lands - putting the forgotten positions back on disk, where the next
-    restart reads them in again. The per-tracker rewrite has the mirror problem
+    restart reads them in again. The per-thing rewrite has the mirror problem
     (read-filter-replace losing rows an append wrote in the meantime).
     """
     bucket = hass.data.setdefault(DOMAIN, {})
@@ -724,7 +724,7 @@ async def flush_position_history(hass, prune=False):
     """
     hist = get_position_history(hass)
     hist.configure(history_mod.history_config(get_layout(hass)))
-    # Age every track, not just the ones that recorded this cycle: a tracker
+    # Age every track, not just the ones that recorded this cycle: a thing
     # that went silent (or a history since switched off) would otherwise keep
     # serving points past the configured window.
     hist.evict_all()
@@ -801,7 +801,7 @@ async def restore_position_history(hass):
     hist.adopt(loaded)
     hist.mark_all_gaps()
     ents = hist.entities()
-    _LOGGER.info("Sextant position history restored: %d points across %d trackers",
+    _LOGGER.info("Sextant position history restored: %d points across %d things",
                  sum((hist.retained(e) or {}).get("points", 0) for e in ents), len(ents))
 
 
@@ -834,38 +834,38 @@ def _reading_age_secs(state):
         return None
 
 
-def _tracker_ref_offset(data, entity):
-    """This tracker's ref-power trim in dB (0.0 when unset). See issue #92."""
+def _thing_ref_offset(data, entity):
+    """This thing's ref-power trim in dB (0.0 when unset). See issue #92."""
     if not isinstance(data, dict) or entity is None:
         return 0.0
-    offsets = data.get("tracker_ref_offsets")
+    offsets = data.get("thing_ref_offsets")
     if not isinstance(offsets, dict):
         return 0.0
     value = offsets.get(entity)
     # not-bool: isinstance(True, int) holds in Python, so a hand-edited
     # true/false would otherwise read as a valid +1 dB trim.
     if isinstance(value, (int, float)) and not isinstance(value, bool) \
-            and abs(value) <= TRACKER_REF_OFFSET_MAX_DB:
+            and abs(value) <= THING_REF_OFFSET_MAX_DB:
         return float(value)
     return 0.0
 
 
-def _tracker_distance_factor(data, entity):
-    """Multiplicative distance scale from this tracker's ref-power trim.
+def _thing_distance_factor(data, entity):
+    """Multiplicative distance scale from this thing's ref-power trim.
 
     A ref_power offset of `delta` dB scales every distance by
     10 ** (delta / (10 * attenuation)) in Bermuda's path-loss model, so a
-    positive trim reads the tracker as FARTHER and a negative one as nearer.
+    positive trim reads the thing as FARTHER and a negative one as nearer.
     Returns 1.0 (no-op) when no trim is configured.
     """
-    offset = _tracker_ref_offset(data, entity)
+    offset = _thing_ref_offset(data, entity)
     if offset == 0.0:
         return 1.0
     return 10.0 ** (offset / (10.0 * PATH_LOSS_EXPONENT))
 
 
 def _floor_scale(data, entity, floor_name):
-    """Pixels-per-metre for a tracker's elected floor (None if unknown)."""
+    """Pixels-per-metre for a thing's elected floor (None if unknown)."""
     for ent in data:
         if ent.get("entity") == entity:
             for floor in ent["data"]["floor"]:
@@ -877,7 +877,7 @@ def _floor_scale(data, entity, floor_name):
 def _jump_weight(r, prev_r, min_wr):
     """Soft down-weight for a radius that jumped since the previous update.
 
-    Radii are clamped to the physical minimum for the comparison: a tracker
+    Radii are clamped to the physical minimum for the comparison: a thing
     genuinely next to a receiver bounces between sub-clamp readings from pure
     RSSI noise (0.1 <-> 0.3 m is noise, not motion), and an unclamped relative
     gate would penalize that — its most informative receiver — every tick.
@@ -900,7 +900,7 @@ def _kalman_position_update(entity, floor_name, meas, scale, bounds):
     ``scale`` (pixels per metre) so the smoothing is resolution-independent. The
     state is (re)initialised at the measurement with zero velocity whenever there
     is no prior state, the elected floor changed (coordinates live in a different
-    pixel space), or the gap since the last fix exceeds KF_MAX_GAP_S (the tracker
+    pixel space), or the gap since the last fix exceeds KF_MAX_GAP_S (the thing
     was out of range, so its velocity is meaningless). Returns the filtered
     ``(x, y)`` clipped to ``bounds``; the raw fix is what feeds the filter, so the
     estimate is never biased by zone snapping applied downstream.
@@ -986,7 +986,7 @@ async def update_tracked_entities(hass):
         # Receiver liveness and the self-localization accuracy sensor are
         # receiver-side diagnostics, independent of how many beacons are being
         # tracked — so they run on their own slow cadence at the TOP of the loop,
-        # BEFORE the "too few trackers" early-continues below (otherwise a fresh
+        # BEFORE the "too few things" early-continues below (otherwise a fresh
         # deploy, or any time nobody is home, would never publish them).
         now_ts = time.time()
         if now_ts - getattr(update_tracked_entities, "last_liveness", 0.0) >= RECEIVER_DUMP_INTERVAL:
@@ -1076,12 +1076,12 @@ async def update_tracked_entities(hass):
                 await asyncio.sleep(10)
                 continue  # Skip and start over
             if num_points < 3:
-                _LOGGER.info("There are not enough trackers with available data to track, sleep 10 seconds")
+                _LOGGER.info("There are not enough things with available data to track, sleep 10 seconds")
                 await asyncio.sleep(10)
                 continue  # Skip and start over
-            # A tracker added to Bermuda since setup has no sensors yet.
-            from .sensor import ensure_sensors_for_trackers  # sensor.py imports this package
-            ensure_sensors_for_trackers(hass, unique_values)
+            # A thing added to Bermuda since setup has no sensors yet.
+            from .sensor import ensure_sensors_for_things  # sensor.py imports this package
+            ensure_sensors_for_things(hass, unique_values)
             # Use a separate copy per entity to avoid cross-entity mutation side effects.
             layout = get_layout(hass)
             _refresh_fingerprint_references(hass, layout, now_ts)
@@ -1116,7 +1116,7 @@ def _bermuda_distance_sensor_ids(hass):
 
     Other integrations expose look-alike distance sensors — e.g. an ESPHome
     mmWave presence sensor's ``..._distance_to_detection_object`` — which are not
-    tracker-to-scanner distances and must never feed Sextant. Every place that
+    thing-to-scanner distances and must never feed Sextant. Every place that
     enumerates distance sensors (device tracking, the receiver/beacon debug
     views, the receiver picker) goes through this, mirroring the same
     ``platform == "bermuda"`` guard ``sensor.get_filtered_entities`` already
@@ -1639,7 +1639,7 @@ async def update_receiver_liveness(hass):
       2. A `binary_sensor.<slug>_status` connectivity sensor.
       3. The receiver's HA device: online while any of its entities is not
          `unavailable`; a connectivity entity on the device is authoritative.
-      4. Distance heuristic (last resort): working if some tracker got a reading
+      4. Distance heuristic (last resort): working if some thing got a reading
          through it recently. Only reached for a scanner with no liveness and no
          mapped device (6 of this install's receivers, whose device name doesn't
          slugify to the receiver id). An *up* scanner is caught by tier 1, so
@@ -1744,7 +1744,7 @@ async def update_receiver_liveness(hass):
         if resolved is not None:
             return resolved
         # tier 4: distance heuristic (last resort). Matches the card: a receiver
-        # here is online only while some tracker reads a distance through it.
+        # here is online only while some thing reads a distance through it.
         return slug in with_reading
 
     dom["rl_offline"] = sorted(s for s in receivers if not is_online(s))
@@ -1752,8 +1752,8 @@ async def update_receiver_liveness(hass):
 
 async def update_receiver_radii(hass, eids):
     """Update receiver 'r' values (pixels) and raw 'distance' (meters) for an entity"""
-    tracker_h = _tracker_height(eids["data"], eids["entity"])
-    tracker_factor = _tracker_distance_factor(eids["data"], eids["entity"])
+    thing_h = _thing_height(eids["data"], eids["entity"])
+    thing_factor = _thing_distance_factor(eids["data"], eids["entity"])
     max_age = _reading_max_age(eids["data"])
     use_median = _tuning(eids["data"], "distance_estimator") == "median"
     median_window = _tuning(eids["data"], "median_window_secs")
@@ -1815,7 +1815,7 @@ async def update_receiver_radii(hass, eids):
                     distance_m = DistanceConverter.convert(distance_m, unit, UnitOfLength.METERS)
 
             # Drop a STUCK reading: when a scanner stops hearing the
-            # tracker its distance sensor keeps the last value instead of
+            # thing its distance sensor keeps the last value instead of
             # going unavailable, and that frozen radius would anchor the
             # fix to a receiver that can no longer see the device. Removing
             # "distance" takes this receiver out of the cycle's candidate
@@ -1835,18 +1835,18 @@ async def update_receiver_radii(hass, eids):
                 correction = receiver.get("correction")
                 if isinstance(correction, (int, float)) and correction > 0:
                     distance = distance * correction
-                # Per-TRACKER ref-power trim (issue #92): a tag whose
+                # Per-THING ref-power trim (issue #92): a tag whose
                 # transmit power differs from Bermuda's configured
                 # ref_power reads consistently long or short from EVERY
                 # receiver, which no per-receiver correction can fix.
                 # Applied before the slant leg so the height geometry sees
                 # the trimmed range, and included in the election distance
-                # below (a per-tracker constant, so cross-floor ordering
-                # for this tracker is unchanged).
-                distance = distance * tracker_factor
+                # below (a per-thing constant, so cross-floor ordering
+                # for this thing is unchanged).
+                distance = distance * thing_factor
                 # Known mount height: the estimate is a slant range, so
                 # remove the vertical leg (mount height vs the assumed
-                # tracker height) to get the horizontal distance the 2D
+                # thing height) to get the horizontal distance the 2D
                 # solve actually needs. A slant shorter than the vertical
                 # leg means "practically underneath" — horizontal ~ 0; the
                 # solver's MIN_WEIGHT_RADIUS_M clamp keeps such a near-zero
@@ -1857,7 +1857,7 @@ async def update_receiver_radii(hass, eids):
                 horizontal = distance
                 height = receiver.get("height")
                 if isinstance(height, (int, float)) and 0 <= height <= 10:
-                    dz = float(height) - tracker_h
+                    dz = float(height) - thing_h
                     # Floored: sqrt(d^2 - dz^2) has a singularity at
                     # d -> dz where its sensitivity blows up, and any
                     # d <= dz collapsed to EXACTLY 0. Bermuda's filtered
@@ -1867,7 +1867,7 @@ async def update_receiver_radii(hass, eids):
                     # ~100x the weight of a 5 m receiver) dragged the fix
                     # onto that receiver — the 1.7.0 accuracy regression.
                     # The floor never exceeds the raw slant itself, so a
-                    # receiver at ~tracker height (dz ~ 0, no singularity)
+                    # receiver at ~thing height (dz ~ 0, no singularity)
                     # keeps honest sub-floor readings like the no-height
                     # path does.
                     floor_sq = min(distance * distance,
@@ -1877,10 +1877,10 @@ async def update_receiver_radii(hass, eids):
                 # Raw SLANT distance for the floor election: radii are in
                 # per-floor pixel scales and must not be compared across
                 # floors — and the dz correction must not leak in here
-                # either. sqrt(d^2 - dz^2) is only valid when the tracker
+                # either. sqrt(d^2 - dz^2) is only valid when the thing
                 # is on the receiver's own floor, which is exactly what
                 # the election hasn't decided yet: electing on corrected
-                # values lets a high-mounted probe hearing the tracker
+                # values lets a high-mounted probe hearing the thing
                 # through the slab shrink its through-floor slant and
                 # steal the election from the correct floor.
                 receiver["distance"] = distance
@@ -1895,7 +1895,7 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
 
     The floor used to be elected by the single nearest receiver before any
     position existed — one noisy reading through a ceiling could steal the
-    tracker for a cycle (issue #94). Now the top FLOOR_CANDIDATES floors (by
+    thing for a cycle (issue #94). Now the top FLOOR_CANDIDATES floors (by
     nearest receiver) are each SOLVED, scored by how well the fix explains
     that floor's whole receiver ensemble, folded into smoothed per-floor
     probabilities, and elected with incumbent hysteresis. The winning floor's
@@ -1937,23 +1937,23 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
     # The incumbent, when solvable, ALWAYS defends its title — even ranked
     # below the cut — so nearest-slant noise alone can never evict it.
     layout = _layout_for(new_global_data, entity)
-    estimator = _tracker_estimator(layout, entity)
+    estimator = _thing_estimator(layout, entity)
     refs_by_floor = {}
-    tracker_vec = {}
+    thing_vec = {}
     fp_gain = 1.0
-    own_weight = _tracker_fp_weight(layout, entity)
+    own_weight = _thing_fp_weight(layout, entity)
     if estimator != "geometric":
-        _seed_tracker_gain(layout, entity)
+        _seed_thing_gain(layout, entity)
         fp_gain = _tuning(layout, "fingerprint_ref_gain")
         if _tuning(layout, "fingerprint_auto_gain"):
             fp_gain *= _fingerprint_db.gain_for(entity)
         refs_by_floor = fingerprint.build_references(layout, _fingerprint_db.vectors(), fp_gain, extra=_mark_refs(layout))
-        tracker_vec = fingerprint.tracker_vector(layout)
+        thing_vec = fingerprint.thing_vector(layout)
     # A floor with references can compete on its fingerprint with a single
-    # receiver hearing the tracker; trilateration alone needs three.
+    # receiver hearing the thing; trilateration alone needs three.
     solvable = [
         c for c in candidates
-        if len(c["cords"]) >= 3 or (tracker_vec and c["name"] in refs_by_floor)
+        if len(c["cords"]) >= 3 or (thing_vec and c["name"] in refs_by_floor)
     ]
     to_solve = solvable[:FLOOR_CANDIDATES]
     if incumbent is not None and not any(c["name"] == incumbent for c in to_solve):
@@ -1963,7 +1963,7 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
 
     # Phase 1 (event loop): prepare every candidate floor's solve inputs.
     # Phase 2 (executor): the solves themselves - the only real CPU work in
-    # the cycle - run off the loop, all of this tracker's floors in one job.
+    # the cycle - run off the loop, all of this thing's floors in one job.
     # Phase 3 (event loop): election, filter, zones, publish.
     jobs = []
     for cand in to_solve:
@@ -2026,9 +2026,9 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
             "floor": floor_name, "weighted": weighted, "bounds": floor_bounds,
             "min_wr": min_wr, "stable_hint": stable_hint, "scale": scale,
             "zone_polys": zone_polys,
-            "fingerprint": None if not tracker_vec or floor_name not in refs_by_floor else {
+            "fingerprint": None if not thing_vec or floor_name not in refs_by_floor else {
                 "mode": estimator,
-                "tracker": tracker_vec,
+                "thing": thing_vec,
                 "refs": refs_by_floor[floor_name],
                 "k": _tuning(layout, "fingerprint_k"),
                 "missing_m": _tuning(layout, "fingerprint_missing_m"),
@@ -2039,12 +2039,12 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
         })
     # Keep this cycle's inputs so a truth mark can re-solve it under other settings.
     if jobs:
-        _truth_buffer.remember(entity, jobs, tracker_vec if estimator != "geometric" else fingerprint.tracker_vector(layout), fp_gain, estimator)
+        _truth_buffer.remember(entity, jobs, thing_vec if estimator != "geometric" else fingerprint.thing_vector(layout), fp_gain, estimator)
 
     solved = {}  # floor name -> everything the publish pipeline needs
     if jobs:
         # asyncio.gather of synchronous work is sequential: with the solves
-        # inline, every tracker's fits ran back to back on the event loop in
+        # inline, every thing's fits ran back to back on the event loop in
         # one burst per cycle. On a Pi that burst visibly stalled HA; this is
         # why the upstream interval had to go from 1 s to 15 s.
         results = await hass.async_add_executor_job(_solve_floor_jobs, jobs)
@@ -2093,7 +2093,7 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
 
     # Dark-incumbent grace: the elected floor blipping below three receivers
     # (or its solve failing) for a few cycles is a sensor hiccup, not
-    # evidence the tracker moved — hold everything frozen: last published
+    # evidence the thing moved — hold everything frozen: last published
     # values stand, probabilities are NOT updated (a competitor must not
     # accumulate election lead from the incumbent's blind cycles), and no
     # other floor inherits incumbency by forfeit. Only a disappearance
@@ -2153,7 +2153,7 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
         update_trilateration_and_zone.last_floor[entity] = lowest_floor_name
 
     elected = solved[lowest_floor_name]
-    # The elected floor's match is the one whose tracker-vs-reference range
+    # The elected floor's match is the one whose thing-vs-reference range
     # ratio says something about the probe gain; fold it in (slowly).
     fp_tel = elected.get("fp")
     if fp_tel and fp_tel.get("ratio") and _tuning(layout, "fingerprint_auto_gain"):
@@ -2163,7 +2163,7 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
     floor_bounds = elected["bounds"]
     scale = elected["scale"]
     tricords = elected["fix"]
-    # A tracker sitting on a proxy is placed on the proxy (see _elect_anchor).
+    # A thing sitting on a proxy is placed on the proxy (see _elect_anchor).
     anchor = _elect_anchor(entity, lowest_floor_name, _floor_receivers(layout, lowest_floor_name), layout, now=now)
     if anchor is not None and tricords is not None:
         tricords = (anchor["x"], anchor["y"])
@@ -2196,10 +2196,10 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
         nearest_zone = find_nearest_zone(hass, new_global_data, entity, lowest_floor_name, test_point)
         # The PUBLISHED zone gets the same treatment floors already had:
         # membership probabilities smoothed over cycles, a margin and a
-        # wall-clock dwell before a change, and a lock while the tracker is
+        # wall-clock dwell before a change, and a lock while the thing is
         # demonstrably still. Half of all zone changes in a 24 h sample were
         # A->B->A flips at a median dwell of 21 s; this is where they went.
-        # An anchored tracker's position is certain (it is on that proxy):
+        # An anchored thing's position is certain (it is on that proxy):
         # elect its room and spot from the point, not the filter's old
         # uncertainty ellipse, which would keep a small spot from ever winning.
         kf_for_election = None if anchor is not None else _kf_position_state.get(entity)
@@ -2226,7 +2226,7 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
                 # Smoothed sub-zone membership shares (name -> share, plus
                 # "unknown"), the sub-zone counterpart of "floors" below.
                 "sub_zones": _subzone_probs(entity),
-                # The proxy the tracker is anchored to (near-field), or None.
+                # The proxy the thing is anchored to (near-field), or None.
                 "anchor": None if anchor is None else anchor["slug"],
                 "speed": None if zone_speed is None else round(zone_speed, 2),
                 "floor": lowest_floor_name,
@@ -2271,7 +2271,7 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
         update_sextant_sensor_state(hass, f"sensor.{entity}_sextant_spot", sub_zone, {"room": parent_zone})
 
 def _solve_floor_jobs(jobs):
-    """Run one tracker's candidate-floor solves. Pure CPU; executor-safe.
+    """Run one thing's candidate-floor solves. Pure CPU; executor-safe.
 
     Each job carries everything the fit needs (see the phase comments in
     update_trilateration_and_zone); nothing here touches hass or the
@@ -2314,13 +2314,13 @@ def _fuse_fingerprint(spec, geo_fix, geo_conf):
     """
     if spec is None:
         return geo_fix, geo_conf, None
-    m = fingerprint.match(spec["tracker"], spec["refs"], k=spec["k"], missing_m=spec["missing_m"])
+    m = fingerprint.match(spec["thing"], spec["refs"], k=spec["k"], missing_m=spec["missing_m"])
     telemetry = None if m is None else {
         "fix": [round(m["x"], 1), round(m["y"], 1)],
         "conf": round(m["conf"], 3),
         "score": round(m["score"], 3),
         "refs": m["refs"],
-        # Tracker/reference range ratio over the receivers both were heard
+        # Thing/reference range ratio over the receivers both were heard
         # by (>1: references read short), and the gain the references were
         # built with - the auto-gain loop's input and output.
         "ratio": None if m.get("ratio") is None else round(m["ratio"], 3),
@@ -2332,7 +2332,7 @@ def _fuse_fingerprint(spec, geo_fix, geo_conf):
         return geo_fix, geo_conf, None
     if spec["mode"] == "fingerprint" or geo_fix is None:
         return (m["x"], m["y"]), m["conf"], telemetry
-    # A match whose scale disagrees with the tracker (its own gain still being learned, or a radio
+    # A match whose scale disagrees with the thing (its own gain still being learned, or a radio
     # unlike the probes) is trusted less: the Office Tile read 1.5x its best reference and the
     # fingerprint half of every fix dragged it two rooms over.
     trust = fingerprint.trust(m.get("ratio"))
@@ -2360,7 +2360,7 @@ def update_or_add_entry(data, new_entry):
 
 
 async def prune_stale_positions(hass):
-    """Drop trackers not detected by any receiver for the timeout period.
+    """Drop things not detected by any receiver for the timeout period.
 
     Without this, a person who left home stayed on the map at their last
     position forever, and the zone/floor sensors kept the stale values.
@@ -2389,7 +2389,7 @@ async def prune_stale_positions(hass):
     except Exception as e:
         _LOGGER.debug("Position history gap mark failed: %s", e)
     for ent in sorted(stale_ents):
-        # Drop the Kalman state too: a returning tracker should re-seed fresh
+        # Drop the Kalman state too: a returning thing should re-seed fresh
         # rather than predict velocity across the whole absence. Same for the
         # whole election state — probabilities, pending challenge, and the
         # INCUMBENCY itself: it may well come back on another floor, and an
@@ -2407,7 +2407,7 @@ async def prune_stale_positions(hass):
         _floor_since.pop(ent, None)
         getattr(update_trilateration_and_zone, "last_floor", {}).pop(ent, None)
         getattr(update_trilateration_and_zone, "last_r_values", {}).pop(ent, None)
-        _LOGGER.info("Tracker %s not seen for %ss; clearing its position", ent, timeout)
+        _LOGGER.info("Thing %s not seen for %ss; clearing its position", ent, timeout)
         update_sextant_sensor_state(hass, f"sensor.{ent}_sextant_room", "unknown")
         update_sextant_sensor_state(hass, f"sensor.{ent}_sextant_floor", "unknown")
         update_sextant_sensor_state(hass, f"sensor.{ent}_sextant_nearest_room", "unknown")
@@ -2464,7 +2464,7 @@ async def process_entities(hass, new_global_data):
     await asyncio.gather(*tasks)  # Run all entities in parallel, but maintain the correct internal order
 
 def extract_candidate_floors(new_global_data, tmpentity):
-    """Every floor hearing the tracker, ranked by its nearest receiver.
+    """Every floor hearing the thing, ranked by its nearest receiver.
 
     Returns a list of {"name", "cords": [(x, y, r, slant_px, quality), ...],
     "nearest_m"} sorted by nearest_m — slant_px is the measured (corrected)
@@ -2478,7 +2478,7 @@ def extract_candidate_floors(new_global_data, tmpentity):
     The ranking compares raw slant distances (meters),
     not radii: radii are scaled into each floor's own pixel space, so
     comparing them across floors would let the floor with the smallest scale
-    win regardless of where the tracker actually is. Ties (the same receiver
+    win regardless of where the thing actually is. Ties (the same receiver
     placed on several floors) keep the data file's floor order. Each floor's
     cords feed that floor's own candidate solve — cords from different floors
     live in different pixel coordinate systems and never mix.
@@ -2531,7 +2531,7 @@ def _score_floor_fit(fix, weighted, scale):
     receivers (weighted RMS residual, converted to metres so floors with
     different pixel scales compare fairly) with how many receivers corroborate
     it. Modelled on ESPresense's scenario confidence (fit quality + node
-    coverage): the tracker's true floor tends to explain its whole receiver
+    coverage): the thing's true floor tends to explain its whole receiver
     ensemble, while a wrong floor fits one loud through-slab reading and
     contradicts the rest.
     """
@@ -2551,7 +2551,7 @@ def _score_floor_fit(fix, weighted, scale):
     rms_px *= math.sqrt(n / max(n - 2.0, 1.0))
     rms_m = rms_px / scale if scale else rms_px
     quality = 1.0 / (1.0 + (rms_m / FLOOR_RESIDUAL_SCALE_M) ** 2)
-    # Corroboration: how many receivers hear the tracker on this floor,
+    # Corroboration: how many receivers hear the thing on this floor,
     # saturating at COVERAGE_TARGET_N. An absolute count, NOT a share of the
     # floor's placed receivers: a dead or unmatched placement must not
     # handicap its floor forever, and a tiny fully-reporting 3-receiver floor
@@ -2587,7 +2587,7 @@ def _proximity_weighted_scores(scores, nearest_by_floor, weight):
     ``(1 - weight) + weight * prox``. With one solved floor, an unusable
     distance, or weight 0, the scores pass through unchanged. Distances are
     the raw slants (metres) the candidate ranking already uses, so a
-    through-slab reading directly below a tracker counts against the floor
+    through-slab reading directly below a thing counts against the floor
     below it just as it did in the old nearest-receiver election - but now
     as one weighted term inside the fit competition, behind the same margin
     and dwell, rather than as the whole answer.
@@ -2726,11 +2726,11 @@ def _zone_membership(zone_polys, samples):
 
 
 def _elect_zone(entity, floor_name, instant_zone, point, kf_state, zone_polys, scale, layout, now=None):
-    """The zone to PUBLISH for a tracker this cycle. Returns
+    """The zone to PUBLISH for a thing this cycle. Returns
     (zone, locked, speed_m_s).
 
     Floors already had hysteresis; zones were assigned point-wise every
-    cycle, so a tracker resting near a boundary toggled with every fit.
+    cycle, so a thing resting near a boundary toggled with every fit.
     Three mechanisms, all tunable (TUNING_SPEC, sextant.set_tuning):
 
     1. Membership probability. The published point's zone is not a yes/no:
@@ -2740,11 +2740,11 @@ def _elect_zone(entity, floor_name, instant_zone, point, kf_state, zone_polys, s
        its smoothed share by zone_switch_margin continuously for
        zone_switch_secs of wall clock.
     3. Stationary lock. When the filter's speed stays under stationary_speed
-       for stationary_secs, the tracker is on a table and the zone locks.
+       for stationary_secs, the thing is on a table and the zone locks.
        The lock releases only when the point sits more than
        zone_unlock_margin metres outside the locked zone for
        zone_unlock_secs (the time already spent away then counts toward
-       the dwell, so the switch follows at once), or when the tracker is
+       the dwell, so the switch follows at once), or when the thing is
        clearly moving again for stationary_secs.
 
     nearest_zone stays instantaneous for automations that want the raw
@@ -2871,13 +2871,13 @@ def _floor_receivers(layout, floor_name):
 
 
 def _elect_anchor(entity, floor_name, receivers, layout, now=None):
-    """The proxy this tracker sits on, if any: {"slug", "x", "y"} or None.
+    """The proxy this thing sits on, if any: {"slug", "x", "y"} or None.
 
     Trilateration is a compromise between every proxy's range, so a watch
     20 cm from one proxy still lands a metre or two away when the farther
-    proxies read a little short. When ONE proxy reads the tracker inside
+    proxies read a little short. When ONE proxy reads the thing inside
     anchor_max_m and every other proxy reads it at least anchor_ratio times
-    farther, the tracker is on that proxy: after anchor_secs of that the fix
+    farther, the thing is on that proxy: after anchor_secs of that the fix
     becomes the proxy's own position. The anchor holds until that proxy's
     reading opens past anchor_release_m (or vanishes) for anchor_secs, or
     another proxy earns the anchor instead. A stationary phone on the
@@ -2968,7 +2968,7 @@ def _adopt_anchor(entity, floor_name, rx, now):
 
 
 def _subzone_probs(entity):
-    """The tracker's smoothed sub-zone shares for the telemetry payload, or None."""
+    """The thing's smoothed sub-zone shares for the telemetry payload, or None."""
     st = _subzone_state.get(entity)
     probs = st.get("probs") if isinstance(st, dict) else None
     if not probs:
@@ -2991,7 +2991,7 @@ def _elect_subzone(entity, floor_name, zone, zone_locked, point, kf_state, sub_p
        fix sits more than subzone_unlock_margin metres outside its polygon
        (or another sub-zone clearly wins).
     3. Dwell: any change must persist for subzone_switch_secs, wall clock.
-    4. The zone lock carries over: a tracker the zone election holds still
+    4. The zone lock carries over: a thing the zone election holds still
        (the phone on the table) keeps its sub-zone too.
     """
     now = time.time() if now is None else now
@@ -3023,7 +3023,7 @@ def _elect_subzone(entity, floor_name, zone, zone_locked, point, kf_state, sub_p
 
     if current != "unknown" and zone_locked:
         st["pending"] = None
-        return st["value"]  # a still tracker stays on its couch / table / hook
+        return st["value"]  # a still thing stays on its couch / table / hook
 
     if current != "unknown":
         cur_poly = next((poly for sid, _p, poly in polys if sid == current), None)
@@ -3111,7 +3111,7 @@ class _FloorZones(list):
     (find_zone_for_point: a buffer() ring around every zone the point was not
     in), 15 ms (snap_point_into_zones: the allowed union minus the no-go
     union) and 11 ms (find_nearest_zone: one distance call per zone) per
-    call, several times per tracker per cycle, all on the event loop. The
+    call, several times per thing per cycle, all on the event loop. The
     rings, the unions and the arrays below are the same for every lookup
     until the floorplan is edited, so they live with the tuples in the
     version-keyed cache, and the predicates run as one vectorised shapely
@@ -3137,7 +3137,7 @@ class _FloorZones(list):
 def _floor_zone_polygons(hass, data, entity, floor_name):
     """(zone entity_id, polygon, buffer_size, no_go) tuples for the floor.
 
-    no_go marks a zone a tracker can't be in (issue #60). Callers keep no-go
+    no_go marks a zone a thing can't be in (issue #60). Callers keep no-go
     zones for the solver bounds (they still bound the floor) but exclude them
     from zone assignment and snapping — a fix must never be reported as, or
     snapped into, dead space.
@@ -3216,7 +3216,7 @@ def _point_in_no_go(point, zone_polys):
     zone_polys is the (zone_id, polygon, buffer_size, no_go) list from
     _floor_zone_polygons. Accepts a shapely Point or an (x, y) pair. Uses
     strict containment (not boundary-inclusive covers): a no-go zone's edge is
-    typically a physical railing, and a tracker genuinely ON the walkway there
+    typically a physical railing, and a thing genuinely ON the walkway there
     sits on that boundary — it must not be penalised as if over the void.
     """
     if not isinstance(point, Point):
@@ -3228,7 +3228,7 @@ def _point_in_no_go(point, zone_polys):
 def find_zone_for_point(hass, data, entity, floor_name, point):
     """Find zone for point, prioritize correct polygon, select nearest buffer if no correct zone matches.
 
-    No-go zones (issue #60) are skipped: a tracker can't be in one, so a fix
+    No-go zones (issue #60) are skipped: a thing can't be in one, so a fix
     there is reported as belonging to the nearest real zone (or "unknown").
     """
     zones = _floor_zone_polygons(hass, data, entity, floor_name)
@@ -3564,12 +3564,12 @@ def _register_calibration_services(hass) -> None:
         DOMAIN, "reset_corrections", _reset,
         schema=vol.Schema({vol.Optional("floor"): cv.string}),
     )
-    async def _tracker_heights(call: ServiceCall) -> None:
-        """Write per-tracker carry heights into the layout store.
+    async def _thing_heights(call: ServiceCall) -> None:
+        """Write per-thing carry heights into the layout store.
 
         Same reasoning as _heights: the layout lives in HA's Store, so a direct
         file edit is lost the next time anything saves. Keys are deliberately
-        NOT validated against seen devices - a tracker that has not been heard
+        NOT validated against seen devices - a thing that has not been heard
         yet should be configurable ahead of time, and the read path already
         ignores anything out of range.
         """
@@ -3579,24 +3579,25 @@ def _register_calibration_services(hass) -> None:
             data = get_layout_for_edit(hass)
             if not isinstance(data, dict):
                 raise HomeAssistantError("No Sextant layout saved yet.")
-            current = data.get("tracker_heights")
+            current = data.get("thing_heights")
             if not isinstance(current, dict):
                 current = {}
             current.update(heights)
-            data["tracker_heights"] = current
+            data["thing_heights"] = current
             await save_layout(hass, data)
-        _LOGGER.info("sextant.set_tracker_heights: %d tracker(s) set", len(heights))
+        _LOGGER.info("sextant.set_thing_heights: %d thing(s) set", len(heights))
 
     hass.services.async_register(
         DOMAIN, "set_auto_calibration", _auto,
         schema=vol.Schema({vol.Required("enabled"): cv.boolean}),
     )
-    hass.services.async_register(
-        DOMAIN, "set_tracker_heights", _tracker_heights,
-        schema=vol.Schema({
-            vol.Required("heights"): vol.Schema({cv.string: vol.All(vol.Coerce(float), vol.Range(min=0, max=5))}),
-        }),
-    )
+    heights_schema = vol.Schema({
+        vol.Required("heights"): vol.Schema({cv.string: vol.All(vol.Coerce(float), vol.Range(min=0, max=5))}),
+    })
+    hass.services.async_register(DOMAIN, "set_thing_heights", _thing_heights, schema=heights_schema)
+    # What a thing is called was "tracker" until 3.12.0. The old service name
+    # stays registered so an automation written against it keeps working.
+    hass.services.async_register(DOMAIN, "set_tracker_heights", _thing_heights, schema=heights_schema)
     hass.services.async_register(
         DOMAIN, "set_receiver_heights", _heights,
         schema=vol.Schema({
@@ -3636,7 +3637,7 @@ async def async_setup(hass, config):
             hass.http.register_view(SextantFrontendView())
             hass.http.register_view(SextantMapImageView())
             hass.http.register_view(SextantSaveAPIText())
-            hass.http.register_view(SextantUploadTrackerIconAPI())
+            hass.http.register_view(SextantUploadThingIconAPI())
             hass.http.register_view(SextantCordsAPI(hass))
             hass.http.register_view(SextantSelfTestAPI(hass))
             hass.data["sextant_views_registered"] = True
@@ -3648,7 +3649,7 @@ async def async_setup(hass, config):
 
         config_path = hass.config.path()
         target_dir = maps_dir(hass)
-        tracker_icons_dir = os.path.join(config_path, "www", "sextant_icons")
+        thing_icons_dir = os.path.join(config_path, "www", "sextant_icons")
 
         try:
             await aiofiles.os.makedirs(target_dir, exist_ok=True)
@@ -3660,10 +3661,10 @@ async def async_setup(hass, config):
         await migrate_maps_out_of_www(hass)
 
         try:
-            await aiofiles.os.makedirs(tracker_icons_dir, exist_ok=True)
-            _LOGGER.info(f"Folder {tracker_icons_dir} has been created or already existed")
+            await aiofiles.os.makedirs(thing_icons_dir, exist_ok=True)
+            _LOGGER.info(f"Folder {thing_icons_dir} has been created or already existed")
         except Exception as e:
-            _LOGGER.error(f"Could not create the folder {tracker_icons_dir}: {e}")
+            _LOGGER.error(f"Could not create the folder {thing_icons_dir}: {e}")
             return
 
         show_sidebar_panel = True
@@ -4039,8 +4040,8 @@ def list_map_files(maps_path):
         ]
 
 
-def list_tracker_icons(icons_path):
-    """Custom tracker icons as picker options (runs in the executor)."""
+def list_thing_icons(icons_path):
+    """Custom thing icons as picker options (runs in the executor)."""
     if not os.path.isdir(icons_path):
         return []
     with os.scandir(icons_path) as entries:
@@ -4051,11 +4052,11 @@ def list_tracker_icons(icons_path):
         ]
 
 
-class SextantUploadTrackerIconAPI(HomeAssistantView):
-    """API to upload custom tracker icons."""
+class SextantUploadThingIconAPI(HomeAssistantView):
+    """API to upload custom thing icons."""
 
-    url = "/api/sextant/upload_tracker_icon"
-    name = "api:sextant:upload_tracker_icon"
+    url = "/api/sextant/upload_thing_icon"
+    name = "api:sextant:upload_thing_icon"
     requires_auth = True
 
     async def post(self, request):
@@ -4081,7 +4082,7 @@ class SextantUploadTrackerIconAPI(HomeAssistantView):
             async with aiofiles.open(target_path, "wb") as f:
                 await f.write(icon_bytes)
         except Exception as e:
-            _LOGGER.error(f"Failed to upload tracker icon: {e}")
+            _LOGGER.error(f"Failed to upload thing icon: {e}")
             return web.Response(status=500, text="Failed to upload icon")
 
         return web.json_response({
@@ -4200,7 +4201,7 @@ def trilaterate(known_points, bounds=None, min_weight_radius=1e-3, stable_hint=N
     #
     #   1. receiver centroid — always plausible, and inside any bounds.
     #   2. the SMALLEST-radius receiver — the strongest single prior on where
-    #      the tracker is.
+    #      the thing is.
     #   3. the 1/r^2-weighted centroid — leans the same way as (2) without
     #      committing to one receiver.
     if bounds is not None:
@@ -4269,12 +4270,12 @@ def trilaterate(known_points, bounds=None, min_weight_radius=1e-3, stable_hint=N
 # Every receiver's true position is known (it is placed on the map) and Bermuda
 # measures the distance between scanners, so each receiver's position can be
 # solved from the OTHERS' measured distances -- through the SAME trilaterate() +
-# per-receiver correction + slant the live tracker uses -- and compared to where
+# per-receiver correction + slant the live thing uses -- and compared to where
 # it actually is (leave-one-out). This measures the SOLVER, per-receiver
 # calibration, and geometry with no parked beacon and no hand-measured truth.
 # It does NOT exercise the temporal filtering (a static, always-fresh anchor has
 # no motion to smooth or stale readings to reject), and it is an OPTIMISTIC
-# bound on real tracker accuracy: calibration is fit on these very inter-receiver
+# bound on real thing accuracy: calibration is fit on these very inter-receiver
 # links, and receiver-to-receiver paths (ceiling height, clean line of sight)
 # are easier than a body-worn beacon's. Consumed by tools/sextant_eval.py `selftest`.
 SELFTEST_MIN_SAMPLES = 3  # need a median over at least this many raw distances
@@ -4397,7 +4398,7 @@ def run_selftest(hass, samples=None, corrections=None, floors=None):
     on one floor with the metric that matters, before writing anything.
 
     Solves on the RAW inter-receiver distances Sextant collects for calibration
-    (median per link), not the Bermuda-filtered distance sensor the live tracker
+    (median per link), not the Bermuda-filtered distance sensor the live thing
     reads — so the numbers also exclude Bermuda's own smoothing.
 
     ``samples`` may be a pre-snapshotted ``{"tx|rx": [floats]}`` taken on the
@@ -4420,7 +4421,7 @@ def run_selftest(hass, samples=None, corrections=None, floors=None):
         samples = get_calibration_state(hass).get("samples", {})
 
     def _measured_m(target, rx):
-        # The live tracker sees the beacon (target) transmit and a receiver hear
+        # The live thing sees the beacon (target) transmit and a receiver hear
         # it, so use exactly that direction ("target|rx") and the receiver's gain.
         vals = [float(v) for v in samples.get(f"{target}|{rx}", [])
                 if isinstance(v, (int, float)) and v > 0]
@@ -4473,7 +4474,7 @@ def run_selftest(hass, samples=None, corrections=None, floors=None):
         "unsolved": unsolved,
         "counts": {"placed": len(receivers), "solved": len(solved), "unsolved": len(unsolved)},
         # Floors in layout order and their rooms, so the breakdown can list a
-        # room that has no proxy in it at all (a tracker there is placed from
+        # room that has no proxy in it at all (a thing there is placed from
         # its neighbours' proxies, which is worth knowing).
         "floors": [f.get("name") for f in (coords.get("floor", []) if isinstance(coords, dict) else [])],
         "rooms": {floor: [name for name, _ring in entries] for floor, entries in rooms.items()},

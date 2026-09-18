@@ -119,8 +119,8 @@ set_receiver_heights:
           unit_of_measurement: m
           mode: box
 
-set_tracker_heights:
-  name: Set tracker heights
+set_thing_heights:
+  name: Set thing heights
   description: >-
     Record how high above the floor each tracked device is carried, in metres.
     Used for the slant-to-horizontal correction, and for the floor election,
@@ -131,9 +131,24 @@ set_tracker_heights:
     heights:
       name: Heights
       description: >-
-        Map of tracker key (as used in the layout, e.g. "primrose") to height
-        in metres, 0 to 5. Keys are not validated against existing trackers, so
+        Map of thing key (as used in the layout, e.g. "primrose") to height
+        in metres, 0 to 5. Keys are not validated against existing things, so
         a device that has not been seen yet can be configured ahead of time.
+      required: true
+      example: '{"primrose": 0.5, "leela": 0.2}'
+      selector:
+        object:
+
+set_tracker_heights:
+  name: Set tracker heights (old name)
+  description: >-
+    The old name for set_thing_heights, kept so automations written before
+    "tracker" became "thing" keep working. Same fields, same effect; prefer
+    set_thing_heights in anything new.
+  fields:
+    heights:
+      name: Heights
+      description: Map of thing key to height in metres, 0 to 5.
       required: true
       example: '{"primrose": 0.5, "leela": 0.2}'
       selector:

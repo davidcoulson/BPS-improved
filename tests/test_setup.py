@@ -88,7 +88,7 @@ def test_setup_and_unload_round_trip(tmp_path, monkeypatch):
     assert run(sextant.async_setup_entry(hass, entry)) is True
     assert entry.forwarded == [["sensor"]]
     assert {v.__class__.__name__ for v in hass.http.views} == {
-        "SextantFrontendView", "SextantMapImageView", "SextantSaveAPIText", "SextantUploadTrackerIconAPI",
+        "SextantFrontendView", "SextantMapImageView", "SextantSaveAPIText", "SextantUploadThingIconAPI",
         "SextantCordsAPI", "SextantSelfTestAPI"}
     assert sorted(name for domain, name in hass.services.registered if domain == "sextant") == _service_names()
     handlers = [n for n in dir(ws) if n.startswith("ws_")]

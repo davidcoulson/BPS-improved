@@ -9,7 +9,7 @@
   Bermuda is enough. For everything Sextant does, install
   [davidcoulson/bermuda](https://github.com/davidcoulson/bermuda) (the
   `fork-testing` releases): it adds the device-management API behind the
-  Trackers and Bermuda pages, proxy-to-proxy ranging for fingerprint fusion
+  Things and Bermuda pages, proxy-to-proxy ranging for fingerprint fusion
   and calibration, RSSI history for the median estimator, per-scanner RSSI
   offsets so calibration can be written into Bermuda, and Tile tracking
   across address rotations. Sextant detects what the installed Bermuda
@@ -44,7 +44,7 @@ No SciPy: the solver is pure numpy, so 32-bit and constrained installs work.
 3. Open **Sextant** in the sidebar. On the **Edit** page add a floor from a
    floor-plan image, set its scale by measuring a known distance, place the
    proxies (picked from the list Bermuda reports), draw the rooms, Save.
-4. On **Trackers**, pick what to track from everything Bermuda hears.
+4. On **Things**, pick what to track from everything Bermuda hears.
    Positions appear on **Live** within a cycle.
 
 The integration's options (⋮ on its card) hold the sidebar toggle and the
