@@ -9,7 +9,7 @@
  */
 import { LitElement, html, css, nothing } from "./lit.js";
 import { SextantMap, polygonCentroid } from "./sextant-map.js";
-import { sharedStyles, widgetStyles, toast, callWS, confirmDialog, fmtNum, uiField, uiSelect, uiSwitch, uiButton, proxyName, lenUnit, toDisplayLen, fromDisplayLen, fmtScale, isImperial } from "./sextant-ui.js";
+import { sharedStyles, widgetStyles, toast, callWS, confirmDialog, fmtNum, uiField, uiSelect, uiSwitch, uiButton, proxyName, lenUnit, toDisplayLen, fromDisplayLen, fmtScale, isImperial, THING_CLASSES } from "./sextant-ui.js";
 import { mapUrlFor } from "./sextant-panel.js";
 
 // [id, label under the icon, icon, tooltip]
@@ -441,9 +441,26 @@ class SextantEdit extends LitElement {
         <div class="row">
           ${uiSelect({ label: "Parent room", value: item.parent || "", options: [{ value: "", label: "none" }, ...zones.map((z) => ({ value: z.zone_id, label: z.entity_id }))], onChange: (v) => this._edit("parent", v || null), style: "flex: 1" })}
           <label class="field">Colour<input type="color" .value=${this._hex(item.color)} @change=${(e) => this._edit("color", e.target.value)}></label>
+        </div>
+        <div class="classes">
+          <div class="muted small">Takes which things? None ticked means any of them. A bedside table is for a phone, a watch, keys; a cat bed is for the cat.</div>
+          <div class="chips">
+            ${THING_CLASSES.filter(([k]) => k).map(([k, label]) => html`<span class="chipwrap">${uiSwitch({
+              label, checked: (item.classes || []).includes(k),
+              onChange: (on) => this._edit("classes", this._toggleClass(item.classes, k, on)),
+            })}</span>`)}
+          </div>
         </div>` : nothing}
       <div class="row"><span class="muted small">${(item.cords?.length ?? 1)} point(s)</span><span class="grow"></span>${uiButton({ label: "Delete", kind: "danger", onClick: () => this._deleteSelection() })}</div>
     </div>`;
+  }
+
+  /** The spot's class list with `cls` added or removed; undefined when empty,
+   * so a spot that takes anything carries no key at all. */
+  _toggleClass(current, cls, on) {
+    const next = (current || []).filter((c) => c !== cls);
+    if (on) next.push(cls);
+    return next.length ? next : undefined;
   }
 
   _hex(color) {
@@ -457,6 +474,10 @@ class SextantEdit extends LitElement {
   }
 
   static styles = [sharedStyles, widgetStyles, css`
+    .classes { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+    .classes .chips { gap: 4px; }
+    .chipwrap { display: inline-flex; }
+    .chipwrap > ha-formfield, .chipwrap > label.inline { border: 1px solid var(--divider-color); border-radius: 999px; padding: 0 10px 0 2px; font-size: 12px; }
     :host { display: grid; grid-template-columns: 1fr 320px; min-height: 0; }
     .stage { position: relative; min-width: 0; }
     canvas { width: 100%; height: 100%; display: block; --sextant-map-bg: var(--card-background-color, #fff); }

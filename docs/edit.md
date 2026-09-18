@@ -16,7 +16,10 @@ by measuring a known distance. Give a floor a *level* (0 ground, -1
 basement, 1 above) for ordering and an election *bias* (1.15 gives the
 ground floor a standing head start). Padlocks lock rooms, spots and
 proxies against selection so you cannot drag a wall while placing a proxy;
-rooms start locked. Undo holds fifty steps. **Adjust rooms** squares
+rooms start locked. A selected spot can be limited to the thing classes it
+takes — tick phone, watch and keys on a bedside table, cat on a cat bed —
+and nothing else will be placed there; tick none and it takes anything.
+Undo holds fifty steps. **Adjust rooms** squares
 near-rectangles, snaps neighbours to shared walls and removes overlaps
 with a live preview. Nothing is written until Save.
 

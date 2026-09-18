@@ -64,7 +64,11 @@ clearly moves.
 **Spots.** The same election scaled down: the share of the ellipse inside
 each spot of the elected room, entered at `subzone_enter_prob`, left at
 `subzone_unlock_margin` outside, every change waiting
-`subzone_switch_secs`. A locked room keeps its spot.
+`subzone_switch_secs`. A locked room keeps its spot. A spot can be limited
+to certain [classes](things.md) — a bedside table to a phone, a watch and
+keys, a cat bed to the cat — and is then not a candidate for anything else
+at all, so the cat bed never competes for the phone. A spot with no classes
+set takes any thing, which is how every spot drawn before this behaves.
 
 **Near-field anchor.** A thing one proxy reads inside `anchor_max_m`
 with every other proxy at least `anchor_ratio` times farther, for

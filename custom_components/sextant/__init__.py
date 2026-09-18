@@ -2993,9 +2993,15 @@ def _elect_subzone(entity, floor_name, zone, zone_locked, point, kf_state, sub_p
     3. Dwell: any change must persist for subzone_switch_secs, wall clock.
     4. The zone lock carries over: a thing the zone election holds still
        (the phone on the table) keeps its sub-zone too.
+
+    A spot restricted to certain classes (spot_classes) is not a candidate for
+    a thing of any other class at all, so a cat's bed never competes for a
+    phone and the phone's own spots are judged without it.
     """
     now = time.time() if now is None else now
-    polys = [(sid, parent, poly) for sid, parent, poly in sub_polys if parent == zone]
+    cls = thing_class(layout, entity)
+    polys = [(sid, parent, poly) for sid, parent, poly, allowed in sub_polys
+             if parent == zone and spot_accepts(allowed, cls)]
     st = _subzone_state.get(entity)
     if st is None or st.get("floor") != floor_name or st.get("zone") != zone:
         st = _subzone_state[entity] = {
@@ -3304,12 +3310,39 @@ def find_nearest_zone(hass, data, entity, floor_name, point):
     return zones.allowed_ids[int(np.argmin(distances))]
 
 
+def spot_classes(sub) -> frozenset:
+    """The thing classes a spot accepts, or an empty set for any of them.
+
+    A bedside table is for a phone, a watch, keys; the cat bed on the landing
+    is for the cat. Without this every spot competes for every thing, and the
+    one that happens to be nearest wins - which is how a phone ends up "on"
+    the cat bed. Stored on the sub-zone as ``classes``; absent or empty keeps
+    the original behaviour, so nothing drawn before this changes.
+    """
+    raw = sub.get("classes") if isinstance(sub, dict) else None
+    return frozenset(c for c in raw if isinstance(c, str) and c) if isinstance(raw, list) else frozenset()
+
+
+def thing_class(layout, entity) -> str:
+    """The class given to this thing on the Things page ("" when it has none)."""
+    classes = layout.get("thing_classes") if isinstance(layout, dict) else None
+    value = classes.get(entity) if isinstance(classes, dict) else None
+    return value if isinstance(value, str) else ""
+
+
+def spot_accepts(allowed, cls) -> bool:
+    """Whether a spot restricted to `allowed` takes a thing of class `cls`."""
+    return not allowed or cls in allowed
+
+
 def _floor_sub_zone_polygons(hass, data, entity, floor_name):
     """(sub-zone name, parent zone name, polygon) tuples for the entity's floor.
 
     Sub-zones are small precise areas drawn inside a zone (a couch, a desk), so
     they are matched strictly (no soft buffer). They live in a separate
     "subzones" list, so the main-zone election/snap/nearest logic is untouched.
+    The fourth item is the set of thing classes the spot accepts (empty: any) -
+    see spot_classes.
 
     Cached the same way and for the same reason as _floor_zone_polygons.
     """
@@ -3347,7 +3380,8 @@ def _floor_sub_zone_polygons(hass, data, entity, floor_name):
                         continue
                     polygon = repaired
                 parent_ref = sub.get("parent")
-                results.append((sub.get("entity_id"), zone_name_by_id.get(parent_ref, parent_ref), polygon))
+                results.append((sub.get("entity_id"), zone_name_by_id.get(parent_ref, parent_ref),
+                                polygon, spot_classes(sub)))
         break
 
     cache[cache_key] = (version, results)
@@ -3360,7 +3394,10 @@ def find_sub_zone_for_point(hass, data, entity, floor_name, point):
     Returns (sub_zone_name, parent_zone_name); ("unknown", None) when the point
     is in no sub-zone.
     """
-    for sub_id, parent_id, polygon in _floor_sub_zone_polygons(hass, data, entity, floor_name):
+    cls = thing_class((data[0] or {}).get("data") if data else None, entity)
+    for sub_id, parent_id, polygon, allowed in _floor_sub_zone_polygons(hass, data, entity, floor_name):
+        if not spot_accepts(allowed, cls):
+            continue
         if polygon.covers(point):
             return sub_id, parent_id
     return "unknown", None

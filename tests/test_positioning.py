@@ -1259,7 +1259,9 @@ def _sofa_polys():
     # desk is at (7..9, 7..8). 100 px/m.
     sofa = Polygon([(200, 200), (400, 200), (400, 300), (200, 300)])
     desk = Polygon([(700, 700), (900, 700), (900, 800), (700, 800)])
-    return [("Sofa", "Living", sofa), ("Desk", "Living", desk), ("Hook", "Hall", Polygon([(0, 0), (10, 0), (10, 10)]))]
+    # The fourth item is the classes the spot takes; empty means any of them.
+    return [("Sofa", "Living", sofa, frozenset()), ("Desk", "Living", desk, frozenset()),
+            ("Hook", "Hall", Polygon([(0, 0), (10, 0), (10, 10)]), frozenset())]
 
 
 def _sub(entity, point, now, *, zone="Living", locked=False, layout=None, scale=100.0):
@@ -1454,3 +1456,72 @@ def test_selftest_takes_candidate_corrections_and_a_floor_filter():
     hass.data["sextant"]["layout"]["floor"].append({"name": "Up", "scale": SCALE, "receivers": [{"entity_id": "u1", "cords": {"x": 0, "y": 0}}]})
     only = sextant.run_selftest(hass, floors={"F"})
     assert {r["entity"] for r in only["receivers"]} == {"r1", "r2", "r3", "r4"} and not any(u["entity"] == "u1" for u in only["unsolved"])
+
+
+# --- spots that only take certain classes ------------------------------------
+
+def _class_polys():
+    """A bedside table for a phone, a watch or keys, and a cat bed for the cat,
+    a couple of metres apart in the same room."""
+    from shapely.geometry import Polygon
+    bedside = Polygon([(200, 200), (400, 200), (400, 300), (200, 300)])
+    catbed = Polygon([(700, 700), (900, 700), (900, 800), (700, 800)])
+    return [("Bedside", "Bedroom", bedside, frozenset({"phone", "watch", "keys"})),
+            ("Cat bed", "Bedroom", catbed, frozenset({"cat"}))]
+
+
+LAYOUT_CLASSES = {
+    "tuning": {"subzone_switch_secs": 20.0, "zone_prob_smoothing": 0.6},
+    "thing_classes": {"phone": "phone", "watch": "watch", "meg": "cat", "nameless": ""},
+}
+
+
+def _settle(entity, point, polys, layout=LAYOUT_CLASSES, t=1000.0):
+    from shapely.geometry import Point
+    sextant._subzone_state.pop(entity, None)
+    out = None
+    for dt in (0, 10, 20, 31, 41):
+        out = sextant._elect_subzone(entity, "F", "Bedroom", False, Point(*point), None,
+                                     polys, 100.0, layout, now=t + dt)
+    return out
+
+
+BEDSIDE, CATBED = (300, 250), (800, 750)
+
+
+def test_a_spot_only_takes_the_classes_it_is_given():
+    """The phone on the bedside table, the cat in her bed, and neither in the other."""
+    polys = _class_polys()
+    assert _settle("phone", BEDSIDE, polys) == ("Bedside", "Bedroom")
+    assert _settle("meg", CATBED, polys) == ("Cat bed", "Bedroom")
+    # Sitting exactly where the other's spot is still gets nothing.
+    assert _settle("meg", BEDSIDE, polys) == ("unknown", "Bedroom")
+    assert _settle("phone", CATBED, polys) == ("unknown", "Bedroom")
+
+
+def test_a_spot_restricted_to_several_classes_takes_any_of_them():
+    polys = _class_polys()
+    assert _settle("watch", BEDSIDE, polys) == ("Bedside", "Bedroom")
+
+
+def test_a_thing_with_no_class_only_gets_the_open_spots():
+    restricted = _class_polys()
+    assert _settle("nameless", BEDSIDE, restricted) == ("unknown", "Bedroom")
+    # The same spot without a class list takes it, as every spot did before.
+    open_spot = [("Bedside", "Bedroom", restricted[0][2], frozenset())]
+    assert _settle("nameless", BEDSIDE, open_spot) == ("Bedside", "Bedroom")
+    assert _settle("meg", BEDSIDE, open_spot) == ("Bedside", "Bedroom")
+
+
+def test_spot_class_helpers():
+    assert sextant.spot_classes({"classes": ["cat", "dog"]}) == frozenset({"cat", "dog"})
+    assert sextant.spot_classes({"classes": []}) == frozenset()
+    assert sextant.spot_classes({}) == frozenset() and sextant.spot_classes(None) == frozenset()
+    assert sextant.spot_classes({"classes": "cat"}) == frozenset()          # a bad shape is "any"
+    assert sextant.spot_classes({"classes": ["cat", "", 7]}) == frozenset({"cat"})
+    assert sextant.spot_accepts(frozenset(), "anything") is True            # unrestricted
+    assert sextant.spot_accepts(frozenset({"cat"}), "cat") is True
+    assert sextant.spot_accepts(frozenset({"cat"}), "phone") is False
+    assert sextant.thing_class({"thing_classes": {"meg": "cat"}}, "meg") == "cat"
+    assert sextant.thing_class({"thing_classes": {}}, "meg") == ""
+    assert sextant.thing_class(None, "meg") == "" and sextant.thing_class({}, "meg") == ""
