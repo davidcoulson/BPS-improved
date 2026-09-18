@@ -2,6 +2,8 @@
 
 # Advice
 
+![The Advice page: one change plan per floor, worst floor first, each with its own tally and a button that marks every suggested spot on the plan](../img/screenshots/sextant-advice.png)
+
 Which rooms the proxies serve worst, and where one more would help. Press
 **Analyse the house** and every room on every floor is judged two ways:
 
