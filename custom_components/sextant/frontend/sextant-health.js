@@ -386,7 +386,13 @@ class SextantHealth extends LitElement {
     const sampling = cal?.state === "sampling";
     const floor = this._calFloor;
     const cur = results[floor];
-    const worse = !!cur && cur.error_factor_after > cur.error_factor_before;
+    // "Worse" = the self-test says this solve would not place the floor's
+    // proxies better than what is in place (or than nothing); without a
+    // verdict, the fit's own error factor decides.
+    const judged = (r) => (r?.selftest ? r.selftest.new_m > Math.min(r.selftest.none_m, r.selftest.current_m ?? Infinity) : !!r && r.error_factor_after > r.error_factor_before);
+    const worse = judged(cur);
+    const verdict = (r) => (r?.selftest ? html` <span class="muted small">self-test median: none ${fmtLen(r.selftest.none_m, this.hass, 2)}${r.selftest.current_m != null ? ` · in place ${fmtLen(r.selftest.current_m, this.hass, 2)}` : ""} · this solve ${fmtLen(r.selftest.new_m, this.hass, 2)}</span>` : nothing);
+    const decision = (name) => { const d = cal?.auto_decisions?.[name]; return d ? html` <span class="pill ${d.action === "apply" ? "ok" : d.action === "revert" ? "warn" : ""}" title=${d.reason}>auto: ${d.action === "apply" ? "applied" : d.action === "revert" ? "removed its corrections" : "held back"}</span>` : nothing; };
     return html`<section class="card wide">
       <h3>Proxy calibration <span class="muted small">${floor ? `for ${floor}, picked in the header` : ""}</span></h3>
       <p class="small muted">Every proxy hears every other proxy's beacon at a known distance; a run collects those readings and solves one range correction per proxy. Apply only when the error factor after is lower than before, otherwise the corrections are absorbing placement error, not radio bias.</p>
@@ -410,7 +416,7 @@ class SextantHealth extends LitElement {
           ${uiButton({ label: "Reset", kind: "danger", disabled: !!this._busy, onClick: () => confirmDialog(`Reset corrections on ${floor}?`) && this._calAction("reset", { floor }) })}
         </div>
         ${Object.entries(results).map(([name, r]) => html`<details ?open=${name === floor}>
-          <summary>${name}: ${r.pairs_used} pairs, error ×${fmtNum(r.error_factor_before, 2)} → ×${fmtNum(r.error_factor_after, 2)}${r.error_factor_after > r.error_factor_before ? html` <span class="pill warn">worse: do not apply</span>` : nothing}${r.low_confidence?.length ? html` <span class="pill warn">${r.low_confidence.length} low confidence</span>` : nothing}</summary>
+          <summary>${name}: ${r.pairs_used} pairs, error ×${fmtNum(r.error_factor_before, 2)} → ×${fmtNum(r.error_factor_after, 2)}${judged(r) ? html` <span class="pill warn">would not help: do not apply</span>` : nothing}${r.low_confidence?.length ? html` <span class="pill warn">${r.low_confidence.length} low confidence</span>` : nothing}${decision(name)}${verdict(r)}</summary>
           <div class="wrap"><table><tr><th>Proxy</th><th class="num">Factor</th><th class="num">≈ dB</th></tr>
             ${Object.entries(r.receivers || {}).sort((a, b) => Math.abs(b[1] - 1) - Math.abs(a[1] - 1)).map(([slug, f]) => html`<tr><td>${proxyName(this.data, slug)}${(r.low_confidence || []).includes(slug) ? html` <span class="pill warn">low</span>` : nothing}</td><td class="num">${fmtNum(f, 3)}</td><td class="num">${fmtNum(r.rx_bias_db_equident?.[slug], 1)}</td></tr>`)}
           </table></div>

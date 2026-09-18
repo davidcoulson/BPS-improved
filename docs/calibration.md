@@ -8,12 +8,16 @@ Proxies calibrate each other: every proxy hears every other proxy's beacon
 at a known distance, a run collects those readings for the floor picked
 in the header and solves one range correction per proxy. Start a timed run
 or leave **Auto
-calibration** on (samples every 30 s into a rolling six-hour window,
-re-solves every 15 minutes, re-applies when a factor moves by more than
-1 %). The result lists each proxy's factor and the equivalent dB, flags
-low-confidence proxies, and compares the error before and after; a solve
-that makes things worse is marked *do not apply* and Apply asks for a
-confirmation before storing it. **Apply** stores the
+calibration** on: it samples every 30 s into a rolling six-hour window
+across every floor and re-solves every 15 minutes. Before writing anything
+it judges each floor's solve with the self-test (how far each proxy lands
+from where it is placed) three ways: with no corrections, with the
+corrections in place, and with the new ones. It applies the new set only
+when that median improves by at least 2 %, takes its own earlier
+corrections out again if none beats them, and otherwise leaves the floor
+alone; the decision and the three figures show against each floor's
+result. A manual solve gets the same verdict, and a solve that would not
+help is marked *do not apply* (Apply then asks for a confirmation). **Apply** stores the
 factors with the layout, or with `calibration_target: bermuda` writes them
 into Bermuda as per-scanner RSSI offsets so Bermuda's own sensors are
 corrected too. **Reset** removes them.

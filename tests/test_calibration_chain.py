@@ -188,3 +188,65 @@ def test_auto_apply_rewrites_corrections_the_layout_lost(tmp_path):
     run(cal_mod._auto_solve_and_apply_locked(hass, cal))
     again = {r["entity_id"]: r.get("correction") for r in st.get_layout(hass)["floor"][0]["receivers"]}
     assert again["r2"] is not None and abs(again["r2"] - first["r2"]) < 0.05
+
+
+def test_auto_decision_rules():
+    fit_ok = {"error_factor_before": 1.4, "error_factor_after": 1.3}
+    fit_bad = {"error_factor_before": 1.4, "error_factor_after": 1.5}
+    assert cal_mod._auto_decision(None, fit_ok)[0] == "apply"
+    assert cal_mod._auto_decision(None, fit_bad)[0] == "hold"
+    # Nothing in place: apply when the new set beats none by the margin.
+    assert cal_mod._auto_decision({"none_m": 2.0, "current_m": None, "new_m": 1.8, "solved": 5, "current_auto": False}, fit_bad)[0] == "apply"
+    assert cal_mod._auto_decision({"none_m": 2.0, "current_m": None, "new_m": 1.99, "solved": 5, "current_auto": False}, fit_ok)[0] == "hold"
+    # Corrections in place: the new set must beat them, not just none.
+    assert cal_mod._auto_decision({"none_m": 2.0, "current_m": 1.5, "new_m": 1.6, "solved": 5, "current_auto": True}, fit_ok)[0] == "hold"
+    assert cal_mod._auto_decision({"none_m": 2.0, "current_m": 1.5, "new_m": 1.4, "solved": 5, "current_auto": True}, fit_ok)[0] == "apply"
+    # Auto's own corrections are taken out when none beats them; a person's are not touched.
+    assert cal_mod._auto_decision({"none_m": 1.5, "current_m": 2.0, "new_m": 2.1, "solved": 5, "current_auto": True}, fit_ok)[0] == "revert"
+    assert cal_mod._auto_decision({"none_m": 1.5, "current_m": 2.0, "new_m": 2.1, "solved": 5, "current_auto": False}, fit_ok)[0] == "hold"
+
+
+def _auto_house(tmp_path, judge):
+    hass = _hass(tmp_path)
+    hass.async_create_task = lambda coro: coro.close()
+    cal = _prepared(hass)
+    rng = random.Random(9)
+    bias = {s: 1.0 for s in ADDR}
+    bias["r2"] = 1.3
+    for k in range(12):
+        cal_mod._ingest_dump(cal, _dump(bias, rng, stamp=1000.0 + k))
+
+    async def fake_judge(_hass, _cal, _coords, floor, result):
+        return judge(floor, result)
+
+    return hass, cal, fake_judge
+
+
+def test_auto_applies_only_what_the_selftest_confirms(tmp_path, monkeypatch):
+    verdict = {"none_m": 2.0, "current_m": None, "new_m": 2.4, "solved": 5, "current_auto": False}
+    hass, cal, fake = _auto_house(tmp_path, lambda floor, result: dict(verdict))
+    monkeypatch.setattr(cal_mod, "_judge_by_selftest", fake)
+    run(cal_mod._auto_solve_and_apply_locked(hass, cal))
+    assert all(r.get("correction") is None for r in st.get_layout(hass)["floor"][0]["receivers"])
+    assert cal["auto_decisions"]["F"]["action"] == "hold" and "F" not in cal["applied"]
+    assert cal["results"]["F"]["selftest"] == verdict
+    verdict.update(new_m=1.7)
+    run(cal_mod._auto_solve_and_apply_locked(hass, cal))
+    assert cal["auto_decisions"]["F"]["action"] == "apply"
+    stored = {r["entity_id"]: r.get("correction") for r in st.get_layout(hass)["floor"][0]["receivers"]}
+    assert stored["r2"] is not None and stored["r2"] < 0.9 and st.get_layout(hass)["floor"][0]["calibration"]["auto"] is True
+
+
+def test_auto_takes_its_own_corrections_out_when_none_beats_them(tmp_path, monkeypatch):
+    state = {"v": {"none_m": 2.0, "current_m": None, "new_m": 1.5, "solved": 5, "current_auto": False}}
+    hass, cal, fake = _auto_house(tmp_path, lambda floor, result: dict(state["v"]))
+    monkeypatch.setattr(cal_mod, "_judge_by_selftest", fake)
+    run(cal_mod._auto_solve_and_apply_locked(hass, cal))
+    assert cal["auto_decisions"]["F"]["action"] == "apply"
+    # Next window: the self-test now says no corrections would be better than what auto wrote.
+    state["v"] = {"none_m": 1.2, "current_m": 1.5, "new_m": 1.6, "solved": 5, "current_auto": True}
+    cal["applied"]["F"] = {k: v * 1.5 for k, v in cal["applied"]["F"].items()}  # make the new solve differ by >1 %
+    run(cal_mod._auto_solve_and_apply_locked(hass, cal))
+    assert cal["auto_decisions"]["F"]["action"] == "revert" and "F" not in cal["applied"]
+    floor = st.get_layout(hass)["floor"][0]
+    assert all(r.get("correction") is None for r in floor["receivers"]) and floor["calibration"]["reverted"] is True

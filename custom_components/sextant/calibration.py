@@ -219,6 +219,7 @@ def get_calibration_state(hass) -> dict:
             "results": {},  # floor name -> latest solve result
             "applied": {},  # floor name -> corrections last written to disk
             "last_solved_at": None,
+            "auto_decisions": {},  # floor name -> what the last auto solve did and why
             "error": None,
             "task": None,
         },
@@ -752,6 +753,70 @@ async def _auto_solve_and_apply(hass, cal: dict) -> None:
         await _auto_solve_and_apply_locked(hass, cal)
 
 
+JUDGE_MARGIN = 0.02  # a candidate must beat the incumbent's median by this much (relative)
+
+
+async def _judge_by_selftest(hass, cal: dict, coords: dict, floor: dict, result: dict):
+    """Median self-test error on this floor with no corrections, with the ones
+    in place, and with this solve's. None when too few proxies are solvable.
+
+    The fit's own before/after error factor is a median over pairs that the
+    asymmetric loss deliberately leaves unexplained (walls), so it can read
+    worse while the fit is fine. The leave-one-out self-test is the metric
+    that matters - how far each proxy lands from where it is placed - and
+    it takes a candidate correction set without writing it anywhere.
+    """
+    from . import run_selftest  # noqa: PLC0415 - the package imports this module
+
+    floor_name = floor.get("name")
+    slugs = [str(r.get("entity_id")) for r in floor.get("receivers", []) if r.get("entity_id")]
+    current = {str(r.get("entity_id")): r.get("correction") for r in floor.get("receivers", [])
+               if isinstance(r.get("correction"), (int, float)) and r.get("correction") > 0}
+    samples = solve_snapshot(cal)["samples"]
+    candidates = {
+        "none": {slug: 1.0 for slug in slugs},
+        "current": {slug: current.get(slug, 1.0) for slug in slugs},
+        "new": {slug: result["receivers"].get(slug, current.get(slug, 1.0)) for slug in slugs},
+    }
+    medians, solved = {}, {}
+    for name, corrections in candidates.items():
+        res = await hass.async_add_executor_job(run_selftest, hass, samples, corrections, {floor_name})
+        errs = sorted(r["error_m"] for r in res.get("receivers", []) if isinstance(r.get("error_m"), (int, float)))
+        solved[name] = len(errs)
+        medians[name] = float(np.median(errs)) if errs else None
+    if min(solved.values()) < 3:
+        return None
+    stamp = floor.get("calibration") or {}
+    return {
+        "none_m": round(medians["none"], 3),
+        "current_m": round(medians["current"], 3) if current else None,
+        "new_m": round(medians["new"], 3),
+        "solved": solved["new"],
+        "current_auto": bool(current) and bool(stamp.get("auto")),
+    }
+
+
+def _auto_decision(judge, result):
+    """("apply" | "hold" | "revert", reason) for an auto solve.
+
+    With a self-test verdict: apply a solve that beats both no corrections and
+    the ones in place by JUDGE_MARGIN; take out corrections auto itself wrote
+    when none beats them by that margin; otherwise leave the floor alone.
+    Without one (too few solvable proxies), fall back to the fit's own
+    error factor: apply only if it did not get worse.
+    """
+    if not judge:
+        worse = result["error_factor_after"] > result["error_factor_before"]
+        return ("hold", "fit reads worse than no correction; too few proxies for the self-test") if worse else ("apply", "fit improves; too few proxies for the self-test")
+    none_m, current_m, new_m = judge["none_m"], judge["current_m"], judge["new_m"]
+    incumbent = current_m if current_m is not None else none_m
+    if new_m <= incumbent * (1 - JUDGE_MARGIN) and new_m <= none_m:
+        return "apply", f"self-test median {incumbent:.2f} m -> {new_m:.2f} m"
+    if current_m is not None and judge.get("current_auto") and none_m <= current_m * (1 - JUDGE_MARGIN):
+        return "revert", f"no corrections beat the ones auto applied: {current_m:.2f} m -> {none_m:.2f} m"
+    return "hold", f"this solve would be {new_m:.2f} m against {incumbent:.2f} m in place"
+
+
 async def _auto_solve_and_apply_locked(hass, cal: dict) -> None:
     # Re-read inside the lock so a concurrent writer is not clobbered; the
     # wrapper's pre-lock read was only to refresh the matching state.
@@ -776,34 +841,51 @@ async def _auto_solve_and_apply_locked(hass, cal: dict) -> None:
         cal["last_solved_at"] = result["solved_at"]
 
         previous = cal["applied"].get(floor_name, {})
-        if previous and _calibration_target(coords) != "bermuda":
+        decisions = cal.setdefault("auto_decisions", {})
+        now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        if _calibration_target(coords) == "bermuda":
+            # Offsets already written are inside the samples, so each solve
+            # fits the RESIDUAL: nothing to do while it stays near 1.0. (The
+            # self-test cannot judge offsets that live inside Bermuda.)
+            deltas = [abs(c - 1.0) for c in result["receivers"].values()]
+            if previous and deltas and max(deltas) < APPLY_EPSILON:
+                decisions[floor_name] = {"action": "hold", "reason": "residual within 1 %", "at": now_iso}
+                continue
+            action, reason = "apply", "residual moved"
+        else:
             # "Applied" is what this loop last wrote; if the layout no longer
             # carries those corrections (an older copy was saved over it),
-            # write them again rather than deciding nothing has changed.
+            # judge afresh rather than deciding nothing has changed.
             stored = {str(r.get("entity_id")): r.get("correction") for r in floor.get("receivers", [])}
             if any(stored.get(slug) is None for slug in previous):
                 previous = {}
-        if _calibration_target(coords) == "bermuda":
-            # Offsets already written are inside the samples, so each solve
-            # fits the RESIDUAL: nothing to do while it stays near 1.0.
-            deltas = [abs(c - 1.0) for c in result["receivers"].values()]
+            deltas = [abs(result["receivers"][slug] / previous.get(slug, 1.0) - 1.0) for slug in result["receivers"]]
             if previous and deltas and max(deltas) < APPLY_EPSILON:
+                decisions[floor_name] = {"action": "hold", "reason": "no factor moved more than 1 %", "at": now_iso}
                 continue
-        else:
-            deltas = [
-                abs(result["receivers"][slug] / previous.get(slug, 1.0) - 1.0)
-                for slug in result["receivers"]
-            ]
-            if previous and deltas and max(deltas) < APPLY_EPSILON:
-                continue  # nothing moved enough to rewrite the file
+            judge = await _judge_by_selftest(hass, cal, coords, floor, result)
+            result["selftest"] = judge
+            action, reason = _auto_decision(judge, result)
 
-        try:
-            _write_floor_corrections(hass, coords, floor, result, auto=True)
-        except ValueError as err:
-            _LOGGER.warning("Auto-calibration could not apply for %s: %s", floor_name, err)
-            continue
-        cal["applied"][floor_name] = dict(result["receivers"])
-        changed = True
+        decisions[floor_name] = {"action": action, "reason": reason, "at": now_iso, **({"selftest": result.get("selftest")} if result.get("selftest") else {})}
+        if action == "apply":
+            try:
+                _write_floor_corrections(hass, coords, floor, result, auto=True)
+            except ValueError as err:
+                _LOGGER.warning("Auto-calibration could not apply for %s: %s", floor_name, err)
+                continue
+            cal["applied"][floor_name] = dict(result["receivers"])
+            changed = True
+            _LOGGER.info("Auto-calibration applied on %s: %s", floor_name, reason)
+        elif action == "revert":
+            for receiver in floor.get("receivers", []):
+                receiver.pop("correction", None)
+            floor["calibration"] = {**(floor.get("calibration") or {}), "applied_at": now_iso, "auto": True, "reverted": True}
+            cal["applied"].pop(floor_name, None)
+            changed = True
+            _LOGGER.info("Auto-calibration removed its corrections on %s: %s", floor_name, reason)
+        else:
+            _LOGGER.info("Auto-calibration held back on %s: %s", floor_name, reason)
 
     if changed:
         await save_layout(hass, coords)
@@ -1139,6 +1221,7 @@ def _status_payload(cal: dict) -> dict:
         # and when the first automatic solve is due (AUTO_MIN_WINDOW after).
         "started_at": cal["started_at"],
         "first_solve_after": AUTO_MIN_WINDOW,
+        "auto_decisions": cal.get("auto_decisions") or {},
         "pair_counts": pair_counts,
         "receiver_count": len(cal["receivers"]),
     }
@@ -1169,6 +1252,13 @@ async def async_calibration_action(hass, data: dict) -> dict:
     elif action == "solve":
         floor_name = data.get("floor") or cal.get("floor")
         result = await async_solve(hass, cal, floor_name)
+        coords = await _read_coords(hass)
+        floor = _find_floor(coords, result["floor"]) if coords else None
+        if floor is not None and _calibration_target(coords) != "bermuda":
+            try:
+                result["selftest"] = await _judge_by_selftest(hass, cal, coords, floor, result)
+            except Exception as e:  # noqa: BLE001 - a verdict is advice, never a reason to lose the solve
+                _LOGGER.debug("Self-test verdict unavailable: %s", e)
         cal["results"][result["floor"]] = result
         cal["last_solved_at"] = result["solved_at"]
         cal["error"] = None

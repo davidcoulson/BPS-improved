@@ -4265,8 +4265,13 @@ def _room_at(rooms, x, y):
     return None
 
 
-def run_selftest(hass, samples=None):
+def run_selftest(hass, samples=None, corrections=None, floors=None):
     """Leave-one-out receiver self-localization accuracy against known positions.
+
+    ``corrections`` overrides the layout's per-receiver correction factors
+    ({slug: factor}); ``floors`` restricts the receivers solved to those floor
+    names. Together they let calibration judge a candidate set of corrections
+    on one floor with the metric that matters, before writing anything.
 
     Solves on the RAW inter-receiver distances Sextant collects for calibration
     (median per link), not the Bermuda-filtered distance sensor the live tracker
@@ -4280,8 +4285,14 @@ def run_selftest(hass, samples=None):
     """
     coords = get_layout(hass)
     receivers = _selftest_receivers(coords)
+    for slug, factor in (corrections or {}).items():
+        if slug in receivers and isinstance(factor, (int, float)) and factor > 0:
+            receivers[slug]["correction"] = float(factor)
     floor_bounds = _selftest_floor_bounds(coords, receivers)
     rooms = _selftest_rooms(coords)
+    if floors is not None:
+        wanted = {str(f) for f in floors}
+        receivers = {slug: r for slug, r in receivers.items() if str(r["floor"]) in wanted}
     if samples is None:
         samples = get_calibration_state(hass).get("samples", {})
 

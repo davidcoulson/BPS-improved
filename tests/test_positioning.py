@@ -1442,3 +1442,15 @@ def test_legacy_rectangle_zone_corners_are_ordered_before_the_point_test():
         {"entity_id": "R", "poly": False, "cords": [{"x": 0, "y": 0}, {"x": 10, "y": 10}, {"x": 10, "y": 0}, {"x": 0, "y": 10}]}]}]}
     rooms = sextant._selftest_rooms(coords)
     assert sextant._room_at(rooms["F"], 5, 5) == "R" and sextant._room_at(rooms["F"], 15, 5) is None
+
+
+def test_selftest_takes_candidate_corrections_and_a_floor_filter():
+    base = sextant.run_selftest(_hass_with(SQUARE, _exact_samples(SQUARE)))
+    assert max(r["error_m"] for r in base["receivers"]) < 0.05
+    # A candidate that inflates every reading r2 takes moves the others off (never written anywhere).
+    skewed = sextant.run_selftest(_hass_with(SQUARE, _exact_samples(SQUARE)), corrections={"r2": 1.6})
+    assert max(r["error_m"] for r in skewed["receivers"]) > 0.2
+    hass = _hass_with(SQUARE, _exact_samples(SQUARE))
+    hass.data["sextant"]["layout"]["floor"].append({"name": "Up", "scale": SCALE, "receivers": [{"entity_id": "u1", "cords": {"x": 0, "y": 0}}]})
+    only = sextant.run_selftest(hass, floors={"F"})
+    assert {r["entity"] for r in only["receivers"]} == {"r1", "r2", "r3", "r4"} and not any(u["entity"] == "u1" for u in only["unsolved"])
