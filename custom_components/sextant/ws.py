@@ -187,7 +187,8 @@ def merge_editor_layout(current, incoming):
     thing names, classes, colours, heights, the auto-calibration flag) is
     written by other pages and by the backend, and inside a floor the
     per-proxy ``correction`` and the ``calibration`` stamp are written by
-    calibration - none of which the editor edits. Taking them from the
+    calibration, and the ``bias_field`` by its service - none of which the
+    editor edits. Taking them from the
     current layout means a Save can no longer wipe corrections that auto
     calibration applied five minutes earlier, or a colour picked on the
     Things page while the editor sat open (that is what happened).
@@ -203,9 +204,12 @@ def merge_editor_layout(current, incoming):
         floor = dict(floor)
         old = by_name.get(str(floor.get("name")))
         if old is not None:
-            floor.pop("calibration", None)
-            if isinstance(old.get("calibration"), dict):
-                floor["calibration"] = old["calibration"]
+            # Server-owned per-floor keys: the editor's copy is whatever it
+            # loaded, possibly hours ago, so the store's version always wins.
+            for owned in ("calibration", "bias_field"):
+                floor.pop(owned, None)
+                if isinstance(old.get(owned), dict):
+                    floor[owned] = old[owned]
             corrections = {str(r.get("entity_id")): r.get("correction") for r in old.get("receivers", []) if isinstance(r, dict)}
             receivers = []
             for r in floor.get("receivers", []):
@@ -761,6 +765,24 @@ async def ws_adjust_zones(hass, connection, msg):
     connection.send_result(msg["id"], result)
 
 
+@websocket_api.websocket_command({
+    vol.Required("type"): "sextant/registration",
+    vol.Optional("layout"): dict,
+})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_registration(hass, connection, msg):
+    """How the floors stack, from their shared pins (registration.py).
+
+    Given a ``layout`` it grades that - the Edit page sends its unsaved draft,
+    so a pin's effect on the fit shows while it is still being dragged.
+    """
+    from . import registration  # noqa: PLC0415
+
+    layout = msg.get("layout") or get_layout(hass) or {}
+    connection.send_result(msg["id"], registration.report(layout))
+
+
 # --- KPI --------------------------------------------------------------------------
 
 
@@ -1202,7 +1224,7 @@ COMMANDS = (
     ws_layout_get, ws_layout_save, ws_tuning_set, ws_thing_tune,
     ws_history_index, ws_history_get, ws_history_clear,
     ws_calibration_status, ws_calibration_action, ws_selftest, ws_scanner_linking, ws_receivers, ws_beacon_links,
-    ws_adjust_zones, ws_scanner_ignore, ws_kpi, ws_kpi_baselines, ws_kpi_baseline_save, ws_kpi_baseline_delete,
+    ws_adjust_zones, ws_registration, ws_scanner_ignore, ws_kpi, ws_kpi_baselines, ws_kpi_baseline_save, ws_kpi_baseline_delete,
     ws_truth_mark, ws_truth_list, ws_truth_delete, ws_truth_evaluate, ws_truth_apply,
     ws_bermuda_candidates, ws_bermuda_tracked, ws_bermuda_track, ws_bermuda_findmy, ws_bermuda_findmy_add,
     ws_bermuda_findmy_remove, ws_bermuda_options, ws_bermuda_options_set, ws_bermuda_scanners, ws_bermuda_tiles,

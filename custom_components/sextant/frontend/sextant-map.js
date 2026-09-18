@@ -16,6 +16,7 @@ export const MAP_FRAME_WIDTH = 2000;
 const RECEIVER_SIZE = 10;
 const RECEIVER_SIZE_EDIT = 13;   // proxies are the things people drag: give them a target
 const VERTEX_SIZE = 6;
+const PIN_SIZE = 11;
 const HIT_SLOP = 8;
 const THING_RADIUS = 12;
 const HUES = [205, 25, 140, 95, 320, 45, 260, 180, 0, 60];
@@ -189,6 +190,24 @@ export function snapToWall(p, rooms, scale, prev) {
   return { point: p, snap: null };
 }
 
+/**
+ * A pin marks a vertical line through the house, and the lines people can
+ * actually find on every floor's plan are corners - which are already drawn,
+ * as room vertices. Landing a pin exactly on one is both easier than aiming
+ * and more accurate than a hand can be at plan resolution.
+ * Returns the nearest room vertex within `radius` map px, or null.
+ */
+export function snapToVertex(p, rooms, radius) {
+  let best = null, bestD = radius;
+  for (const room of rooms || []) {
+    for (const q of room.cords || []) {
+      const d = Math.hypot(q.x - p.x, q.y - p.y);
+      if (d <= bestD) { bestD = d; best = { x: q.x, y: q.y }; }
+    }
+  }
+  return best;
+}
+
 const OBJECT_URLS = new Map(); // authenticated image path -> object URL, per page load
 
 async function resolveImageUrl(url, authFetch) {
@@ -317,7 +336,7 @@ export class SextantMap {
     // No image yet: size to the content so an image-less floor still renders.
     let maxX = 0, maxY = 0;
     const f = this.floor || {};
-    for (const r of f.receivers || []) { maxX = Math.max(maxX, r.cords?.x || 0); maxY = Math.max(maxY, r.cords?.y || 0); }
+    for (const r of [...(f.receivers || []), ...(f.pins || [])]) { maxX = Math.max(maxX, r.cords?.x || 0); maxY = Math.max(maxY, r.cords?.y || 0); }
     for (const list of [f.zones || [], f.subzones || []]) for (const z of list) for (const p of z.cords || []) { maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); }
     return { w: maxX ? maxX * 1.05 : 1000, h: maxY ? maxY * 1.05 : 700 };
   }
@@ -385,6 +404,7 @@ export class SextantMap {
   _itemPoints(hit) {
     const f = this.floor;
     if (hit.kind === "receiver") { const r = f.receivers[hit.index]; return [{ x: r.cords.x, y: r.cords.y }]; }
+    if (hit.kind === "pin") { const q = f.pins[hit.index]; return [{ x: q.cords.x, y: q.cords.y }]; }
     const list = hit.kind === "zone" ? f.zones : f.subzones;
     return (list[hit.index].cords || []).map((q) => ({ x: q.x, y: q.y }));
   }
@@ -427,6 +447,12 @@ export class SextantMap {
         this._snap = null;
         f.receivers[hit.index].cords = raw;
       }
+    } else if (hit.kind === "pin") {
+      const raw = { x: d.origin[0].x + dx, y: d.origin[0].y + dy };
+      // Onto a room corner when one is near; Alt places it freely.
+      const corner = e.altKey ? null : snapToVertex(raw, f.zones, (HIT_SLOP * 1.5) / this.view.k);
+      f.pins[hit.index].cords = corner || raw;
+      this._pinSnap = corner;
     } else {
       const list = hit.kind === "zone" ? f.zones : f.subzones;
       const item = list[hit.index];
@@ -451,12 +477,14 @@ export class SextantMap {
     const d = this._drag;
     this._drag = null;
     this._snap = null;
+    this._pinSnap = null;
     this.lastDragMoved = !!(d && d.moved);
     if (!d) return;
     if (d.kind === "item" && d.moved) {
       const f = this.floor, hit = d.hit;
       const round = (q) => ({ x: Math.round(q.x * 1000) / 1000, y: Math.round(q.y * 1000) / 1000 });
       if (hit.kind === "receiver") f.receivers[hit.index].cords = round(f.receivers[hit.index].cords);
+      else if (hit.kind === "pin") f.pins[hit.index].cords = round(f.pins[hit.index].cords);
       else { const list = hit.kind === "zone" ? f.zones : f.subzones; list[hit.index].cords = list[hit.index].cords.map(round); }
       if (this.host.onChange) this.host.onChange(hit.kind, hit.index);
     }
@@ -494,6 +522,14 @@ export class SextantMap {
       }
     }
     const edit = this.mode === "edit";
+    if (edit) {
+      // Pins first: they sit on corners, where walls and proxies also are,
+      // and a pin under a proxy would otherwise be unreachable.
+      for (let i = (f.pins || []).length - 1; i >= 0; i--) {
+        const q = f.pins[i].cords;
+        if (q && Math.hypot(q.x - m.x, q.y - m.y) <= slop + PIN_SIZE / this.view.k) return { kind: "pin", index: i, id: f.pins[i].name };
+      }
+    }
     const rs = ((edit ? RECEIVER_SIZE_EDIT : RECEIVER_SIZE) + (edit ? 6 : 0)) / this.view.k;
     if (!(edit && this.locks.receiver)) {
       for (let i = (f.receivers || []).length - 1; i >= 0; i--) {
@@ -554,6 +590,7 @@ export class SextantMap {
     this._drawDraft(ctx);
     if (this._snap) this._drawSnap(ctx);
     this._drawReceivers(ctx, f.receivers || []);
+    if (this.mode === "edit") this._drawPins(ctx, f.pins || []);
     if (this.suggestions.length) {
       // A house plan is busy: walls, room fills, dozens of proxies. Fade all
       // of it back behind a scrim of the page's own background so the advised
@@ -697,6 +734,48 @@ export class SextantMap {
         this._label(ctx, r.label || r.entity_id, r.cords.x, r.cords.y + (base + 9) / k, 10, 0.8);
       }
     });
+  }
+
+  /** Alignment pins: a surveyor's crosshair, so it reads as a reference mark
+   * and not as one more proxy. Green when the same name exists on another
+   * floor, amber while it is still on its own, red when the fit says this
+   * pin disagrees with the others (`miss`, metres, set by the editor). */
+  _drawPins(ctx, pins) {
+    const k = this.view.k;
+    pins.forEach((pin, index) => {
+      if (!pin.cords) return;
+      const selected = this.selection && this.selection.kind === "pin" && this.selection.index === index;
+      const hovered = this.hover && this.hover.kind === "pin" && this.hover.index === index;
+      const r = (selected || hovered ? PIN_SIZE * 1.3 : PIN_SIZE) / k;
+      const colour = pin.miss != null && pin.miss > 0.3 ? "#d9534f" : pin.linked ? "#2e9d5b" : "#e0a54a";
+      ctx.save();
+      ctx.translate(pin.cords.x, pin.cords.y);
+      ctx.lineCap = "round";
+      for (const [stroke, width] of [["#ffffff", 5], [colour, 2.5]]) {
+        ctx.strokeStyle = selected && width < 5 ? "#ffd166" : stroke;
+        ctx.lineWidth = width / k;
+        ctx.beginPath();
+        ctx.arc(0, 0, r * 0.62, 0, Math.PI * 2);
+        ctx.moveTo(-r * 1.25, 0); ctx.lineTo(-r * 0.2, 0);
+        ctx.moveTo(r * 0.2, 0); ctx.lineTo(r * 1.25, 0);
+        ctx.moveTo(0, -r * 1.25); ctx.lineTo(0, -r * 0.2);
+        ctx.moveTo(0, r * 0.2); ctx.lineTo(0, r * 1.25);
+        ctx.stroke();
+      }
+      ctx.restore();
+      if (this.options.labels) {
+        const miss = pin.miss != null && pin.miss >= 0.05 ? ` · ${pin.missLabel || pin.miss.toFixed(2) + " m"}` : "";
+        this._label(ctx, `${pin.name || "pin"}${miss}`, pin.cords.x, pin.cords.y - (PIN_SIZE + 12) / k, 10, 0.9);
+      }
+    });
+    if (this._pinSnap) {
+      ctx.save();
+      ctx.strokeStyle = "#ff9800";
+      ctx.lineWidth = 2 / k;
+      const s = 9 / k;
+      ctx.strokeRect(this._pinSnap.x - s, this._pinSnap.y - s, s * 2, s * 2);
+      ctx.restore();
+    }
   }
 
   _drawSnap(ctx) {

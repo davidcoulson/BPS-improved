@@ -1217,6 +1217,22 @@ def test_a_shaped_bias_field_breaks_a_tie_the_evidence_cannot(monkeypatch):
     assert cands["U"]["score"] == pytest.approx(cands["U"]["prox"] * 1.6, abs=1e-3)
     # Each contender reports its OWN fix, in its own floor's pixels.
     assert all(abs(c["fix"][0] - 200) < 5 and abs(c["fix"][1] - 500) < 5 for c in cands.values())
+    assert all("house" not in c for c in cands.values())        # no pins: no house frame claimed
+
+
+def test_registered_floors_report_their_fixes_in_one_house_frame(monkeypatch):
+    """With pins, each contender's fix is also published in house metres - and
+    here, where both floors hear the thing equally, they must agree."""
+    def shape(layout, ff):
+        for fl, (dx, dy) in zip(layout["floor"], ((0, 0), (0, 0))):
+            fl["pins"] = [{"pin_id": n, "name": n, "cords": {"x": x + dx, "y": y + dy}}
+                          for n, (x, y) in {"NW": (0, 0), "NE": (1000, 0), "SE": (1000, 1000)}.items()]
+        layout["floor"][0]["level"], layout["floor"][1]["level"] = 0, 1
+        layout["floor"][1]["elevation"] = 3.66
+    cands = _void_election(monkeypatch, shape)[-1]["floor_cands"]
+    assert cands["F"]["house"][2] == 0.0 and cands["U"]["house"][2] == 3.66
+    assert cands["F"]["house"][:2] == pytest.approx([2.0, 5.0], abs=0.05)
+    assert cands["U"]["house"][:2] == pytest.approx(cands["F"]["house"][:2], abs=0.05)
 # ---------------------------------------------------------------------------
 # Solves run in the executor; positions are pushed over the websocket
 # ---------------------------------------------------------------------------

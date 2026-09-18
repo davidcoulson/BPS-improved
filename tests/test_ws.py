@@ -498,3 +498,44 @@ def test_irk_add_rejects_an_empty_key_and_survives_a_broken_flow(tmp_path):
     run(ws.ws_irk_add(hass, conn, {"id": 2, "type": "sextant/irk/add", "irk": "aabb"}))
     assert "could not take the key" in str(conn.errors[-1])
     assert getattr(ws.ws_irk_add, "_ws_admin", False)
+
+
+def test_a_stale_editor_save_cannot_erase_a_bias_field_and_pins_go_through(tmp_path):
+    """The bias field is written by its service while the Edit page sits open
+    on an older copy. Its Save must not take the field out with it."""
+    from sextant import floor_field
+    layout = _layout()
+    hass = _hass_with_layout(tmp_path, layout)
+    stale = st.get_layout_for_edit(hass)                       # what the editor loaded
+    fresh = st.get_layout_for_edit(hass)
+    fresh["floor"][0]["bias_field"] = floor_field.flat((0, 0, 300, 200), 100.0, value=1.5)
+    run(st.save_layout(hass, fresh))                           # ... the service paints meanwhile
+    stale["floor"][0]["pins"] = [{"pin_id": "p1", "name": "NW", "cords": {"x": 10, "y": 20}}]
+    stale["floor"][0]["elevation"] = 3.66
+    conn = _Conn()
+    run(ws.ws_layout_save(hass, conn, {"id": 9, "type": "sextant/layout/save", "layout": stale}))
+    saved = st.get_layout(hass)["floor"][0]
+    assert floor_field.describe(saved)["max"] == 1.5           # the field survived
+    assert saved["pins"][0]["name"] == "NW" and saved["elevation"] == 3.66
+    # And the editor cannot smuggle a field in either: it does not own the key.
+    stale["floor"][0]["bias_field"] = {"cell_m": 1.0, "x0": 0, "y0": 0, "values": [[9.0]]}
+    run(ws.ws_layout_save(hass, conn, {"id": 10, "type": "sextant/layout/save", "layout": stale}))
+    assert floor_field.describe(st.get_layout(hass)["floor"][0])["max"] == 1.5
+
+
+def test_registration_grades_a_draft_or_the_stored_layout(tmp_path):
+    def floor(name, level, scale, dx):
+        pts = {"NW": (0, 0), "NE": (10, 0), "SE": (10, 8)}
+        return {"name": name, "level": level, "scale": scale, "receivers": [], "zones": [], "subzones": [],
+                "pins": [{"pin_id": f"{name}{k}", "name": k, "cords": {"x": x * scale + dx, "y": y * scale}} for k, (x, y) in pts.items()]}
+    hass = _hass_with_layout(tmp_path, {"floor": [floor("G", 0, 100.0, 0), floor("U", 1, 125.0, 40)]})
+    conn = _Conn()
+    run(ws.ws_registration(hass, conn, {"id": 1, "type": "sextant/registration"}))
+    stored = conn.results[-1][1]
+    assert stored["reference"] == "G" and stored["floors"]["U"]["ok"] and stored["floors"]["U"]["rms_m"] == 0.0
+    assert stored["floors"]["U"]["elevation"] == 3.0
+    draft = {"floor": [floor("G", 0, 100.0, 0), floor("U", 1, 125.0, 40)]}
+    draft["floor"][1]["pins"][1]["cords"]["x"] += 100          # drag one pin 0.8 m in the unsaved draft
+    run(ws.ws_registration(hass, conn, {"id": 2, "type": "sextant/registration", "layout": draft}))
+    graded = conn.results[-1][1]["floors"]["U"]
+    assert graded["worst"] == "NE" and graded["rms_m"] > 0.2

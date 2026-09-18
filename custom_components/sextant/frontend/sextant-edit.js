@@ -8,8 +8,8 @@
  * view, the one thing the websocket does not carry).
  */
 import { LitElement, html, css, nothing } from "./lit.js";
-import { SextantMap, polygonCentroid } from "./sextant-map.js";
-import { sharedStyles, widgetStyles, toast, callWS, confirmDialog, fmtNum, uiField, uiSelect, uiSwitch, uiButton, proxyName, lenUnit, toDisplayLen, fromDisplayLen, fmtScale, isImperial, THING_CLASSES, CLASS_FAMILIES } from "./sextant-ui.js";
+import { SextantMap, polygonCentroid, snapToVertex } from "./sextant-map.js";
+import { sharedStyles, widgetStyles, toast, callWS, confirmDialog, fmtNum, fmtLen, uiField, uiSelect, uiSwitch, uiButton, proxyName, lenUnit, toDisplayLen, fromDisplayLen, fmtScale, isImperial, THING_CLASSES, CLASS_FAMILIES } from "./sextant-ui.js";
 import { mapUrlFor } from "./sextant-panel.js";
 
 // [id, label under the icon, icon, tooltip]
@@ -20,6 +20,7 @@ const TOOLS = [
   ["subzone", "Spot", "mdi:vector-rectangle", "Draw a spot (a couch, a desk, a bedside table) inside a room"],
   ["nogo", "No-go", "mdi:cancel", "Draw an area things can never be in (a void, a wall)"],
   ["measure", "Scale", "mdi:ruler", "Set the map scale from a known distance"],
+  ["pin", "Pin", "mdi:crosshairs-gps", "Pin a point that lines up through the house - an outside corner, a stair post. The same name on another floor says how the floors stack. It lands on a room corner when one is near; hold Alt to place it freely"],
 ];
 // Layers that can be locked against selection and dragging, so a finished
 // room layout is not nudged while proxies are being moved (and vice versa).
@@ -49,6 +50,7 @@ class SextantEdit extends LitElement {
     _busy: { state: true },
     _locks: { state: true },
     _undo: { state: true },
+    _alignment: { state: true },
   };
 
   constructor() {
@@ -66,13 +68,14 @@ class SextantEdit extends LitElement {
     // slip while moving a proxy must not move a wall.
     this._locks = { zone: true, subzone: false, receiver: false };
     this._undo = [];
+    this._alignment = null; // how the floors stack, graded by the backend against this draft
   }
 
   // --- undo ---------------------------------------------------------------------
 
   _snapshot() {
     if (!this._draft) return;
-    this._undo = [...this._undo.slice(-(UNDO_DEPTH - 1)), JSON.stringify(this._draft)];
+    this._undo = [...this._undo.slice(-(UNDO_DEPTH - 1)), JSON.stringify(this._draft, (k, v) => (k === "linked" || k === "miss" || k === "missLabel" ? undefined : v))];
   }
 
   _undoLast() {
@@ -96,7 +99,7 @@ class SextantEdit extends LitElement {
       fetch: (url) => this.hass.fetchWithAuth(url),
       onSelect: (hit) => { this._selection = hit; },
       onDragStart: () => this._snapshot(),
-      onChange: () => { this._dirty = true; this._tick++; this.requestUpdate(); },
+      onChange: (kind) => { this._dirty = true; this._tick++; if (kind === "pin") this._refreshAlignment(); this.requestUpdate(); },
       onDrawPoint: () => this.requestUpdate(),
       onDrawClose: () => this._closeDraft(),
       onContextMenu: (hit) => this._context(hit),
@@ -114,7 +117,7 @@ class SextantEdit extends LitElement {
     if (changed.has("data")) this._syncDraft(!this._dirty);
     if (changed.has("floor")) this._pushFloor();
     if (changed.has("spots") || changed.has("floor")) this._map.setSuggestions((this.spots || []).filter((s) => s.floor === this.floor).map((s) => ({ x: s.x, y: s.y, label: `add a proxy here · ${s.room}` })));
-    if (changed.has("_tool")) { this._map.setTool(this._tool === "measure" || this._tool === "receiver" ? "select" : this._tool); }
+    if (changed.has("_tool")) { this._map.setTool(["measure", "receiver", "pin"].includes(this._tool) ? "select" : this._tool); }
   }
 
   _syncDraft(replace) {
@@ -144,7 +147,72 @@ class SextantEdit extends LitElement {
     this._map?.setOffline(this.data?.offline_receivers || []);
     this._map?.setSelection(null);
     this._selection = null;
+    this._refreshAlignment();
   }
+
+  // --- pins: how the floors stack ----------------------------------------------
+
+  /** Transient marks the map draws pins with; stripped again before Save. */
+  _markPins() {
+    const rep = this._alignment;
+    for (const fl of this._draft?.floor || []) {
+      const misses = rep?.floors?.[fl.name]?.misses || {};
+      for (const pin of fl.pins || []) {
+        pin.linked = (rep?.pins?.[pin.name] || []).length > 1;
+        pin.miss = misses[pin.name] ?? null;
+        pin.missLabel = pin.miss == null ? null : fmtLen(pin.miss, this.hass, 2);
+      }
+    }
+    this._map?.invalidate();
+  }
+
+  /** Ask the backend to grade the DRAFT, so a pin's effect on the fit shows
+   * while it is still being placed. Debounced: a drag fires per pixel. */
+  _refreshAlignment() {
+    clearTimeout(this._alignTimer);
+    this._alignTimer = setTimeout(async () => {
+      const draft = this._draft;
+      if (!draft || !(draft.floor || []).some((fl) => (fl.pins || []).length)) { this._alignment = null; this._markPins(); return; }
+      const clean = { floor: draft.floor.map((fl) => ({ name: fl.name, scale: fl.scale, level: fl.level, elevation: fl.elevation, pins: (fl.pins || []).map((q) => ({ name: q.name, cords: q.cords })) })) };
+      try {
+        this._alignment = await this.hass.callWS({ type: "sextant/registration", layout: clean });
+      } catch (_e) {
+        this._alignment = null;   // an older backend: the pins still save, they just are not graded
+      }
+      this._markPins();
+    }, 250);
+  }
+
+  /** Names pinned on other floors and not yet on this one: what to offer next. */
+  _pinNamesElsewhere(f) {
+    const here = new Set((f.pins || []).map((q) => q.name));
+    const names = [];
+    for (const fl of this._draft?.floor || []) if (fl !== f) for (const q of fl.pins || []) if (q.name && !here.has(q.name) && !names.includes(q.name)) names.push(q.name);
+    return names;
+  }
+
+  _placePin(e) {
+    const f = this._floorObj();
+    if (!f || this._map.hover?.kind === "pin") return;   // a click on a pin selects it
+    let p = this._mapPoint(e);
+    if (!e.altKey) p = snapToVertex(p, f.zones, 12 / this._map.view.k) || p;
+    this._snapshot();
+    f.pins = f.pins || [];
+    // The next name another floor is waiting on, so linking a floor is a row
+    // of clicks in the same order; a fresh name only when there is none.
+    let n = f.pins.length + 1;
+    const all = new Set((this._draft.floor || []).flatMap((fl) => (fl.pins || []).map((q) => q.name)));
+    while (all.has(`Pin ${n}`)) n++;
+    const name = this._pinNamesElsewhere(f)[0] || `Pin ${n}`;
+    f.pins.push({ pin_id: uid("pin"), name, cords: { x: Math.round(p.x * 1000) / 1000, y: Math.round(p.y * 1000) / 1000 } });
+    this._dirty = true;
+    this._selection = { kind: "pin", index: f.pins.length - 1 };
+    this._map.setSelection(this._selection);
+    this._refreshAlignment();
+    this.requestUpdate();
+  }
+
+  _listFor(kind, f) { return kind === "receiver" ? f.receivers : kind === "zone" ? f.zones : kind === "pin" ? f.pins : f.subzones; }
 
   // --- tools -------------------------------------------------------------------
 
@@ -152,13 +220,14 @@ class SextantEdit extends LitElement {
     this._tool = tool;
     this._measure = null;
     if (tool !== "receiver") this._placing = null;
-    if (tool === "receiver" || tool === "measure") this._map.setTool("select");
+    if (["receiver", "measure", "pin"].includes(tool)) this._map.setTool("select");
   }
 
   _onCanvasClick(e) {
     if (this._map?.lastDragMoved) return; // a pan, not a click
     if (this._tool === "receiver" && this._placing) this._placeReceiver(e);
     else if (this._tool === "measure") this._measureClick(e);
+    else if (this._tool === "pin") this._placePin(e);
   }
 
   _mapPoint(e) {
@@ -250,11 +319,12 @@ class SextantEdit extends LitElement {
   _deleteSelection() {
     const sel = this._selection, f = this._floorObj();
     if (!sel || !f) return;
-    const list = sel.kind === "receiver" ? f.receivers : sel.kind === "zone" ? f.zones : f.subzones;
+    const list = this._listFor(sel.kind, f);
     const item = list[sel.index];
-    if (!confirmDialog(`Delete ${sel.kind === "receiver" ? "proxy" : sel.kind === "zone" ? "room" : "spot"} "${item.entity_id}"?`)) return;
+    if (!confirmDialog(`Delete ${sel.kind === "receiver" ? "proxy" : sel.kind === "zone" ? "room" : sel.kind === "pin" ? "pin" : "spot"} "${item.entity_id ?? item.name}"?`)) return;
     this._snapshot();
     list.splice(sel.index, 1);
+    if (sel.kind === "pin") this._refreshAlignment();
     if (sel.kind === "zone") for (const s of f.subzones || []) if (s.parent === item.zone_id) s.parent = null;
     this._selection = null;
     this._dirty = true;
@@ -265,9 +335,10 @@ class SextantEdit extends LitElement {
   _edit(field, value) {
     const sel = this._selection, f = this._floorObj();
     if (!sel || !f) return;
-    const list = sel.kind === "receiver" ? f.receivers : sel.kind === "zone" ? f.zones : f.subzones;
+    const list = this._listFor(sel.kind, f);
     const item = list[sel.index];
     this._snapshot();
+    if (sel.kind === "pin") this._refreshAlignment();
     if (field === "height" || field === "correction") item[field] = value === "" || value == null ? undefined : Number(value);
     else if (field === "no_go") item.no_go = !!value;
     else item[field] = value;
@@ -320,6 +391,7 @@ class SextantEdit extends LitElement {
   async _save(removeMap = null) {
     const draft = this._draft;
     for (const f of draft.floor) for (const r of f.receivers || []) { delete r.unmatched; delete r.label; }
+    for (const f of draft.floor) for (const q of f.pins || []) { delete q.linked; delete q.miss; delete q.missLabel; }
     this._busy = true;
     const r = await callWS(this, this.hass, { type: "sextant/layout/save", layout: draft, ...(removeMap ? { remove_map: removeMap } : {}) });
     this._busy = false;
@@ -382,6 +454,7 @@ class SextantEdit extends LitElement {
           ${this._measure?.b ? html`${uiField({ label: `Distance between the two points (${lenUnit(this.hass)})`, type: "number", step: 0.01, min: 0.1, onChange: (v) => { this._metres = v; }, style: "width: 240px" })} ${uiButton({ label: "Set scale", kind: "primary", onClick: () => this._applyMeasure(this._metres) })}`
             : this._measure ? "Click the second point." : `Click two points a known distance apart. Current scale: ${fmtScale(f?.scale, this.hass)}`}
         </div>` : nothing}
+        ${this._tool === "pin" ? html`<div class="hint">Click a point you can find on every floor: an outside corner, a stair post, a chimney. It lands on a room corner when one is near (Alt places it freely). Then switch floor and pin the same points - the names carry over in order.</div>` : nothing}
         ${["zone", "subzone", "nogo"].includes(this._tool) ? html`<div class="hint">Click to add corners; click the first corner or double-click to close. ${uiButton({ label: "Cancel", kind: "text", onClick: () => { this._map.cancelDraft(); } })}</div>` : nothing}
       </div>
       <aside class="side">
@@ -389,19 +462,21 @@ class SextantEdit extends LitElement {
           <div class="card">
             <h4>${f.name} <span class="muted small">${fmtScale(f.scale, this.hass)}</span></h4>
             <div class="row small muted">${(f.receivers || []).length} proxies · ${(f.zones || []).filter((z) => !z.no_go).length} rooms · ${(f.zones || []).filter((z) => z.no_go).length} no-go · ${(f.subzones || []).length} spots</div>
-            <div class="row small muted">Level: storey number, 0 = ground, -1 = basement; orders the floor picker top-down. Bias: election prior, 1.2 = a 20 % head start every cycle.</div>
+            <div class="row small muted">Level: storey number, 0 = ground, -1 = basement; orders the floor picker top-down. Elevation: this floor's finished floor above the ground floor's, so ceiling height plus the floor structure; blank assumes 3 m a storey. Bias: election prior, 1.2 = a 20 % head start every cycle.</div>
             <div class="row">
               ${/* Measuring two points gives a float with a dozen decimals; a
                     hundredth of a pixel per metre is already far finer than any
                     measurement behind it, so show and store it rounded. */ ""}
               ${uiField({ label: "Scale (px per m)", type: "number", step: 0.01, value: f.scale == null ? "" : Math.round(f.scale * 100) / 100, onChange: (v) => { this._snapshot(); f.scale = Number(v) || null; this._dirty = true; this.requestUpdate(); }, style: "width: 150px" })}
               ${uiField({ label: "Level", type: "number", step: 1, value: f.level ?? "", placeholder: "0", onChange: (v) => { if (v === "" || v == null) delete f.level; else f.level = Math.round(Number(v)); this._dirty = true; this.requestUpdate(); }, style: "width: 90px" })}
+              ${uiField({ label: `Elevation (${lenUnit(this.hass)})`, type: "number", step: 0.05, value: toDisplayLen(f.elevation, this.hass), placeholder: String(toDisplayLen((f.level || 0) * 3, this.hass)), onChange: (v) => { this._snapshot(); const m = fromDisplayLen(v, this.hass); if (m == null || isNaN(m)) delete f.elevation; else f.elevation = m; this._dirty = true; this._refreshAlignment(); this.requestUpdate(); }, style: "width: 130px" })}
               ${uiField({ label: "Election bias", type: "number", step: 0.05, min: 0.25, max: 4, value: f.bias ?? "", placeholder: "1", onChange: (v) => { if (v === "" || v == null) delete f.bias; else f.bias = Number(v); this._dirty = true; this.requestUpdate(); }, style: "width: 120px" })}
               ${uiButton({ label: "Adjust rooms", disabled: this._busy, onClick: () => this._adjust("zones"), title: "Square up rooms and snap shared walls" })}
               ${uiButton({ label: "Adjust spots", disabled: this._busy, onClick: () => this._adjust("subzones") })}
               ${uiButton({ label: "Delete floor", kind: "danger", disabled: this._busy, onClick: () => this._removeFloor() })}
             </div>
           </div>` : html`<div class="card muted">No floor yet. Add one below.</div>`}
+        ${f ? this._renderAlignment(f) : nothing}
         ${this._proposal ? html`<div class="card">
           <h4>Proposed ${this._proposal.target}</h4>
           <ul class="plain small">${(this._proposal.report || this._proposal.changes || []).slice(0, 12).map((c) => html`<li>${typeof c === "string" ? c : `${c.name || c.zone || ""}: ${c.change || c.note || JSON.stringify(c)}`}</li>`)}</ul>
@@ -420,10 +495,44 @@ class SextantEdit extends LitElement {
     `;
   }
 
+  /** How this floor stacks against the others, and what the pins say about it. */
+  _renderAlignment(f) {
+    const rep = this._alignment, pins = f.pins || [];
+    const row = rep?.floors?.[f.name];
+    const waiting = this._pinNamesElsewhere(f);
+    if (!pins.length && !waiting.length) {
+      return html`<div class="card small muted"><h4>Alignment</h4>Floors are drawn separately and nothing says how they stack. Pin two or more points that line up through the house (the Pin tool), with the same names on each floor.</div>`;
+    }
+    const useScale = (px) => { this._snapshot(); f.scale = px; this._dirty = true; this._refreshAlignment(); this.requestUpdate(); toast(this, `Scale set to ${fmtScale(px, this.hass)}`); };
+    const off = row?.implied_scale && row.scale ? Math.abs(row.implied_scale / row.scale - 1) : 0;
+    return html`<div class="card small">
+      <h4>Alignment <span class="muted small">${pins.length} pin${pins.length === 1 ? "" : "s"}</span></h4>
+      ${!row ? html`<div class="muted">Checking…</div>`
+        : row.reference ? html`<div>This is the reference floor: the others are lined up against it.</div>`
+        : row.ok ? html`<div>Lined up on ${row.shared} shared pins, typically within <b>${fmtLen(row.rms_m, this.hass, 2)}</b>${row.worst && row.max_m >= 0.05 ? html`; worst is <b>${row.worst}</b> at ${fmtLen(row.max_m, this.hass, 2)}` : nothing}${Math.abs(row.rotation_deg) >= 0.5 ? html`. This plan is turned ${fmtNum(row.rotation_deg, 1)}° against the reference` : nothing}.</div>`
+        : row.rms_m != null ? html`<div class="warn">The pins disagree by ${fmtLen(row.rms_m, this.hass, 2)} - too much to use. Check <b>${row.worst}</b> first (${fmtLen(row.max_m, this.hass, 2)} off), or pins that sit very close together.</div>`
+        : html`<div class="muted">Not lined up yet: ${row.why}.</div>`}
+      ${off >= 0.01 ? html`<div class="row">The pins fit best at <b>${fmtScale(row.implied_scale, this.hass)}</b>; this floor is set to ${fmtScale(row.scale, this.hass)} (${fmtNum(off * 100, 1)} % apart). ${uiButton({ label: "Use the pins' scale", onClick: () => useScale(row.implied_scale), title: "Set this floor's scale from its pins. Four or more well-spread pins usually beat one tape measurement" })}</div>` : nothing}
+      ${waiting.length ? html`<div class="muted">Pinned on other floors, not here yet: ${waiting.join(", ")}.</div>` : nothing}
+      ${(rep?.unlinked || []).filter((n) => pins.some((q) => q.name === n)).length ? html`<div class="muted">Only on this floor so far: ${rep.unlinked.filter((n) => pins.some((q) => q.name === n)).join(", ")}.</div>` : nothing}
+    </div>`;
+  }
+
   _renderSelection(sel, f) {
-    const list = sel.kind === "receiver" ? f.receivers : sel.kind === "zone" ? f.zones : f.subzones;
+    const list = this._listFor(sel.kind, f);
     const item = list?.[sel.index];
     if (!item) return nothing;
+    if (sel.kind === "pin") {
+      const others = [...new Set((this._draft?.floor || []).filter((fl) => fl !== f).flatMap((fl) => (fl.pins || []).map((q) => q.name)))].filter(Boolean);
+      const taken = new Set((f.pins || []).filter((q) => q !== item).map((q) => q.name));
+      return html`<div class="card">
+        <h4>Pin</h4>
+        <div class="row">${uiField({ label: "Name (the same on every floor)", value: item.name || "", onChange: (v) => { const name = String(v || "").trim(); if (!name) return; if (taken.has(name)) return toast(this, `This floor already has a pin called ${name}`); this._edit("name", name); }, style: "flex: 1" })}</div>
+        ${others.filter((n) => !taken.has(n) && n !== item.name).length ? html`<div class="row small"><span class="muted">On other floors:</span>${others.filter((n) => !taken.has(n) && n !== item.name).map((n) => html`<button class="chip" @click=${() => this._edit("name", n)}>${n}</button>`)}</div>` : nothing}
+        <div class="muted small">${item.linked ? "Linked: this name is pinned on another floor too." : "Not linked yet: pin the same point on another floor and give it this name."}${item.miss != null && item.miss >= 0.05 ? ` Misses the fit by ${fmtLen(item.miss, this.hass, 2)}.` : ""} x ${fmtNum(item.cords?.x, 0)}, y ${fmtNum(item.cords?.y, 0)}</div>
+        <div class="row"><span class="grow"></span>${uiButton({ label: "Delete", kind: "danger", onClick: () => this._deleteSelection() })}</div>
+      </div>`;
+    }
     const zones = (f.zones || []).filter((z) => !z.no_go);
     return html`<div class="card">
       <h4>${sel.kind === "receiver" ? "Proxy" : sel.kind === "zone" ? (item.no_go ? "No-go area" : "Room") : "Spot"}</h4>
@@ -533,6 +642,9 @@ class SextantEdit extends LitElement {
     .sep { width: 1px; height: 24px; background: var(--divider-color); margin: 0 4px; }
     .hint { position: absolute; left: 10px; bottom: 10px; right: 10px; padding: 8px 10px; border-radius: 8px; background: var(--card-background-color); box-shadow: var(--ha-card-box-shadow, 0 1px 4px rgba(0,0,0,0.2)); font-size: 13px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
     .hint select { max-width: 100%; }
+    .chip { padding: 2px 9px; border-radius: 999px; border: 1px solid var(--divider-color); background: var(--secondary-background-color); color: var(--primary-text-color); font: inherit; font-size: 12px; cursor: pointer; }
+    .chip:hover { border-color: var(--primary-color); }
+    .warn { color: var(--warning-color, #9a5b00); }
     .side { border-left: 1px solid var(--divider-color); overflow: auto; padding: 12px; }
     ul.plain { list-style: none; padding: 0; margin: 4px 0; }
     @media (max-width: 720px) { :host { grid-template-columns: 1fr; grid-template-rows: 1fr auto; } .side { border-left: 0; border-top: 1px solid var(--divider-color); max-height: 45vh; } .toolbar { flex-wrap: wrap; max-width: calc(100% - 20px); gap: 3px; padding: 4px; } .toolbar button.tool { min-width: 52px; } }

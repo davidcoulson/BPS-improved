@@ -48,3 +48,42 @@ Two other passes handle what weight cannot: `--diagonal` drops the
 heavily as a wall, and `--dashes` drops dashed lines, which mark what is
 not built on this storey. Keep the original — every plan is drawn
 differently, and this is a one-way trip.
+
+## Lining the floors up
+
+Each floor is its own drawing, at its own resolution, cropped its own way,
+so out of the box Sextant has no idea how they stack: it cannot tell
+whether a spot on the Second Floor plan is above the foyer or above the
+garage. **Pins** fix that.
+
+Pick points that run straight up through the house and that you can find on
+every plan: outside corners, a stair post, a chimney breast. With the **Pin**
+tool, click each one. A pin lands exactly on a room corner when one is near
+(hold Alt to place it freely), which is both easier than aiming and more
+accurate. Then switch floor and click the same points in the same order: the
+names carry over, so linking a floor is a row of clicks. A pin is green once
+its name exists on another floor, amber while it is on its own, and red if
+it disagrees with the rest.
+
+Two shared pins line a floor up. Use four to eight, spread across the plan:
+the extra ones turn into a check. The **Alignment** card says how closely
+the pins agree ("typically within 8 cm; worst is NE corner at 21 cm"), which
+pin to look at first when they do not, and what scale the pins themselves
+imply. With well-spread pins that figure is usually better than the single
+tape measurement behind the floor's scale, and one button adopts it. The fit
+deliberately does not absorb a scale error on its own: floors that lined up
+while every distance on one of them stayed 3 % wrong would be worse than
+floors that visibly disagree.
+
+Pins cannot give the vertical leg. **Elevation** is how far this floor's
+finished floor sits above the ground floor's: the ceiling height below it
+plus the floor structure, usually about 30 cm (a foot). Left blank, a storey
+is taken as 3 m.
+
+Nothing uses the alignment to move a thing yet. What it does today is put
+every contending floor's fix into one frame in the per-cycle telemetry
+(`floor_cands[*].house`, metres), so it can be seen whether two floors that
+both hear a thing agree on where it is. That is the evidence the next step -
+letting a proxy on one floor testify about a position on another - will be
+built on.
+

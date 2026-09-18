@@ -71,6 +71,7 @@ from . import history as history_mod
 from . import bermuda_source
 from . import fingerprint
 from . import floor_field
+from . import registration
 from . import truth as truth_mod
 from .zone_adjust import adjust_zones, adjust_subzones
 
@@ -2130,9 +2131,15 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
     # floor's solve land, and what did the election make of it. The published
     # odds are smoothed and the losing floors' fixes were never published, so
     # without this a wrong election cannot be replayed under another field.
+    # Where the floors are registered against each other (registration.py)
+    # each fix is also given in the shared house frame, in metres. Two floors
+    # that both hear a thing line-of-sight should put it in the same place;
+    # how far apart they put it is evidence no single floor's fit contains.
+    frames = _floor_frames(hass, layout)
     floor_cands = {
         f: {
             "fix": [round(float(solved[f]["fix"][0]), 1), round(float(solved[f]["fix"][1]), 1)],
+            **_house_position(frames.get(f), solved[f]["fix"]),
             "conf": round(solved[f]["conf"], 4),
             "prox": round(prox_scores[f], 4),
             "bias": round(biases[f], 4),
@@ -2608,6 +2615,26 @@ def _score_floor_fit(fix, weighted, scale):
     # must not out-cover a floor with 6 of 8 receivers reporting.
     coverage = min(1.0, n / COVERAGE_TARGET_N)
     return 0.5 * coverage + 0.5 * quality, rms_m, coverage
+
+
+def _floor_frames(hass, layout):
+    """Each floor's frame into house metres, cached per layout version."""
+    cache = _zone_poly_cache(hass)
+    version = get_layout_version(hass)
+    cached = cache.get(("registration",))
+    if cached is not None and cached[0] == version:
+        return cached[1]
+    frames = registration.solve(layout).get("floors", {})
+    cache[("registration",)] = (version, frames)
+    return frames
+
+
+def _house_position(frame, fix):
+    """``{"house": [x, y, z]}`` in metres for a registered floor, else ``{}``."""
+    at = registration.to_house(frame, float(fix[0]), float(fix[1]))
+    if at is None:
+        return {}
+    return {"house": [round(at[0], 2), round(at[1], 2), round(frame["elevation"], 2)]}
 
 
 def _floor_bias(layout, floor_name, fix=None):

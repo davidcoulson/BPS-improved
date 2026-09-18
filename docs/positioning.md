@@ -66,6 +66,14 @@ only ever read at its own floor's fix, it needs nothing to line one floor's
 plan up against another's. It is sampled bilinearly, so a fix jittering
 across a cell edge moves the bias smoothly instead of flickering it.
 
+**Registration.** Pins placed on the [Edit page](edit.md#lining-the-floors-up)
+- the same named point on two or more floors - give each floor a rigid
+motion into one *house frame* in metres, and an `elevation` gives it a
+height. The fit holds each floor's measured scale and reports the scale the
+pins imply rather than absorbing the difference, so a drawing error shows up
+as a number instead of hiding inside the alignment. Registered floors
+publish each candidate fix in house coordinates as well.
+
 A flat field is all ones and changes nothing, to the last digit — lay it
 first, confirm nothing moved, then shape it. Set it with
 [`sextant.set_floor_bias_field`](automation.md#services). Every cycle
