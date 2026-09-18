@@ -30,3 +30,11 @@ needs it most.
 
 Like the self-test, the analysis works from the calibration sample window,
 so keep **Auto calibration** on for it to see every floor.
+
+## Scanners you leave off the plan on purpose
+
+A kiosk, a test board or an outdoor proxy shows up under "Heard but not
+placed" on this page and on Proxies for as long as Bermuda hears it. Click
+**Ignore** next to it and both lists leave it out; the ignored ones are
+listed under the row with an **Un-ignore** button. The list is kept in the
+layout, so it survives edits and restarts.

@@ -375,6 +375,18 @@ class SextantHealth extends LitElement {
     if (r) { this._advice = { ...r, at: Date.now() }; remember("advice", r); }
   }
 
+  async _ignoreScanner(address, ignored) {
+    const r = await callWS(this, this.hass, { type: "sextant/scanner/ignore", address, ignored });
+    if (!r || !this._advice) return;
+    // Keep the cached report in step without re-running the analysis.
+    const a = this._advice;
+    const moving = ignored ? (a.unplaced || []).find((u) => u.address === address) : (a.ignored || []).find((u) => u.address === address);
+    const unplaced = ignored ? (a.unplaced || []).filter((u) => u.address !== address) : [...(a.unplaced || []), ...(moving ? [moving] : [])];
+    this._advice = { ...a, unplaced, ignored: r.ignored };
+    const { at, ...report } = this._advice;
+    remember("advice", report);
+  }
+
   _showSpots(floor, spots) {
     this.dispatchEvent(new CustomEvent("show-spots", { detail: { floor, spots: spots.map((s) => ({ floor, room: s.room, x: s.x, y: s.y })) }, bubbles: true, composed: true }));
   }
@@ -389,7 +401,8 @@ class SextantHealth extends LitElement {
         ${stale(a) ? html`<span class="pill warn" title="Auto calibration has sampled a lot since; refresh for a current picture">over an hour old</span>` : nothing}
         ${a ? html`<span class="muted small">${a.at ? `analysed ${fmtAge((Date.now() - a.at) / 1000)} ago · ` : ""}${a.summary.rooms} rooms · ${a.summary.to_add ? `${a.summary.to_add} proxies to add` : "nothing to add"}${Object.entries(a.summary.issues || {}).filter(([k]) => k !== "ok").map(([k, n]) => ` · ${n} ${k}`).join("")}</span>` : nothing}</div>
       ${a?.unplaced?.length ? html`<div class="row"><b>Heard but not placed:</b>
-        ${a.unplaced.map((u) => html`<span class="chips">${u.name}${u.suggest ? html` <span class="muted small">→ ${u.suggest.room} (${u.suggest.floor})</span> ${uiButton({ label: "Show on plan", kind: "text", onClick: () => this._showSpots(u.suggest.floor, [{ room: u.suggest.room, x: u.suggest.x, y: u.suggest.y }]) })}` : nothing}</span>`)}</div>` : nothing}
+        ${a.unplaced.map((u) => html`<span class="chips">${u.name}${u.suggest ? html` <span class="muted small">→ ${u.suggest.room} (${u.suggest.floor})</span> ${uiButton({ label: "Show on plan", kind: "text", onClick: () => this._showSpots(u.suggest.floor, [{ room: u.suggest.room, x: u.suggest.x, y: u.suggest.y }]) })}` : nothing} ${uiButton({ label: "Ignore", kind: "text", title: "Leave this scanner out of the unplaced lists (a kiosk, a test board, an outdoor proxy)", onClick: () => this._ignoreScanner(u.address, true) })}</span>`)}</div>` : nothing}
+      ${a?.ignored?.length ? html`<div class="row muted small">Ignored: ${a.ignored.map((u) => html`<span class="chips">${u.name} ${uiButton({ label: "Un-ignore", kind: "text", onClick: () => this._ignoreScanner(u.address, false) })}</span>`)}</div>` : nothing}
       ${a ? html`<div class="wrap"><table>
         <tr><th>Floor</th><th>Room</th><th>Issue</th><th class="num">Proxies</th><th class="num">Median</th><th class="num">Add</th><th>What to do</th><th></th></tr>
         ${a.rooms.map((r) => html`<tr>

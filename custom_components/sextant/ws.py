@@ -725,12 +725,13 @@ async def ws_receivers(hass, connection, msg):
                 "last_seen_age": info.get("last_seen_age") if info else None,
                 "matched": info is not None,
             })
+    ignored = ignored_scanners(layout)
     unplaced = [
         {"address": addr, "slug": info.get("slug"), "name": info.get("name"), "area": info.get("area_name"),
          "last_seen_age": info.get("last_seen_age")}
-        for addr, info in directory.items() if addr not in placed_addresses
+        for addr, info in directory.items() if addr not in placed_addresses and addr not in ignored
     ]
-    connection.send_result(msg["id"], {"placed": placed, "unplaced": unplaced})
+    connection.send_result(msg["id"], {"placed": placed, "unplaced": unplaced, "ignored": _ignored_scanner_rows(hass, layout)})
 
 
 @websocket_api.websocket_command({
@@ -1063,8 +1064,18 @@ async def ws_bermuda_tiles(hass, connection, msg):
     _bermuda_result(connection, msg, None if diag is None else {"tiles": diag}, feature="tile")
 
 
+def ignored_scanners(layout) -> set:
+    """Scanner addresses the user has told the reports to leave alone: a
+    kiosk, a test board, an outdoor proxy that is deliberately on no floor.
+    Kept as a top-level layout key (``ignored_scanners``), so an editor save,
+    which owns floor geometry only, never drops it."""
+    raw = layout.get("ignored_scanners") if isinstance(layout, dict) else None
+    return {str(a).lower() for a in raw if isinstance(a, str) and a} if isinstance(raw, list) else set()
+
+
 def _unplaced_scanners(hass, layout):
     """Scanners Bermuda hears (in the last hour) that sit on no floor of the layout."""
+    ignored = ignored_scanners(layout)
     placed_addresses, placed_slugs = set(), set()
     for floor in layout.get("floor", []):
         for r in floor.get("receivers", []):
@@ -1079,8 +1090,47 @@ def _unplaced_scanners(hass, layout):
             continue
         if address in placed_addresses or (info.get("slug") and info["slug"] in placed_slugs):
             continue
+        if address in ignored:
+            continue
         out.append({"slug": info.get("slug") or address, "name": info.get("name") or info.get("slug") or address, "address": address})
     return sorted(out, key=lambda u: u["name"].lower())
+
+
+def _ignored_scanner_rows(hass, layout):
+    """The ignored scanners with their current names, for a report to offer un-ignoring."""
+    directory = bermuda_source.async_get_scanner_directory(hass) or {}
+    rows = []
+    for address in sorted(ignored_scanners(layout)):
+        info = directory.get(address) or {}
+        rows.append({"address": address, "slug": info.get("slug") or address, "name": info.get("name") or info.get("slug") or address})
+    return rows
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "sextant/scanner/ignore",
+    vol.Required("address"): str,
+    vol.Required("ignored"): bool,
+})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_scanner_ignore(hass, connection, msg):
+    """Leave a scanner out of (or put it back into) the unplaced lists on the
+    Proxies and Advice pages. Returns the ignored list."""
+    address = str(msg["address"]).lower().strip()
+    if not address:
+        return _error(connection, msg, "address required")
+    async with LAYOUT_LOCK:
+        layout = get_layout_for_edit(hass)
+        if not isinstance(layout, dict):
+            return _error(connection, msg, "No layout yet")
+        current = ignored_scanners(layout)
+        if msg["ignored"]:
+            current.add(address)
+        else:
+            current.discard(address)
+        layout["ignored_scanners"] = sorted(current)
+        await save_layout(hass, layout)
+    connection.send_result(msg["id"], {"ignored": _ignored_scanner_rows(hass, layout)})
 
 
 
@@ -1099,6 +1149,7 @@ async def ws_advice(hass, connection, msg):
     selftest = await hass.async_add_executor_job(core.run_selftest, hass, samples)
     unplaced = _unplaced_scanners(hass, layout)
     out = await hass.async_add_executor_job(advise, layout, selftest, unplaced)
+    out["ignored"] = _ignored_scanner_rows(hass, layout)
     connection.send_result(msg["id"], out)
 
 
@@ -1107,7 +1158,7 @@ COMMANDS = (
     ws_layout_get, ws_layout_save, ws_tuning_set, ws_tracker_tune,
     ws_history_index, ws_history_get, ws_history_clear,
     ws_calibration_status, ws_calibration_action, ws_selftest, ws_scanner_linking, ws_receivers, ws_beacon_links,
-    ws_adjust_zones, ws_kpi, ws_kpi_baselines, ws_kpi_baseline_save, ws_kpi_baseline_delete,
+    ws_adjust_zones, ws_scanner_ignore, ws_kpi, ws_kpi_baselines, ws_kpi_baseline_save, ws_kpi_baseline_delete,
     ws_truth_mark, ws_truth_list, ws_truth_delete, ws_truth_evaluate, ws_truth_apply,
     ws_bermuda_candidates, ws_bermuda_tracked, ws_bermuda_track, ws_bermuda_findmy, ws_bermuda_findmy_add,
     ws_bermuda_findmy_remove, ws_bermuda_options, ws_bermuda_options_set, ws_bermuda_scanners, ws_bermuda_tiles,

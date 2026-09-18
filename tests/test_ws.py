@@ -396,3 +396,39 @@ def test_every_write_and_bermuda_command_requires_admin():
     assert not any(name.startswith("ws_bermuda_") for name in open_)
     assert {"ws_layout_get", "ws_history_get", "ws_calibration_status", "ws_selftest",
             "ws_advice", "ws_receivers", "ws_kpi"} <= open_
+
+
+def test_ignored_scanners_leave_the_unplaced_lists_and_survive_an_editor_save(tmp_path, monkeypatch):
+    from sextant import bermuda_source
+    layout = {"floor": [{"name": "F", "scale": 100.0, "subzones": [], "zones": [],
+                         "receivers": [{"entity_id": "a", "address": "aa:aa:aa:aa:aa:01", "cords": {"x": 20, "y": 20}}]}]}
+    hass = _hass_with_layout(tmp_path, layout)
+    monkeypatch.setattr(bermuda_source, "async_get_scanner_directory", lambda _h: {
+        "aa:aa:aa:aa:aa:01": {"slug": "a", "name": "A", "last_seen_age": 3.0},
+        "cc:cc:cc:cc:cc:03": {"slug": "kiosk", "name": "Kiosk", "last_seen_age": 4.0},
+        "dd:dd:dd:dd:dd:04": {"slug": "shed", "name": "Shed", "last_seen_age": 5.0},
+    })
+    monkeypatch.setattr(bermuda_source, "async_get_scanner_ages", lambda _h: {})
+    assert [u["slug"] for u in ws._unplaced_scanners(hass, st.get_layout(hass))] == ["kiosk", "shed"]
+
+    conn = _Conn()
+    run(ws.ws_scanner_ignore(hass, conn, {"id": 1, "type": "sextant/scanner/ignore", "address": "CC:CC:CC:CC:CC:03", "ignored": True}))
+    assert conn.results[-1][1] == {"ignored": [{"address": "cc:cc:cc:cc:cc:03", "slug": "kiosk", "name": "Kiosk"}]}
+    assert st.get_layout(hass)["ignored_scanners"] == ["cc:cc:cc:cc:cc:03"]
+    assert [u["slug"] for u in ws._unplaced_scanners(hass, st.get_layout(hass))] == ["shed"]
+
+    run(ws.ws_receivers(hass, conn, {"id": 2, "type": "sextant/receivers"}))
+    rx = conn.results[-1][1]
+    assert [u["slug"] for u in rx["unplaced"]] == ["shed"] and [u["slug"] for u in rx["ignored"]] == ["kiosk"]
+
+    # The editor owns floor geometry only: a save from it keeps the list.
+    run(ws.ws_layout_save(hass, conn, {"id": 3, "type": "sextant/layout/save", "layout": {"floor": st.get_layout(hass)["floor"]}}))
+    assert st.get_layout(hass)["ignored_scanners"] == ["cc:cc:cc:cc:cc:03"]
+
+    run(ws.ws_scanner_ignore(hass, conn, {"id": 4, "type": "sextant/scanner/ignore", "address": "cc:cc:cc:cc:cc:03", "ignored": False}))
+    assert conn.results[-1][1] == {"ignored": []}
+    assert [u["slug"] for u in ws._unplaced_scanners(hass, st.get_layout(hass))] == ["kiosk", "shed"]
+    run(ws.ws_scanner_ignore(hass, conn, {"id": 5, "type": "sextant/scanner/ignore", "address": "  ", "ignored": True}))
+    assert conn.errors
+    assert ws.ignored_scanners({"ignored_scanners": "nope"}) == set() and ws.ignored_scanners(None) == set()
+    assert getattr(ws.ws_scanner_ignore, "_ws_admin", False)
