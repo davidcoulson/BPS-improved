@@ -1127,6 +1127,11 @@ def _status_payload(cal: dict) -> dict:
         "error": cal["error"],
         "results": cal["results"],
         "last_solved_at": cal["last_solved_at"],
+        # When the current window started (auto: since it was switched on or
+        # resumed at start-up), so the panel can say how long it has sampled
+        # and when the first automatic solve is due (AUTO_MIN_WINDOW after).
+        "started_at": cal["started_at"],
+        "first_solve_after": AUTO_MIN_WINDOW,
         "pair_counts": pair_counts,
         "receiver_count": len(cal["receivers"]),
     }

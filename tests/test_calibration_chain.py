@@ -154,3 +154,12 @@ def test_true_distance_is_3d_only_when_both_heights_are_known():
     assert cal_mod._true_distance_m(cal, "a", "b") == pytest.approx(math.hypot(3.0, 1.9))
     assert cal_mod._true_distance_m(cal, "a", "c") == pytest.approx(3.0)
     assert cal_mod._true_distance_m(cal, "a", "d") is None
+
+
+def test_status_payload_reports_the_window_start_for_the_panel(tmp_path):
+    hass = _hass(tmp_path)
+    cal = cal_mod.get_calibration_state(hass)
+    cal.update({"state": "sampling", "mode": "auto", "started_at": 1234.5})
+    payload = cal_mod._status_payload(cal)
+    assert payload["started_at"] == 1234.5 and payload["first_solve_after"] == cal_mod.AUTO_MIN_WINDOW
+    assert payload["mode"] == "auto" and "seconds_left" not in payload  # only a manual run has an end

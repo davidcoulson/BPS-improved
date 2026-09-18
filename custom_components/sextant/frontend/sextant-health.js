@@ -392,7 +392,7 @@ class SextantHealth extends LitElement {
       <p class="small muted">Every proxy hears every other proxy's beacon at a known distance; a run collects those readings and solves one range correction per proxy. Apply only when the error factor after is lower than before, otherwise the corrections are absorbing placement error, not radio bias.</p>
       ${cal ? html`
         <div class="row">
-          <span class="pill ${sampling ? "warn" : cal.mode === "auto" ? "ok" : ""}">${cal.mode === "auto" ? "auto" : cal.state}${sampling && cal.seconds_left != null ? ` · ${fmtAge(cal.seconds_left)} left` : ""}</span>
+          <span class="pill ${sampling ? "warn" : cal.mode === "auto" ? "ok" : ""}">${cal.mode === "auto" ? `auto${cal.started_at ? ` · sampling for ${fmtAge(Date.now() / 1000 - cal.started_at)}` : ""}${cal.started_at && !cal.last_solved_at && cal.first_solve_after ? ` · first solve in ${fmtAge(Math.max(0, cal.started_at + cal.first_solve_after - Date.now() / 1000))}` : ""}` : cal.state}${sampling && cal.seconds_left != null ? ` · ${fmtAge(cal.seconds_left)} left` : ""}</span>
           <span class="muted small">${Object.keys(cal.pair_counts || {}).length} pairs sampled · ${cal.receiver_count} proxies${cal.last_solved_at ? ` · solved ${fmtAge(Date.now() / 1000 - cal.last_solved_at)} ago` : ""}</span>
           ${cal.error ? html`<span class="pill bad">${cal.error}</span>` : nothing}
         </div>
