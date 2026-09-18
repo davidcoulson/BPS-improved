@@ -315,3 +315,42 @@ def test_tracker_colour_is_validated_and_stored(tmp_path):
     assert conn.errors[-1][2].startswith("color")
     run(ws.ws_tracker_tune(hass, conn, {"id": 3, "type": "sextant/tracker/tune", "entity": "fry", "color": None}))
     assert "fry" not in st.get_layout(hass)["tracker_colors"]
+
+
+def test_layout_save_keeps_what_the_server_owns(tmp_path):
+    """A Save from the Edit page merges its floors into the current layout: tuning,
+    tracker settings, calibration stamps and per-proxy corrections survive."""
+    current = {
+        "floor": [{"name": "F", "scale": 100.0, "zones": [], "subzones": [],
+                   "calibration": {"applied_at": "t0", "auto": True},
+                   "receivers": [{"entity_id": "r0", "cords": {"x": 0, "y": 0}, "correction": 0.9},
+                                 {"entity_id": "gone", "cords": {"x": 9, "y": 9}, "correction": 1.2}]}],
+        "tuning": {"zone_switch_secs": 45}, "tracker_colors": {"willow": "#6d4c41"}, "auto_calibration": True,
+    }
+    hass = _hass_with_layout(tmp_path, current)
+    editor_copy = {  # cloned before the colour and the corrections existed, receiver moved, one added, one deleted
+        "floor": [{"name": "F", "scale": 100.0, "zones": [{"zone_id": "z", "entity_id": "Hall", "poly": True, "cords": [{"x": 0, "y": 0}, {"x": 1, "y": 0}, {"x": 1, "y": 1}]}], "subzones": [],
+                   "receivers": [{"entity_id": "r0", "cords": {"x": 50, "y": 60}, "height": 1.5, "correction": 0.5},
+                                 {"entity_id": "new", "cords": {"x": 1, "y": 2}}]}],
+        "tuning": {}, "tracker_colors": {},
+    }
+    conn = _Conn()
+    run(ws.ws_layout_save(hass, conn, {"id": 9, "type": "sextant/layout/save", "layout": editor_copy}))
+    assert conn.results and not conn.errors
+    saved = st.get_layout(hass)
+    assert saved["tuning"] == {"zone_switch_secs": 45} and saved["tracker_colors"] == {"willow": "#6d4c41"} and saved["auto_calibration"] is True
+    floor = saved["floor"][0]
+    assert floor["calibration"] == {"applied_at": "t0", "auto": True}
+    assert [z["entity_id"] for z in floor["zones"]] == ["Hall"]
+    recs = {r["entity_id"]: r for r in floor["receivers"]}
+    assert set(recs) == {"r0", "new"}                       # the editor decides which proxies exist and where
+    assert recs["r0"]["cords"] == {"x": 50, "y": 60} and recs["r0"]["height"] == 1.5
+    assert recs["r0"]["correction"] == 0.9                  # the server's correction, not the editor's stale copy
+    assert "correction" not in recs["new"]
+
+
+def test_layout_save_on_a_fresh_install_takes_the_editor_layout_whole(tmp_path):
+    hass = _hass_with_layout(tmp_path)
+    conn = _Conn()
+    run(ws.ws_layout_save(hass, conn, {"id": 10, "type": "sextant/layout/save", "layout": _layout()}))
+    assert st.get_layout(hass)["floor"][0]["receivers"][0]["entity_id"] == "r0"

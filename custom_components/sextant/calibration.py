@@ -776,6 +776,13 @@ async def _auto_solve_and_apply_locked(hass, cal: dict) -> None:
         cal["last_solved_at"] = result["solved_at"]
 
         previous = cal["applied"].get(floor_name, {})
+        if previous and _calibration_target(coords) != "bermuda":
+            # "Applied" is what this loop last wrote; if the layout no longer
+            # carries those corrections (an older copy was saved over it),
+            # write them again rather than deciding nothing has changed.
+            stored = {str(r.get("entity_id")): r.get("correction") for r in floor.get("receivers", [])}
+            if any(stored.get(slug) is None for slug in previous):
+                previous = {}
         if _calibration_target(coords) == "bermuda":
             # Offsets already written are inside the samples, so each solve
             # fits the RESIDUAL: nothing to do while it stays near 1.0.

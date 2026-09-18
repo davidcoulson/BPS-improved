@@ -163,3 +163,28 @@ def test_status_payload_reports_the_window_start_for_the_panel(tmp_path):
     payload = cal_mod._status_payload(cal)
     assert payload["started_at"] == 1234.5 and payload["first_solve_after"] == cal_mod.AUTO_MIN_WINDOW
     assert payload["mode"] == "auto" and "seconds_left" not in payload  # only a manual run has an end
+
+
+def test_auto_apply_rewrites_corrections_the_layout_lost(tmp_path):
+    """cal["applied"] remembers what auto calibration wrote; if a Save from the
+    editor removed them from the layout, the next auto solve must write them
+    again instead of concluding that nothing moved."""
+    hass = _hass(tmp_path)
+    hass.async_create_task = lambda coro: coro.close()
+    cal = _prepared(hass)
+    rng = random.Random(5)
+    bias = {s: 1.0 for s in ADDR}
+    bias["r2"] = 1.3
+    for k in range(12):
+        cal_mod._ingest_dump(cal, _dump(bias, rng, stamp=1000.0 + k))
+    run(cal_mod._auto_solve_and_apply_locked(hass, cal))
+    first = {r["entity_id"]: r["correction"] for r in st.get_layout(hass)["floor"][0]["receivers"]}
+    assert first["r2"] < 0.9 and cal["applied"]["F"] == cal["results"]["F"]["receivers"]
+    # An older copy of the layout is saved over it: corrections gone, "applied" still remembers them.
+    lost = st.get_layout(hass)
+    for r in lost["floor"][0]["receivers"]:
+        r.pop("correction", None)
+    run(st.save_layout(hass, lost))
+    run(cal_mod._auto_solve_and_apply_locked(hass, cal))
+    again = {r["entity_id"]: r.get("correction") for r in st.get_layout(hass)["floor"][0]["receivers"]}
+    assert again["r2"] is not None and abs(again["r2"] - first["r2"]) < 0.05

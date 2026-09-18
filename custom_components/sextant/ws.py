@@ -178,6 +178,48 @@ async def ws_layout_get(hass, connection, msg):
     })
 
 
+def merge_editor_layout(current, incoming):
+    """The editor's floors over the current layout, keeping what the server owns.
+
+    The Edit page works on a copy of the layout taken when it loaded and
+    sends the whole copy back on Save. Everything outside ``floor`` (tuning,
+    tracker names, classes, colours, heights, the auto-calibration flag) is
+    written by other pages and by the backend, and inside a floor the
+    per-proxy ``correction`` and the ``calibration`` stamp are written by
+    calibration - none of which the editor edits. Taking them from the
+    current layout means a Save can no longer wipe corrections that auto
+    calibration applied five minutes earlier, or a colour picked on the
+    Trackers page while the editor sat open (that is what happened).
+    Receivers are matched by entity_id; one the editor added has no
+    correction yet, one it deleted takes its correction with it.
+    """
+    if not isinstance(current, dict):
+        return incoming
+    merged = {k: v for k, v in current.items() if k != "floor"}
+    by_name = {str(f.get("name")): f for f in current.get("floor", []) if isinstance(f, dict)}
+    floors = []
+    for floor in incoming.get("floor", []):
+        floor = dict(floor)
+        old = by_name.get(str(floor.get("name")))
+        if old is not None:
+            floor.pop("calibration", None)
+            if isinstance(old.get("calibration"), dict):
+                floor["calibration"] = old["calibration"]
+            corrections = {str(r.get("entity_id")): r.get("correction") for r in old.get("receivers", []) if isinstance(r, dict)}
+            receivers = []
+            for r in floor.get("receivers", []):
+                r = dict(r)
+                r.pop("correction", None)
+                kept = corrections.get(str(r.get("entity_id")))
+                if kept is not None:
+                    r["correction"] = kept
+                receivers.append(r)
+            floor["receivers"] = receivers
+        floors.append(floor)
+    merged["floor"] = floors
+    return merged
+
+
 @websocket_api.websocket_command({
     vol.Required("type"): "sextant/layout/save",
     vol.Required("layout"): dict,
@@ -201,6 +243,7 @@ async def ws_layout_save(hass, connection, msg):
         if remove_target is None or remove_target.name in core._PROTECTED_MAPS_FILES:
             return _error(connection, msg, "invalid map to remove")
     async with LAYOUT_LOCK:
+        layout = merge_editor_layout(get_layout(hass), layout)
         await save_layout(hass, layout)
     if remove_target is not None and remove_target.exists():
         try:
