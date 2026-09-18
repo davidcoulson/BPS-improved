@@ -120,6 +120,9 @@ export const WALL_SNAP_M = 0.25;
 export const WALL_RELEASE_M = 0.6;
 export const WALL_INSET_M = 0.05;
 const PX_PER_M_FALLBACK = 40; // an unscaled floor: 2000 px frame at ~50 m
+// The Edit page floats its toolbar over the top of the canvas, and Live its
+// option chips; a label drawn this close to the top would sit behind them.
+const TOP_OVERLAY_PX = 120;
 
 function projectOnSegment(p, a, b) {
   const dx = b.x - a.x, dy = b.y - a.y;
@@ -551,7 +554,18 @@ export class SextantMap {
     this._drawDraft(ctx);
     if (this._snap) this._drawSnap(ctx);
     this._drawReceivers(ctx, f.receivers || []);
-    if (this.suggestions.length) this._drawSuggestions(ctx);
+    if (this.suggestions.length) {
+      // A house plan is busy: walls, room fills, dozens of proxies. Fade all
+      // of it back behind a scrim of the page's own background so the advised
+      // spots drawn next are the only thing at full strength - the plan stays
+      // legible underneath as a ghost, for working out where the spot is.
+      ctx.save();
+      ctx.globalAlpha = 0.78;
+      ctx.fillStyle = this._css("--sextant-map-bg", "#ffffff");
+      ctx.fillRect(0, 0, size.w, size.h);
+      ctx.restore();
+      this._drawSuggestions(ctx);
+    }
     if (this.mode !== "edit") { this._drawTrackers(ctx); this._drawMarks(ctx); }
     ctx.restore();
   }
@@ -711,14 +725,30 @@ export class SextantMap {
 
   /** Truth marks: a pin where the user said the focused tracker really was. */
   _drawSuggestions(ctx) {
-    // Where the Advice page says a proxy would help: a magenta ring, in both modes.
+    // Where the Advice page says a proxy would help: a magenta target, in
+    // both modes. Drawn over a scrim (see draw()), numbered so a whole
+    // floor's worth can be counted off against the Advice list, and haloed
+    // so a ring never disappears into a dark wall it sits on.
     const k = this.view.k;
-    for (const s of this.suggestions) {
-      ctx.beginPath(); ctx.arc(s.x, s.y, 14 / k, 0, Math.PI * 2);
+    this.suggestions.forEach((s, i) => {
+      const r = 17 / k;
+      ctx.beginPath(); ctx.arc(s.x, s.y, r + 5 / k, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(200,0,180,0.14)"; ctx.fill();
+      ctx.beginPath(); ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
+      ctx.strokeStyle = "rgba(255,255,255,0.9)"; ctx.lineWidth = 6 / k; ctx.stroke();
       ctx.strokeStyle = "#c800b4"; ctx.lineWidth = 3 / k; ctx.setLineDash([5 / k, 4 / k]); ctx.stroke(); ctx.setLineDash([]);
-      ctx.beginPath(); ctx.arc(s.x, s.y, 4 / k, 0, Math.PI * 2); ctx.fillStyle = "#c800b4"; ctx.fill();
-      this._label(ctx, s.label || "add a proxy here", s.x, s.y - 22 / k, 11, 0.9);
-    }
+      ctx.beginPath(); ctx.arc(s.x, s.y, 6 / k, 0, Math.PI * 2); ctx.fillStyle = "#c800b4"; ctx.fill();
+      if (this.suggestions.length > 1) {
+        ctx.font = `700 ${9 / k}px system-ui, sans-serif`;
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillStyle = "#fff"; ctx.fillText(String(i + 1), s.x, s.y + 0.4 / k);
+      }
+      // Above the ring, unless the label would land under the toolbar the
+      // Edit page floats over the top of the canvas, or off the plan.
+      const screenY = this.view.ty + s.y * k;
+      const above = screenY > TOP_OVERLAY_PX && s.y > 40 / k;
+      this._label(ctx, s.label || "add a proxy here", s.x, s.y + (above ? -26 : 28) / k, 11, 1);
+    });
   }
 
   _drawMarks(ctx) {

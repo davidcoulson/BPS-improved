@@ -32,7 +32,9 @@ Suggested spots sit just inside a wall, where an outlet or a switch would
 be. **Show on plan** opens the Edit page on that floor with one room's
 spots marked, and **Show all N on this floor** marks every spot the floor
 needs at once, each ring labelled with its room — the whole floor's work in
-one view before you pick up a drill. Placing a proxy there is the usual
+one view before you pick up a drill. The plan fades back behind the rings
+while they are shown, and they are numbered, so four suggestions are not
+something to hunt for among sixty proxies. Placing a proxy there is the usual
 Place tool. Proxies Bermuda hears that sit on no floor are listed at the
 top, each with the spot that needs it most.
 
