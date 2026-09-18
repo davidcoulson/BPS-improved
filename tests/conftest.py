@@ -277,6 +277,38 @@ def _install_homeassistant_stubs():
     _module("homeassistant.components.sensor", SensorEntity=object,
             SensorStateClass=types.SimpleNamespace(MEASUREMENT="measurement"))
     _module("homeassistant.helpers.entity", DeviceInfo=dict)
+
+    # Config-entry flows: just enough of ConfigFlow/OptionsFlow for the
+    # integration's flow module to import and for tests to drive its steps.
+    class _FakeConfigFlow:
+        def __init_subclass__(cls, domain=None, **kw):
+            cls.domain = domain
+
+        def __init__(self):
+            self.hass = None
+            self.unique_id = None
+
+        async def async_set_unique_id(self, uid):
+            self.unique_id = uid
+
+        def _abort_if_unique_id_configured(self):
+            if self.unique_id in getattr(self.hass, "configured_unique_ids", ()):
+                raise _AbortFlow("already_configured")
+
+        def async_create_entry(self, title, data):
+            return {"type": "create_entry", "title": title, "data": data}
+
+        def async_show_form(self, step_id, data_schema=None, errors=None):
+            return {"type": "form", "step_id": step_id, "data_schema": data_schema, "errors": errors}
+
+    class _FakeOptionsFlow(_FakeConfigFlow):
+        pass
+
+    class _AbortFlow(Exception):
+        pass
+
+    _module("homeassistant.config_entries", ConfigFlow=_FakeConfigFlow, OptionsFlow=_FakeOptionsFlow,
+            AbortFlow=_AbortFlow)
     sys.modules["homeassistant.helpers.event"].async_call_later = lambda *a, **k: None
     _module("homeassistant.const", UnitOfLength=types.SimpleNamespace(METERS="m"))
     _module("homeassistant.util", slugify=lambda s: s)
