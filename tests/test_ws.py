@@ -432,3 +432,69 @@ def test_ignored_scanners_leave_the_unplaced_lists_and_survive_an_editor_save(tm
     assert conn.errors
     assert ws.ignored_scanners({"ignored_scanners": "nope"}) == set() and ws.ignored_scanners(None) == set()
     assert getattr(ws.ws_scanner_ignore, "_ws_admin", False)
+
+
+def _flow_hass(tmp_path, result, *, init_raises=None):
+    """A hass whose config-entry flow answers with `result`, recording the calls."""
+    hass = _hass_with_layout(tmp_path, _layout())
+    calls = []
+
+    async def async_init(domain, context=None):
+        calls.append(("init", domain, context))
+        if init_raises:
+            raise init_raises
+        return {"flow_id": "flow1"}
+
+    async def async_configure(flow_id, data):
+        calls.append(("configure", flow_id, data))
+        return result
+
+    async def async_abort(flow_id):
+        calls.append(("abort", flow_id))
+
+    hass.config_entries = types.SimpleNamespace(
+        flow=types.SimpleNamespace(async_init=async_init, async_configure=async_configure, async_abort=async_abort))
+    hass._flow_calls = calls
+    return hass
+
+
+def test_adding_a_phone_by_irk_drives_the_home_assistant_flow(tmp_path):
+    hass = _flow_hass(tmp_path, {"type": "create_entry", "title": "Pixel 9"})
+    conn = _Conn()
+    run(ws.ws_irk_add(hass, conn, {"id": 1, "type": "sextant/irk/add", "irk": "  irk:aabb  "}))
+    assert conn.results[-1][1] == {"title": "Pixel 9", "irk": "irk:aabb"}
+    assert hass._flow_calls[0] == ("init", "private_ble_device", {"source": "user"})
+    assert hass._flow_calls[1] == ("configure", "flow1", {"irk": "irk:aabb"})
+    assert not conn.errors
+
+
+def test_irk_failures_are_explained_and_the_flow_is_not_left_open(tmp_path):
+    for reason, expect in (("irk_not_valid", "32 hex characters"),
+                           ("irk_not_found", "near a proxy"),
+                           ("bluetooth_not_available", "no Bluetooth scanner"),
+                           ("something_else", "something_else")):
+        hass = _flow_hass(tmp_path, {"type": "form", "errors": {"irk": reason}})
+        conn = _Conn()
+        run(ws.ws_irk_add(hass, conn, {"id": 1, "type": "sextant/irk/add", "irk": "aabb"}))
+        assert conn.errors, reason
+        assert expect in str(conn.errors[-1]), (reason, conn.errors[-1])
+        assert ("abort", "flow1") in hass._flow_calls, reason  # no half-open flow left behind
+
+    # An abort (rather than a form) carries its reason in another key.
+    hass = _flow_hass(tmp_path, {"type": "abort", "reason": "bluetooth_not_available"})
+    conn = _Conn()
+    run(ws.ws_irk_add(hass, conn, {"id": 1, "type": "sextant/irk/add", "irk": "aabb"}))
+    assert "no Bluetooth scanner" in str(conn.errors[-1])
+
+
+def test_irk_add_rejects_an_empty_key_and_survives_a_broken_flow(tmp_path):
+    hass = _flow_hass(tmp_path, {})
+    conn = _Conn()
+    run(ws.ws_irk_add(hass, conn, {"id": 1, "type": "sextant/irk/add", "irk": "   "}))
+    assert "Paste the key" in str(conn.errors[-1]) and not hass._flow_calls
+
+    hass = _flow_hass(tmp_path, {}, init_raises=RuntimeError("no such integration"))
+    conn = _Conn()
+    run(ws.ws_irk_add(hass, conn, {"id": 2, "type": "sextant/irk/add", "irk": "aabb"}))
+    assert "could not take the key" in str(conn.errors[-1])
+    assert getattr(ws.ws_irk_add, "_ws_admin", False)

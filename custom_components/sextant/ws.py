@@ -969,6 +969,50 @@ async def ws_bermuda_findmy_add(hass, connection, msg):
     _bermuda_result(connection, msg, added)
 
 
+@websocket_api.websocket_command({
+    vol.Required("type"): "sextant/irk/add",
+    vol.Required("irk"): str,
+})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_irk_add(hass, connection, msg):
+    """Add a phone or watch by its Identity Resolving Key.
+
+    A modern phone changes its Bluetooth address every few minutes, so it can
+    only be followed by the key that generates those addresses. Home Assistant
+    owns that: private_ble_device resolves the rotating address and Bermuda
+    tracks what it resolves. Rather than send people to a different page to
+    paste a key, drive that integration's own flow from here and turn its two
+    failures into something worth reading.
+    """
+    irk = str(msg["irk"]).strip()
+    if not irk:
+        return _error(connection, msg, "Paste the key first")
+    flow = hass.config_entries.flow
+    try:
+        started = await flow.async_init("private_ble_device", context={"source": "user"})
+        result = await flow.async_configure(started["flow_id"], {"irk": irk})
+    except Exception as e:  # noqa: BLE001 - an unknown flow, or one that changed shape
+        return _error(connection, msg, f"Home Assistant could not take the key: {e}")
+
+    if result.get("type") == "create_entry":
+        return connection.send_result(msg["id"], {"title": result.get("title"), "irk": irk})
+    errors = result.get("errors") or {}
+    reason = errors.get("irk") or result.get("reason") or "unknown"
+    try:
+        await flow.async_abort(started["flow_id"])
+    except Exception:  # noqa: BLE001 - already gone
+        pass
+    if reason == "irk_not_valid":
+        return _error(connection, msg, "That is not a valid key: it should be 32 hex characters, or base64 ending in '='")
+    if reason == "irk_not_found":
+        return _error(connection, msg, "The key is valid, but nothing near a proxy is using it right now. "
+                                       "Wake the phone and keep it near a proxy for a moment, then try again")
+    if reason == "bluetooth_not_available":
+        return _error(connection, msg, "Home Assistant has no Bluetooth scanner, so it cannot check the key")
+    return _error(connection, msg, f"Home Assistant refused the key: {reason}")
+
+
 @websocket_api.websocket_command({vol.Required("type"): "sextant/bermuda/findmy/remove", vol.Required("address"): str})
 @websocket_api.require_admin
 @websocket_api.async_response
@@ -1163,6 +1207,7 @@ COMMANDS = (
     ws_bermuda_candidates, ws_bermuda_tracked, ws_bermuda_track, ws_bermuda_findmy, ws_bermuda_findmy_add,
     ws_bermuda_findmy_remove, ws_bermuda_options, ws_bermuda_options_set, ws_bermuda_scanners, ws_bermuda_tiles,
     ws_bermuda_scanner_ranging, ws_bermuda_tile_identities, ws_bermuda_tile_bind, ws_bermuda_tile_adopt,
+    ws_irk_add,
 )
 
 

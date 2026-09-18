@@ -4,7 +4,18 @@
 
 ![The Things page: what is tracked, with its class icon, and everything Bermuda hears but does not track, with where the loudest proxy is](../img/screenshots/sextant-things.png)
 
-Bermuda's device management without its options flow. The top list is what
+Bermuda's device management without its options flow. **Add a thing…** asks
+what you are adding, because how a thing is followed depends on whether its
+Bluetooth address stays put:
+
+| What | What it needs |
+|---|---|
+| A phone or watch | Its Identity Resolving Key. A phone changes its address every few minutes and only that key follows it. Paste the key here and Sextant fills in Home Assistant's own Private BLE Device form, which will only take a key it can watch resolve an address right now — so keep the phone awake and near a proxy. |
+| An AirTag or FindMy tag | Its pairing keys, which only the Mac it was paired from holds. Opens the walkthrough on the [Bermuda page](bermuda.md). |
+| A Tile | A binding, on the [Bermuda page](bermuda.md), so one Tile is followed across its rotations. |
+| Anything else | Nothing. An iBeacon, a fitness band or a tag with a fixed address simply appears below once a couple of proxies hear it. |
+
+The top list is what
 is tracked: click the name or the icon to open the thing dialog and set a
 display name, a class (person, dog, cat, phone, watch, keys, tag and more,
 each with its icon on the map), a colour used everywhere it is drawn, a

@@ -192,7 +192,8 @@ class SextantPanel extends LitElement {
       case "things":
       case "bermuda":
         return html`<sextant-devices .hass=${this.hass} .data=${this._data} .positions=${this._positions} .section=${this._mode}
-                                     @layout-changed=${() => this._onLayoutChanged()}></sextant-devices>`;
+                                     @layout-changed=${() => this._onLayoutChanged()}
+                                     @quick-nav=${(e) => this._setMode(e.detail)}></sextant-devices>`;
       case "proxies":
       case "calibration":
       case "tuning":

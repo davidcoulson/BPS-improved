@@ -43,6 +43,7 @@ class SextantDevices extends LitElement {
     _busy: { state: true },
     _wizard: { state: true },
     _findmyWizard: { state: true },
+    _addWizard: { state: true },
   };
 
   constructor() {
@@ -62,6 +63,7 @@ class SextantDevices extends LitElement {
     this._busy = false;
     this._wizard = null;        // thing dialog state
     this._findmyWizard = null;  // FindMy add-accessory dialog state
+    this._addWizard = null;     // "Add a thing" chooser: {kind, irk, error}
     this._pendingTrack = null;  // config_value just sent to Bermuda: open its dialog once it appears
   }
 
@@ -435,6 +437,77 @@ class SextantDevices extends LitElement {
     if (added) { this._findmyWizard = null; this._refresh(); }
   }
 
+  /** What kind of thing is being added, and what each kind needs. An address
+   * that never changes needs nothing: Bermuda already hears it and it is in
+   * the list below. The rest need a key or a binding, each of which already
+   * has a flow - this is the signpost to the right one. */
+  _addKinds() {
+    return [
+      ["irk", "mdi:cellphone-key", "A phone or watch",
+       "A modern phone changes its Bluetooth address every few minutes. Only its Identity Resolving Key can follow it, and only the phone can give you that key."],
+      ["findmy", "mdi:apple", "An AirTag or FindMy tag",
+       "It rotates its address on a schedule fixed when it was paired, so Bermuda needs the pairing keys from the Mac it was paired on."],
+      ["tile", "mdi:tag", "A Tile",
+       "Tiles rotate too. Bermuda follows one across rotations once you tell it which Tile is which, on the Bermuda page."],
+      ["plain", "mdi:bluetooth", "Anything else",
+       "An iBeacon, a fitness band, a tag with a fixed address: nothing to paste. Once a couple of proxies hear it, it is in the list below - press Track there."],
+    ];
+  }
+
+  async _addIrk() {
+    const w = this._addWizard;
+    this._busy = "irk";
+    const r = await callWS(this, this.hass, { type: "sextant/irk/add", irk: (w.irk || "").trim() });
+    this._busy = null;
+    if (r) {
+      toast(this, `${r.title || "Phone"} added; it appears below once a proxy hears it`);
+      this._addWizard = null;
+      this._refresh();
+    }
+  }
+
+  _renderAddWizard() {
+    const w = this._addWizard;
+    if (!w) return nothing;
+    const kinds = this._addKinds();
+    const close = () => { this._addWizard = null; };
+    return html`<div class="modal" @click=${(e) => { if (e.target === e.currentTarget) close(); }}>
+      <div class="dialog card wide" role="dialog" aria-label="Add a thing">
+        <h3>Add a thing</h3>
+        ${!w.kind ? html`
+          <p class="small muted">What is it? How a thing is followed depends on whether its Bluetooth address stays put.</p>
+          <div class="kinds">
+            ${kinds.map(([kind, icon, title, blurb]) => html`
+              <button class="kind" @click=${() => { this._addWizard = { ...w, kind }; }}>
+                <ha-icon icon=${icon}></ha-icon>
+                <span><b>${title}</b><br><span class="muted small">${blurb}</span></span>
+              </button>`)}
+          </div>` : nothing}
+        ${w.kind === "irk" ? html`
+          <ol class="steps">
+            <li><b>Get the key.</b> On an iPhone it is in a HomeKit or a Home Assistant companion-app export; on Android, from a Bluetooth pairing dump. It is 32 hex characters, or base64 ending in <code>=</code>. An <code>irk:</code> in front is fine.</li>
+            <li><b>Keep the phone awake and near a proxy</b> while you add it: Home Assistant only accepts a key it can watch resolve an address right now.</li>
+            <li><b>Track it</b> from the list below once it appears.</li>
+          </ol>
+          ${uiField({ label: "Identity Resolving Key", value: w.irk, placeholder: "a1b2c3…  or  irk:a1b2c3…", onChange: (v) => { this._addWizard = { ...w, irk: v }; }, style: "width: 100%" })}
+          <p class="small muted">Home Assistant's own Private BLE Device integration holds the key and resolves the address; Bermuda tracks what it resolves. Sextant just fills in the form.</p>` : nothing}
+        ${w.kind === "findmy" ? html`
+          <p class="small">An AirTag needs its pairing keys, which only the Mac it was paired from holds. That has its own walkthrough.</p>` : nothing}
+        ${w.kind === "tile" ? html`
+          <p class="small">A Tile is bound on the Bermuda page, where the Tiles it hears are listed with the addresses they are using.</p>` : nothing}
+        ${w.kind === "plain" ? html`
+          <p class="small">Nothing to paste. Bring it near a couple of proxies, then find it in <b>Heard, not tracked</b> below and press <b>Track…</b>. If it is hiding, switch on <b>Show all</b>.</p>` : nothing}
+        <div class="row end">
+          ${w.kind ? uiButton({ label: "Back", kind: "text", onClick: () => { this._addWizard = { ...w, kind: null }; } }) : nothing}
+          ${uiButton({ label: "Close", kind: "text", onClick: close })}
+          ${w.kind === "irk" ? uiButton({ label: this._busy === "irk" ? "Adding…" : "Add the phone", kind: "primary", disabled: this._busy === "irk" || !(w.irk || "").trim(), onClick: () => this._addIrk() }) : nothing}
+          ${w.kind === "findmy" ? uiButton({ label: "Open the FindMy walkthrough", kind: "primary", onClick: () => { close(); this._openFindMyWizard(); } }) : nothing}
+          ${w.kind === "tile" ? uiButton({ label: "Go to the Bermuda page", kind: "primary", onClick: () => { close(); this.dispatchEvent(new CustomEvent("quick-nav", { detail: "bermuda", bubbles: true, composed: true })); } }) : nothing}
+        </div>
+      </div>
+    </div>`;
+  }
+
   _renderFindMyWizard() {
     const w = this._findmyWizard;
     if (!w) return nothing;
@@ -470,7 +543,7 @@ class SextantDevices extends LitElement {
     if (!this._hasApi) {
       return html`<div class="page"><div class="card">This Bermuda build has no device-management API. Update Bermuda to fork-testing.15 or later to manage things from here.</div></div>`;
     }
-    return html`<div class="page">${this.section === "bermuda" ? this._renderBermuda() : this._renderThings()}</div>${this._renderWizard()}${this._renderFindMyWizard()}`;
+    return html`<div class="page">${this.section === "bermuda" ? this._renderBermuda() : this._renderThings()}</div>${this._renderWizard()}${this._renderFindMyWizard()}${this._renderAddWizard()}`;
   }
 
   /** The carry height used for a thing without one of its own: the layout's thing_height, else 1 m. */
@@ -534,7 +607,10 @@ class SextantDevices extends LitElement {
       .sort((a, b) => (a.last_seen_age ?? 1e9) - (b.last_seen_age ?? 1e9));
     return html`
       <section class="card">
-        <h3>Tracked <span class="muted">${tracked.length}</span></h3>
+        <h3>Tracked <span class="muted">${tracked.length}</span>
+          <span class="grow"></span>
+          ${uiButton({ label: "Add a thing…", kind: "primary", icon: "mdi:plus", onClick: () => { this._addWizard = { kind: null, irk: "", error: null }; } })}
+        </h3>
         <div class="wrap"><table class="compact">
           <tr><th>Thing</th><th>Where</th><th class="num">Height</th><th class="num">Ref trim</th><th></th></tr>
           ${tracked.map(([address, d]) => {
@@ -699,6 +775,12 @@ class SextantDevices extends LitElement {
   }
 
   static styles = [sharedStyles, widgetStyles, css`
+    .kinds { display: grid; gap: 8px; margin: 10px 0; }
+    .kind { display: flex; align-items: flex-start; gap: 10px; text-align: left; padding: 10px 12px; border: 1px solid var(--divider-color); border-radius: 10px; background: var(--card-background-color); color: inherit; font: inherit; cursor: pointer; }
+    .kind:hover { border-color: var(--primary-color); background: var(--secondary-background-color); }
+    .kind ha-icon { --mdc-icon-size: 24px; color: var(--primary-color); flex: none; margin-top: 2px; }
+    h3 .grow { flex: 1; }
+    h3 { display: flex; align-items: center; gap: 8px; }
     :host { display: block; overflow: auto; position: relative; }
     .cols { grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); }
     @media (max-width: 720px) { .cols { grid-template-columns: 1fr; } .row > ha-textfield, .row > ha-input, .row > ha-select, .row > .chips, .row > label.field { width: 100% !important; min-width: 0 !important; box-sizing: border-box; } .card { min-width: 0; overflow-x: hidden; } }
