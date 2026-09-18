@@ -52,6 +52,22 @@ const TUNING_LABELS = {
   calibration_target: ["Calibration writes to", "sextant = a per-proxy factor in the layout; bermuda = per-scanner RSSI offsets in Bermuda"],
 };
 
+// The self-test and the advice take seconds to compute and are worth keeping:
+// switching to another page tears this element down, so they are kept in the
+// tab's session storage and restored when the page comes back (an hour at most).
+const REMEMBER_MS = 60 * 60 * 1000;
+function remember(key, value) {
+  try { sessionStorage.setItem(`sextant.${key}`, JSON.stringify({ at: Date.now(), value })); } catch { /* private mode */ }
+}
+function recall(key) {
+  try {
+    const raw = sessionStorage.getItem(`sextant.${key}`);
+    if (!raw) return null;
+    const { at, value } = JSON.parse(raw);
+    return Date.now() - at <= REMEMBER_MS ? { ...value, at } : null;
+  } catch { return null; }
+}
+
 class SextantHealth extends LitElement {
   static properties = {
     hass: { attribute: false },
@@ -81,7 +97,8 @@ class SextantHealth extends LitElement {
     this.section = "proxies";
     this._receivers = null;
     this._cal = null;
-    this._selftest = null;
+    this._selftest = recall("selftest");
+    this._advice = recall("advice");
     this._kpi = null;
     this._kpiHours = 12;
     this._baselines = [];
@@ -144,7 +161,7 @@ class SextantHealth extends LitElement {
     this._busy = "selftest";
     const r = await callWS(this, this.hass, { type: "sextant/selftest" });
     this._busy = null;
-    if (r) this._selftest = r;
+    if (r) { this._selftest = { ...r, at: Date.now() }; remember("selftest", r); }
   }
 
   async _runKpi() {
@@ -350,7 +367,7 @@ class SextantHealth extends LitElement {
     this._busy = "advice";
     const r = await callWS(this, this.hass, { type: "sextant/advice" });
     this._busy = null;
-    if (r) this._advice = r;
+    if (r) { this._advice = { ...r, at: Date.now() }; remember("advice", r); }
   }
 
   _showSpots(floor, spots) {
@@ -363,8 +380,8 @@ class SextantHealth extends LitElement {
     return html`<section class="card wide">
       <h3>Where a proxy would help</h3>
       <p class="small muted">Every room is judged two ways: how far its proxies land from where they are placed in the self-test, and whether any point in the room has three proxies near enough and around it. Rooms come worst first. A suggested spot is on a wall, where an outlet or a switch is; <b>Show on plan</b> marks it on the Edit page.</p>
-      <div class="row">${uiButton({ label: this._busy === "advice" ? "Analysing…" : "Analyse the house", kind: "primary", disabled: this._busy === "advice", onClick: () => this._runAdvice() })}
-        ${a ? html`<span class="muted small">${a.summary.rooms} rooms · ${a.summary.to_add ? `${a.summary.to_add} proxies to add` : "nothing to add"}${Object.entries(a.summary.issues || {}).filter(([k]) => k !== "ok").map(([k, n]) => ` · ${n} ${k}`).join("")}</span>` : nothing}</div>
+      <div class="row">${uiButton({ label: this._busy === "advice" ? "Analysing…" : a ? "Analyse again" : "Analyse the house", kind: "primary", disabled: this._busy === "advice", onClick: () => this._runAdvice() })}
+        ${a ? html`<span class="muted small">${a.at ? `analysed ${fmtAge((Date.now() - a.at) / 1000)} ago · ` : ""}${a.summary.rooms} rooms · ${a.summary.to_add ? `${a.summary.to_add} proxies to add` : "nothing to add"}${Object.entries(a.summary.issues || {}).filter(([k]) => k !== "ok").map(([k, n]) => ` · ${n} ${k}`).join("")}</span>` : nothing}</div>
       ${a?.unplaced?.length ? html`<div class="row"><b>Heard but not placed:</b>
         ${a.unplaced.map((u) => html`<span class="chips">${u.name}${u.suggest ? html` <span class="muted small">→ ${u.suggest.room} (${u.suggest.floor})</span> ${uiButton({ label: "Show on plan", kind: "text", onClick: () => this._showSpots(u.suggest.floor, [{ room: u.suggest.room, x: u.suggest.x, y: u.suggest.y }]) })}` : nothing}</span>`)}</div>` : nothing}
       ${a ? html`<div class="wrap"><table>
@@ -399,8 +416,8 @@ class SextantHealth extends LitElement {
     return html`<section class="card">
       <h3>Proxy self-test</h3>
       <p class="small muted">Leave-one-out: each proxy is located from the others' ranges to it and compared with where it is placed. Read it by room: a whole-house figure hides which rooms the proxies place well and which they do not. It works from the calibration sample window, so a floor only has figures once it has been sampled: turn on <b>Auto calibration</b> below to keep every floor sampled.</p>
-      <div class="row">${uiButton({ label: this._busy === "selftest" ? "Running…" : "Run self-test", kind: "primary", disabled: this._busy === "selftest", onClick: () => this._runSelftest() })}
-        ${st && st.state != null ? html`<span class="muted small">whole house</span> ${this._accPill(Number(st.state))}` : nothing}</div>
+      <div class="row">${uiButton({ label: this._busy === "selftest" ? "Running…" : st ? "Run again" : "Run self-test", kind: "primary", disabled: this._busy === "selftest", onClick: () => this._runSelftest() })}
+        ${st && st.state != null ? html`<span class="muted small">${st.at ? `run ${fmtAge((Date.now() - st.at) / 1000)} ago · ` : ""}whole house</span> ${this._accPill(Number(st.state))}` : nothing}</div>
       ${bd ? html`<div class="wrap"><table>
         <tr><th>Floor / room</th><th class="num">Proxies</th><th class="num">Median</th><th class="num">CEP95</th><th>Worst proxy</th></tr>
         ${bd.floors.map((f) => html`
