@@ -35,7 +35,10 @@ python3 tools/clean_floorplan.py "Ground Floor.jpg" -o "Ground Floor.png"
 
 It keeps the image's pixel dimensions, so the floor's scale and everything
 already placed on it still line up; upload the result as that floor's plan.
-What separates a wall from the rest is weight, so `--thick` is the knob
-that matters: raise it if hatch survives, lower it if walls break up. Keep
-the original — every plan is drawn differently, and this is a one-way
-trip.
+What separates a wall from the rest is mostly weight, so `--thick` is the
+knob that matters: raise it if hatch survives, lower it if walls break up.
+Two other passes handle what weight cannot: `--diagonal` drops the
+45-degree rules that fill an "open to below" area, which are drawn as
+heavily as a wall, and `--dashes` drops dashed lines, which mark what is
+not built on this storey. Keep the original — every plan is drawn
+differently, and this is a one-way trip.

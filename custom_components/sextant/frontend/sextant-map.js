@@ -606,8 +606,11 @@ export class SextantMap {
         ctx.fillStyle = (item.color || "hsl(175,70%,45%)").replace(/\)$/, ", 0.22)").replace("hsl(", "hsla(");
         ctx.strokeStyle = item.color || "hsl(175,70%,45%)";
       } else if (noGo) {
-        ctx.fillStyle = "rgba(110,110,110,0.30)";
-        ctx.strokeStyle = "rgba(70,70,70,0.9)";
+        // A void is read at a glance, not studied: the dashed outline and a
+        // wash say "nothing here" without the heavy fill and close hatch that
+        // used to bury a stairwell's worth of plan under it.
+        ctx.fillStyle = "rgba(110,110,110,0.14)";
+        ctx.strokeStyle = "rgba(70,70,70,0.75)";
       } else {
         ctx.fillStyle = `hsla(${hue}, 60%, 55%, ${selected || hovered ? 0.28 : 0.16})`;
         ctx.strokeStyle = `hsla(${hue}, 60%, 40%, 0.9)`;
@@ -640,10 +643,10 @@ export class SextantMap {
     ctx.clip();
     const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
     const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
-    ctx.strokeStyle = "rgba(60,60,60,0.45)";
-    ctx.lineWidth = 1.5 / this.view.k;
+    ctx.strokeStyle = "rgba(60,60,60,0.16)";
+    ctx.lineWidth = 1 / this.view.k;
     ctx.beginPath();
-    const step = 14 / this.view.k;
+    const step = 30 / this.view.k;
     for (let x = minX - (maxY - minY); x < maxX; x += step) { ctx.moveTo(x, maxY); ctx.lineTo(x + (maxY - minY), minY); }
     ctx.stroke();
     ctx.restore();
