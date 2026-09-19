@@ -327,6 +327,7 @@ class SextantLive extends LitElement {
       fetch: (url) => this.hass.fetchWithAuth(url),
       onSelect: (hit) => { this._select(hit?.kind === "thing" ? hit.ent : null); },
       onMapClick: (m) => this._placeMark(m),
+      isPlacing: () => this._marking,
     });
     this._linksTimer = setInterval(() => { if (this._selected) this._loadLinks(); }, 10000);
     this._pushFloor();
@@ -705,7 +706,12 @@ class SextantLive extends LitElement {
     const t = this._truth && this._truth.mark?.entity === ent ? this._truth : null;
     const rows = (t?.rows || []).slice(0, 6);
     return html`<div class="truth">
-      ${this._marking ? html`<div class="marking">Click the spot on the map where ${this._label(ent)} really is. ${uiButton({ label: "Cancel", kind: "text", onClick: () => { this._marking = false; } })}</div>`
+      ${this._marking ? html`<div class="marking">Tap where ${this._label(ent)} really is on the ${this.floor} plan. Pinch to zoom, or zoom straight to a spot:
+          <div class="zoomto">${(this._floorObj()?.subzones || []).filter((s) => (s.cords || []).length >= 3)
+            .sort((a, b) => String(a.entity_id).localeCompare(String(b.entity_id)))
+            .map((s) => uiButton({ label: s.entity_id, kind: "text", onClick: () => this._map?.zoomTo(s.cords) }))}
+            ${uiButton({ label: "Whole floor", kind: "text", onClick: () => this._map?.fit() })}</div>
+          ${uiButton({ label: "Cancel", kind: "text", onClick: () => { this._marking = false; } })}</div>`
         : html`<div class="row">${uiButton({ label: "It's actually here…", icon: "mdi:map-marker-check", onClick: () => { this._marking = true; }, title: "Tell Sextant where this thing really is; it re-solves the last few minutes under every setting and shows which fits best" })}
             ${this._marks.length ? html`<span class="muted small">${this._marks.length} mark${this._marks.length === 1 ? "" : "s"}</span>` : nothing}</div>`}
       ${t ? html`<div class="card inner">
@@ -790,6 +796,7 @@ class SextantLive extends LitElement {
     .blend { display: flex; align-items: center; gap: 6px; margin: 10px 0 4px; flex-wrap: wrap; }
     .blend input { flex: 1; min-width: 90px; }
     .truth { margin-top: 6px; }
+    .marking .zoomto { display: flex; flex-wrap: wrap; gap: 2px 6px; margin: 4px 0; }
     .marking { background: var(--warning-color, #c77800); color: #fff; padding: 6px 8px; border-radius: 6px; font-size: 13px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
     .card.inner { margin-top: 8px; padding: 8px; }
     ul.plain { list-style: none; padding: 0; margin: 4px 0; font-size: 12px; }

@@ -56,6 +56,9 @@ distances in metres.
 | `anchor_secs` | 20 | for this long |
 | `anchor_release_m` | 1.5 | release once the reading opens past this |
 | `calibration_target` | `sextant` | where Apply writes: `sextant` or `bermuda` |
+| `correction_close_fade` | on | fade a proxy's calibration stretch out at close range (see [calibration](calibration.md#close-range)) |
+| `correction_fade_near_m` | 1.0 | a reading this close gets none of the stretch |
+| `correction_fade_far_m` | 2.5 | from this far the stretch applies in full |
 | `stale_after_secs` | 120 | unheard this long, a thing is drawn as a ghost on Live (display only) |
 
 Two more live at the top level of the layout: `position_timeout` (seconds

@@ -394,6 +394,16 @@ TUNING_SPEC = {
     # (needs a Bermuda build with the rssi_offsets API), so Bermuda's own
     # area/distance sensors are corrected too and Sextant applies nothing twice.
     "calibration_target": ("sextant", str, ("sextant", "bermuda")),
+    # Close-range fade (see _close_range_correction). Calibration fits one
+    # stretch per receiver from proxy pairs metres apart; a receiver that hears
+    # its siblings short gets stretched, and that stretch pushes a thing lying
+    # right beside it away from it. So a stretching correction (> 1) fades out
+    # below correction_fade_far_m and is gone by correction_fade_near_m.
+    # Shrinking corrections (< 1) are always applied in full. Off = the
+    # correction everywhere, as before 3.17.6.
+    "correction_close_fade": (True, bool),
+    "correction_fade_near_m": (1.0, float, 0.0, 10.0),
+    "correction_fade_far_m": (2.5, float, 0.1, 20.0),
     # Fingerprint fusion (fingerprint.py). "geometric" is the trilateration
     # alone. "fingerprint" places the thing at the best-matching reference
     # receivers and only falls back to the fit where no reference exists.
@@ -573,6 +583,26 @@ def _tuning(data, key):
     if not isinstance(tuning, dict) or key not in tuning:
         return default
     return _coerce_tuning(key, tuning[key], default)
+
+
+def _close_range_correction(correction, raw_m, data):
+    """The share of a receiver's calibration correction to apply at this range.
+
+    A stretching correction (> 1) is geometrically faded from nothing at
+    correction_fade_near_m to all of it at correction_fade_far_m; see the
+    tuning comment. Replayed on the truth marks this halved the error of a
+    watch on a bedside proxy (1.5 m -> 0.7 m) and left the others within a
+    few centimetres.
+    """
+    if correction <= 1.0 or not _tuning(data, "correction_close_fade"):
+        return correction
+    near = _tuning(data, "correction_fade_near_m")
+    far = max(_tuning(data, "correction_fade_far_m"), near + 0.01)
+    if raw_m >= far:
+        return correction
+    if raw_m <= near:
+        return 1.0
+    return correction ** ((raw_m - near) / (far - near))
 
 
 def _layout_for(new_global_data, entity):
@@ -1842,7 +1872,7 @@ async def update_receiver_radii(hass, eids):
                 # per-scanner RSSI offset in Bermuda's exponential model.
                 correction = receiver.get("correction")
                 if isinstance(correction, (int, float)) and correction > 0:
-                    distance = distance * correction
+                    distance = distance * _close_range_correction(float(correction), distance, eids["data"])
                 # Per-THING ref-power trim (issue #92): a tag whose
                 # transmit power differs from Bermuda's configured
                 # ref_power reads consistently long or short from EVERY

@@ -17,7 +17,11 @@ corner - the preview turns orange when it does - so right angles and cut
 corners come out clean without aiming; a corner between two such edges
 lands where they cross. Hold Alt to place a corner freely; a wall at any
 other angle is never close enough to snap. **Square up** on a selected
-room or spot does the same to a shape drawn before. Set the scale
+room or spot does the same to a shape drawn before. A selected spot also
+takes its real size: measure the furniture, type the width (across the
+plan) and depth (up the plan) in inches or centimetres, pick the corner to
+keep where it is, and **Set size** makes the spot that exact rectangle.
+Pinch to zoom on a phone or tablet. Set the scale
 by measuring a known distance. Give a floor a *level* (0 ground, -1
 basement, 1 above) for ordering and an election *bias* (1.15 gives the
 ground floor a standing head start; where one number for the whole floor

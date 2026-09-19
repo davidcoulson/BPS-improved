@@ -1807,3 +1807,45 @@ def test_the_cycle_gives_the_event_loop_a_turn_between_things(monkeypatch):
     run(main())
     assert order[0] == "a" and "loop" in order[1:3], order   # the loop ran before thing c, not after thing d
     assert [o for o in order if o != "loop"] == ["a", "b", "c", "d"]
+
+
+# --------------------------------------------------------------------------- #
+# Close-range fade of a stretching calibration correction
+# --------------------------------------------------------------------------- #
+def test_close_range_fade_shape():
+    f = sextant._close_range_correction
+    assert f(1.7, 0.5, {}) == 1.0            # beside the proxy: no stretch
+    assert f(1.7, 1.0, {}) == 1.0
+    assert f(1.7, 2.5, {}) == 1.7            # across the room: all of it
+    mid = f(1.7, 1.75, {})
+    assert abs(mid - 1.7 ** 0.5) < 1e-9      # halfway in, geometrically
+    assert f(0.8, 0.5, {}) == 0.8            # a shrinking correction is never faded
+    assert f(1.7, 0.5, {"tuning": {"correction_close_fade": False}}) == 1.7
+    tuned = {"tuning": {"correction_fade_near_m": 0.2, "correction_fade_far_m": 0.6}}
+    assert f(1.7, 0.5, tuned) > 1.4 and f(1.7, 0.7, tuned) == 1.7
+    # A far edge set inside the near one cannot divide by zero.
+    assert f(1.7, 1.0, {"tuning": {"correction_fade_near_m": 2.0, "correction_fade_far_m": 1.0}}) == 1.0
+
+
+def _radii_with_correction(state, correction, tuning=None):
+    class St:
+        def __init__(self):
+            self.state = state
+            self.attributes = {"unit_of_measurement": "m"}
+
+    class Hass:
+        states = type("S", (), {"get": staticmethod(lambda _eid: St())})()
+
+    rec = {"entity_id": "probe", "cords": {"x": 0, "y": 0}, "correction": correction}
+    data = {"floor": [{"name": "F", "scale": SCALE, "receivers": [rec]}]}
+    if tuning is not None:
+        data["tuning"] = tuning
+    run(sextant.update_receiver_radii(Hass(), {"entity": "watch", "data": data}))
+    return rec
+
+
+def test_a_watch_beside_a_stretched_proxy_keeps_its_short_reading():
+    # The bedside C5: calibration x1.73, the watch 30 cm away reads 0.9 m.
+    assert abs(_radii_with_correction("0.9", 1.73)["distance"] - 0.9) < 1e-9
+    assert abs(_radii_with_correction("0.9", 1.73, {"correction_close_fade": False})["distance"] - 0.9 * 1.73) < 1e-9
+    assert abs(_radii_with_correction("4.0", 1.73)["distance"] - 4.0 * 1.73) < 1e-9

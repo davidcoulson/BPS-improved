@@ -360,6 +360,50 @@ class SextantEdit extends LitElement {
     toast(this, m != null ? `Squared up; no corner moved more than ${Math.round(m * 100)} cm. Save to keep it` : "Squared up. Save to keep it");
   }
 
+  /** Spot size in the unit a tape measure reads: inches when imperial, cm otherwise. */
+  _sizeUnit() { return isImperial(this.hass) ? { name: "in", perM: 39.3701 } : { name: "cm", perM: 100 }; }
+
+  _spotBox(item) {
+    const xs = (item.cords || []).map((q) => q.x), ys = (item.cords || []).map((q) => q.y);
+    return { x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys) };
+  }
+
+  /** Type the real table's size: the spot becomes that exact rectangle, one corner held where it is. */
+  _renderSpotSize(item, f) {
+    if (!f.scale || (item.cords || []).length < 3) return nothing;
+    const u = this._sizeUnit(), b = this._spotBox(item);
+    const cur = { w: Math.round(((b.x1 - b.x0) / f.scale) * u.perM), d: Math.round(((b.y1 - b.y0) / f.scale) * u.perM) };
+    const s = this._size?.id === item.sub_zone_id ? this._size : { id: item.sub_zone_id, corner: "tl" };
+    const set = (k, v) => { this._size = { ...s, [k]: v }; };
+    return html`<div class="row">
+      ${uiField({ label: `Width (${u.name}, across the plan)`, type: "number", step: 1, min: 1, value: s.w ?? cur.w, onChange: (v) => set("w", Number(v)), style: "width: 150px" })}
+      ${uiField({ label: `Depth (${u.name}, up the plan)`, type: "number", step: 1, min: 1, value: s.d ?? cur.d, onChange: (v) => set("d", Number(v)), style: "width: 150px" })}
+      ${uiSelect({ label: "Keep this corner", value: s.corner, options: [{ value: "tl", label: "Top left" }, { value: "tr", label: "Top right" }, { value: "bl", label: "Bottom left" }, { value: "br", label: "Bottom right" }], onChange: (v) => set("corner", v), style: "width: 140px" })}
+      ${uiButton({ label: "Set size", icon: "mdi:ruler-square", onClick: () => this._resizeSpot(), title: "Make the spot an exact rectangle of this size, measured on the real furniture" })}
+    </div>`;
+  }
+
+  _resizeSpot() {
+    const sel = this._selection, f = this._floorObj();
+    if (!sel || sel.kind !== "subzone" || !f?.scale) return;
+    const item = f.subzones[sel.index], u = this._sizeUnit(), b = this._spotBox(item);
+    const s = this._size?.id === item.sub_zone_id ? this._size : {};
+    const w = ((s.w ?? ((b.x1 - b.x0) / f.scale) * u.perM) / u.perM) * f.scale;
+    const d = ((s.d ?? ((b.y1 - b.y0) / f.scale) * u.perM) / u.perM) * f.scale;
+    if (!(w > 0 && d > 0)) return toast(this, "Width and depth must be above zero");
+    const corner = s.corner || "tl";
+    const x0 = corner[1] === "l" ? b.x0 : b.x1 - w, y0 = corner[0] === "t" ? b.y0 : b.y1 - d;
+    const r = (v) => Math.round(v * 1000) / 1000;
+    this._snapshot();
+    item.cords = [{ x: r(x0), y: r(y0) }, { x: r(x0 + w), y: r(y0) }, { x: r(x0 + w), y: r(y0 + d) }, { x: r(x0), y: r(y0 + d) }];
+    item.poly = true;
+    this._size = null;
+    this._dirty = true;
+    this._map.invalidate();
+    this.requestUpdate();
+    toast(this, "Spot resized. Drag it into place if needed, then Save");
+  }
+
   _deleteSelection() {
     const sel = this._selection, f = this._floorObj();
     if (!sel || !f) return;
@@ -606,7 +650,8 @@ class SextantEdit extends LitElement {
           <div class="muted small">Takes which things? None picked means any of them. A bedside table is for a phone, a watch and keys; a cat bed is for the cat.</div>
           <div class="classpick">${this._classPicker(item)}</div>
           <div class="muted small">A ringed group goes together: pick Person or Pet and its kinds count too, shown without the grey background.</div>
-        </div>` : nothing}
+        </div>
+        ${this._renderSpotSize(item, f)}` : nothing}
       <div class="row"><span class="muted small">${(item.cords?.length ?? 1)} point(s)</span><span class="grow"></span>${sel.kind === "zone" || sel.kind === "subzone" ? uiButton({ label: "Square up", icon: "mdi:vector-square", onClick: () => this._squareUp(), title: "Make every edge that is nearly horizontal, vertical or 45° exactly that. Other angles stay as drawn" }) : nothing}${uiButton({ label: "Delete", kind: "danger", onClick: () => this._deleteSelection() })}</div>
     </div>`;
   }

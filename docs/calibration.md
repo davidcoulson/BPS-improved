@@ -25,6 +25,21 @@ factors with the layout, or with `calibration_target: bermuda` writes them
 into Bermuda as per-scanner RSSI offsets so Bermuda's own sensors are
 corrected too. **Reset** removes them.
 
+### Close range
+
+A correction is learned from proxies hearing each other, metres apart. A
+proxy that hears its siblings short gets a stretch above 1, and that is
+right across the room but wrong for a thing lying beside it: a watch on a
+bedside-table proxy read 1.1 m, the stretch of 1.73 made it 1.8 m, and the
+fix was pushed off the table into the room. So a stretch fades out at close
+range: none of it below `correction_fade_near_m` (1 m), all of it from
+`correction_fade_far_m` (2.5 m), blended in between. Corrections below 1
+are always applied in full. On the truth marks this halved the error at
+that table and moved the others by a few centimetres. Switch it off, or
+move its edges, under Calibration on the Tuning page. It acts on factors
+stored with the layout; with `calibration_target: bermuda` the correction
+lives inside Bermuda's distances and is not faded.
+
 Re-run calibration after changing a floor's scale, whether by hand or from
 its [alignment pins](edit.md#lining-the-floors-up): the corrections were
 learned against distances measured at the old scale.

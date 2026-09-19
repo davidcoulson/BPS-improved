@@ -18,6 +18,8 @@ const RECEIVER_SIZE_EDIT = 13;   // proxies are the things people drag: give the
 const VERTEX_SIZE = 6;
 const PIN_SIZE = 11;
 const HIT_SLOP = 8;
+// Closest zoom: 20 screen px per map px, enough for a bedside table to fill a phone.
+const MAX_ZOOM = 20;
 const THING_RADIUS = 12;
 const HUES = [205, 25, 140, 95, 320, 45, 260, 180, 0, 60];
 
@@ -371,6 +373,7 @@ export class SextantMap {
     this.view = { k: 1, tx: 0, ty: 0 };
     this._fitted = false;
     this._drag = null;
+    this._pointers = new Map();   // pointers down now, by id: two make a pinch
     this._raf = 0;
     this._bind();
     this._resize = new ResizeObserver(() => this._onResize());
@@ -448,6 +451,19 @@ export class SextantMap {
     this.invalidate();
   }
 
+  /** Zoom so these map points fill the view, with a margin: a spot fills a phone screen. */
+  zoomTo(points, margin = 0.2) {
+    const rect = this.canvas.getBoundingClientRect();
+    if (!points?.length || !rect.width) return;
+    const xs = points.map((q) => q.x), ys = points.map((q) => q.y);
+    const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+    const w = Math.max(x1 - x0, 10), h = Math.max(y1 - y0, 10);
+    const k = Math.max(0.05, Math.min(MAX_ZOOM, Math.min(rect.width / w, rect.height / h) * (1 - margin)));
+    this.view = { k, tx: rect.width / 2 - ((x0 + x1) / 2) * k, ty: rect.height / 2 - ((y0 + y1) / 2) * k };
+    this._fitted = true;
+    this.invalidate();
+  }
+
   // The layout's coordinate frame is NOT the image's natural pixels: the
   // original editor drew every floor image onto a canvas normalised to
   // MAP_FRAME_WIDTH pixels wide (height by aspect ratio) and stored
@@ -484,6 +500,16 @@ export class SextantMap {
   _down(e) {
     const p = this._local(e);
     this.canvas.setPointerCapture(e.pointerId);
+    // Two fingers pinch: zoom about the point between them, and pan with it.
+    this._pointers.set(e.pointerId, p);
+    if (this._pointers.size === 2) { this._startPinch(); return; }
+    if (this._pointers.size > 2) return;
+    // Placing something (a truth mark): the tap counts when the finger lifts
+    // without moving, so a pan or a pinch never places it by accident.
+    if (this.mode !== "edit" && e.button === 0 && this.host.isPlacing?.()) {
+      this._drag = { kind: "pan", start: p, view: { ...this.view }, moved: false, slop: e.pointerType === "touch" ? 10 : 3, place: this.toMap(p) };
+      return;
+    }
     const hit = this.hitTest(p);
     if (this.mode === "edit" && this.tool !== "select" && e.button === 0) {
       // Drawing: each click adds a vertex; clicking the first vertex closes.
@@ -495,6 +521,7 @@ export class SextantMap {
       this.draft = this.draft || [];
       const at = e.altKey ? m : snapCorner(m, this.draft[this.draft.length - 1] || null, this.draft.length >= 2 ? this.draft[0] : null);
       this.draft.push({ x: Math.round(at.x * 1000) / 1000, y: Math.round(at.y * 1000) / 1000 });
+      this._draftPush = performance.now();
       if (this.host.onDrawPoint) this.host.onDrawPoint(this.draft);
       this.invalidate();
       return;
@@ -508,8 +535,6 @@ export class SextantMap {
       this.invalidate();
       return;
     }
-    // A host placing a truth mark takes the click before selection does.
-    if (this.mode !== "edit" && e.button === 0 && this.host.onMapClick && this.host.onMapClick(this.toMap(p), hit)) return;
     if (hit && hit.kind === "thing" && e.button === 0 && this.mode !== "edit") {
       this.selection = hit;
       if (this.host.onSelect) this.host.onSelect(hit);
@@ -520,7 +545,29 @@ export class SextantMap {
       this.selection = null;
       if (this.host.onSelect) this.host.onSelect(null);
     }
-    this._drag = { kind: "pan", start: p, view: { ...this.view }, moved: false };
+    this._drag = { kind: "pan", start: p, view: { ...this.view }, moved: false, slop: e.pointerType === "touch" ? 10 : 3 };
+  }
+
+  /** A second finger landed: undo what the first one started, then pinch. */
+  _startPinch() {
+    const d = this._drag;
+    if (d?.kind === "item" && d.moved) {
+      const f = this.floor, hit = d.hit;
+      if (hit.kind === "receiver") f.receivers[hit.index].cords = { ...d.origin[0] };
+      else if (hit.kind === "pin") f.pins[hit.index].cords = { ...d.origin[0] };
+      else (hit.kind === "zone" ? f.zones : f.subzones)[hit.index].cords = d.origin.map((q) => ({ ...q }));
+    }
+    // The first finger of a pinch is not a corner.
+    if (this.draft?.length && this._draftPush && performance.now() - this._draftPush < 600) {
+      this.draft.pop();
+      if (!this.draft.length) this.draft = null;
+      this._draftPush = 0;
+      if (this.host.onDrawPoint) this.host.onDrawPoint(this.draft || []);
+    }
+    const [a, b] = [...this._pointers.values()];
+    const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    this._drag = { kind: "pinch", dist: Math.max(Math.hypot(a.x - b.x, a.y - b.y), 1), view: { ...this.view }, anchor: this.toMap(mid), moved: true };
+    this.invalidate();
   }
 
   _itemPoints(hit) {
@@ -533,6 +580,17 @@ export class SextantMap {
 
   _move(e) {
     const p = this._local(e);
+    if (this._pointers.has(e.pointerId)) this._pointers.set(e.pointerId, p);
+    if (this._drag?.kind === "pinch") {
+      if (this._pointers.size < 2) return;
+      const d = this._drag, [a, b] = [...this._pointers.values()];
+      const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      const k = Math.max(0.05, Math.min(MAX_ZOOM, d.view.k * Math.hypot(a.x - b.x, a.y - b.y) / d.dist));
+      this.view = { k, tx: mid.x - d.anchor.x * k, ty: mid.y - d.anchor.y * k };
+      this._fitted = true;
+      this.invalidate();
+      return;
+    }
     if (!this._drag && this.mode === "edit" && this.tool !== "select" && this.draft && this.draft.length) {
       // The next corner, where a click would put it: snapped, so a right
       // angle is visible before it is committed.
@@ -556,7 +614,7 @@ export class SextantMap {
     const d = this._drag;
     if (d.kind === "pan") {
       const dx = p.x - d.start.x, dy = p.y - d.start.y;
-      if (Math.abs(dx) + Math.abs(dy) > 2) d.moved = true;
+      if (Math.abs(dx) + Math.abs(dy) > (d.slop ?? 2)) d.moved = true;
       this.view = { k: d.view.k, tx: d.view.tx + dx, ty: d.view.ty + dy };
       this.invalidate();
       return;
@@ -608,8 +666,12 @@ export class SextantMap {
   }
 
   _up(e) {
+    this._pointers.delete(e.pointerId);
+    // Lifting one finger of a pinch ends it; the other does not start a pan.
+    if (this._drag?.kind === "pinch") { if (this._pointers.size < 2) { this._drag = null; this.lastDragMoved = true; } return; }
     const d = this._drag;
     this._drag = null;
+    if (d?.kind === "pan" && d.place && !d.moved && e.type === "pointerup" && this.host.onMapClick) this.host.onMapClick(d.place);
     this._snap = null;
     this._pinSnap = null;
     this.lastDragMoved = !!(d && d.moved);
@@ -629,7 +691,7 @@ export class SextantMap {
     e.preventDefault();
     const p = this._local(e);
     const factor = Math.exp(-e.deltaY * 0.0015);
-    const k = Math.max(0.05, Math.min(20, this.view.k * factor));
+    const k = Math.max(0.05, Math.min(MAX_ZOOM, this.view.k * factor));
     const m = this.toMap(p);
     this.view = { k, tx: p.x - m.x * k, ty: p.y - m.y * k };
     this._fitted = true;

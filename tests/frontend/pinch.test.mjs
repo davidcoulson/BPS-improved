@@ -1,0 +1,85 @@
+// Touch input on the map: two fingers pinch, and a placing tap only counts on lift.
+import { test } from "node:test";
+import assert from "node:assert/strict";
+
+globalThis.ResizeObserver = class { observe() {} disconnect() {} };
+globalThis.requestAnimationFrame = () => 0;
+globalThis.cancelAnimationFrame = () => {};
+globalThis.window = globalThis.window || { devicePixelRatio: 1 };
+const { SextantMap } = await import("../../custom_components/sextant/frontend/sextant-map.js");
+
+function fakeCanvas() {
+  const ctx = new Proxy({}, { get: () => () => ({ addColorStop() {} }), set: () => true });
+  return {
+    style: {}, width: 400, height: 800,
+    getContext: () => ctx,
+    addEventListener() {}, setPointerCapture() {},
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 400, height: 800 }),
+  };
+}
+
+const ev = (type, id, x, y, extra = {}) => ({ type, pointerId: id, clientX: x, clientY: y, button: 0, pointerType: "touch", altKey: false, ...extra });
+
+function mapWith(host = {}) {
+  const map = new SextantMap(fakeCanvas(), host);
+  map.floor = { name: "F", scale: 100, receivers: [], zones: [], subzones: [] };
+  map.view = { k: 1, tx: 0, ty: 0 };
+  map.invalidate = () => {};
+  return map;
+}
+
+test("two fingers spreading zoom in about the point between them", () => {
+  const map = mapWith();
+  map._down(ev("pointerdown", 1, 100, 100));
+  map._down(ev("pointerdown", 2, 200, 100));
+  const anchor = map.toMap({ x: 150, y: 100 });
+  map._move(ev("pointermove", 1, 50, 100));
+  map._move(ev("pointermove", 2, 250, 100));
+  assert.ok(Math.abs(map.view.k - 2) < 1e-9);
+  const after = map.toScreen(anchor);
+  assert.ok(Math.abs(after.x - 150) < 1e-6 && Math.abs(after.y - 100) < 1e-6);
+  map._up(ev("pointerup", 1, 50, 100));
+  // The finger left behind does not start a pan.
+  const view = { ...map.view };
+  map._move(ev("pointermove", 2, 300, 300));
+  assert.deepEqual(map.view, view);
+  map._up(ev("pointerup", 2, 300, 300));
+});
+
+test("a placing tap lands on lift, and not at all when it turned into a pan or pinch", () => {
+  const placed = [];
+  const map = mapWith({ isPlacing: () => true, onMapClick: (m) => { placed.push(m); return true; }, onSelect: () => { throw new Error("placing must not change the selection"); } });
+  map._down(ev("pointerdown", 1, 120, 80));
+  assert.equal(placed.length, 0);
+  map._move(ev("pointermove", 1, 124, 83));   // a finger's wobble
+  map._up(ev("pointerup", 1, 124, 83));
+  assert.deepEqual(placed, [{ x: 120, y: 80 }]);
+
+  map._down(ev("pointerdown", 1, 120, 80));
+  map._move(ev("pointermove", 1, 180, 80));   // a pan
+  map._up(ev("pointerup", 1, 180, 80));
+  map._down(ev("pointerdown", 1, 120, 80));
+  map._down(ev("pointerdown", 2, 220, 80));   // a pinch
+  map._up(ev("pointerup", 2, 220, 80));
+  map._up(ev("pointerup", 1, 120, 80));
+  assert.equal(placed.length, 1);
+});
+
+test("the first finger of a pinch does not leave a corner behind while drawing", () => {
+  const map = mapWith();
+  map.setMode("edit");
+  map.setTool("subzone");
+  map.draft = [{ x: 0, y: 0 }, { x: 100, y: 0 }];
+  map._down(ev("pointerdown", 1, 300, 300));
+  assert.equal(map.draft.length, 3);
+  map._down(ev("pointerdown", 2, 350, 300));
+  assert.equal(map.draft.length, 2);
+});
+
+test("zoomTo fills the view with a spot", () => {
+  const map = mapWith();
+  map.zoomTo([{ x: 500, y: 500 }, { x: 640, y: 500 }, { x: 640, y: 640 }, { x: 500, y: 640 }]);
+  const a = map.toScreen({ x: 500, y: 500 }), b = map.toScreen({ x: 640, y: 640 });
+  assert.ok(b.x - a.x > 300 && b.x - a.x <= 400);
+  assert.ok(Math.abs((a.x + b.x) / 2 - 200) < 1e-6 && Math.abs((a.y + b.y) / 2 - 400) < 1e-6);
+});

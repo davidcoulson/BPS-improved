@@ -48,7 +48,12 @@ a desktop job.
 ## Truth marks
 
 When a thing sits in the wrong place, select it on the Live page, click
-**It's actually here…** and click the spot on the map where it really is.
+**It's actually here…** and tap the spot on the map where it really is.
+On a phone, pinch to zoom, or tap one of the floor's spots listed under
+the prompt to fill the screen with just that spot (a bedside table
+becomes phone-sized); **Whole floor** zooms back out. The mark goes down
+when your finger lifts without moving, so panning or pinching never
+places one.
 Sextant keeps the solver inputs of the last few minutes for every
 thing, so it re-solves those cycles under every blend of geometric fit
 and fingerprint match and every reference gain, and shows how far each
