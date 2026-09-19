@@ -86,9 +86,13 @@ ships.
 ellipse are attributed to rooms and the shares smoothed. The current room
 holds until a challenger leads by `zone_switch_margin` for
 `zone_switch_secs`. A thing slower than `stationary_speed` for
-`stationary_secs` is on a table and its room locks; it unlocks after
-`zone_unlock_secs` more than `zone_unlock_margin` outside, or when it
-clearly moves.
+`stationary_secs` is on a table and its room locks - but only a room it
+has earned, held for that long already and still the best-supported, so a
+first guess after a restart is never frozen. It unlocks after
+`zone_unlock_secs` more than `zone_unlock_margin` outside, when it clearly
+moves, or when the locked room has kept under a tenth of the evidence for
+twice `zone_unlock_secs`: the lock holds through jitter on a boundary, not
+through the thing being somewhere else.
 
 **Spots.** The same election scaled down: the share of the ellipse inside
 each spot of the elected room, entered at `subzone_enter_prob`, left at

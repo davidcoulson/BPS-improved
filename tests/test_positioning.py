@@ -1660,6 +1660,38 @@ def test_a_fix_resting_on_the_unlock_margin_still_releases():
     assert seen[-1][0] == "Dining", f"the lock must release: {seen}"
 
 
+def test_a_wrong_first_guess_is_not_locked_in():
+    """
+    From a real case: after a restart a watch on a couch - a metre from three
+    room edges - had its first cycle land in the foyer. It was sitting still,
+    so the lock froze that guess 20 s later, and the fix sitting half a metre
+    into the right room could never release it (inside the 1 m margin).
+    """
+    sextant._zone_state.clear()
+    assert _elect("e", 60, 0.0)[0] == "Kitchen"        # one noisy first fit
+    seen = [_elect("e", 150, t) for t in (10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0)]   # really 0.5 m into Dining, still
+    assert ("Kitchen", True) not in seen, f"a guess the evidence contradicts must not lock: {seen}"
+    assert seen[-1][0] == "Dining"
+    # ...and once it has earned the room, it locks as before.
+    later = [_elect("e", 150, t) for t in (80.0, 90.0, 100.0, 110.0)]
+    assert later[-1] == ("Dining", True)
+
+
+def test_a_lock_yields_when_the_evidence_has_left_it_even_inside_the_margin():
+    """Parked 0.7 m into the next room - inside the 1 m unlock margin, so the
+    distance rule never fires - with the locked room holding almost none of
+    the evidence. That is a thing that moved, not a thing jittering."""
+    sextant._zone_state.clear()
+    for t in (0.0, 10.0, 20.0, 30.0):
+        zone, locked = _elect("e", 50, t)
+    assert (zone, locked) == ("Kitchen", True)
+    seen = [_elect("e", 170, 40.0 + 10 * i) for i in range(14)]   # 40 s .. 170 s
+    assert seen[0] == ("Kitchen", True)                  # held at first: could be jitter
+    # The smoothed share takes ~50 s to fall under 10 %, then 2 x zone_unlock_secs.
+    assert ("Kitchen", True) in seen[:8], "must not give way in the first minute"
+    assert seen[-1][0] == "Dining", f"the lock must yield to evidence that has left it: {seen}"
+
+
 def test_boundary_jitter_well_inside_the_margin_still_holds_the_lock():
     """The hysteresis must not cost the protection it was added around."""
     sextant._zone_state.clear()

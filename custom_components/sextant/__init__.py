@@ -2872,12 +2872,20 @@ def _elect_zone(entity, floor_name, instant_zone, point, kf_state, zone_polys, s
        its smoothed share by zone_switch_margin continuously for
        zone_switch_secs of wall clock.
     3. Stationary lock. When the filter's speed stays under stationary_speed
-       for stationary_secs, the thing is on a table and the zone locks.
-       The lock releases only when the point sits more than
-       zone_unlock_margin metres outside the locked zone for
-       zone_unlock_secs (the time already spent away then counts toward
-       the dwell, so the switch follows at once), or when the thing is
-       clearly moving again for stationary_secs.
+       for stationary_secs, the thing is on a table and the zone locks -
+       but only a zone it has EARNED: held for stationary_secs already, and
+       still the best-supported zone at that moment. Locking whatever was
+       elected first froze a guess: after a restart the first cycle's room
+       is one noisy fit, and a watch on a couch a metre from three room
+       edges was locked into the foyer that way.
+       The lock releases when the point sits more than zone_unlock_margin
+       metres outside the locked zone for zone_unlock_secs (the time
+       already spent away then counts toward the dwell, so the switch
+       follows at once), when the thing is clearly moving again for
+       stationary_secs, or when the locked zone has all but lost the
+       evidence (under ZONE_OUTVOTED_SHARE of it) for twice
+       zone_unlock_secs - a lock is there to hold through jitter, not to
+       outlast the thing being somewhere else.
 
     nearest_zone stays instantaneous for automations that want the raw
     answer, and zone_raw in the API carries the point's own zone. Turning
@@ -2894,7 +2902,7 @@ def _elect_zone(entity, floor_name, instant_zone, point, kf_state, zone_polys, s
         st = _zone_state[entity] = {
             "floor": floor_name, "zone": None, "since": now, "probs": {},
             "challenge": None, "still_since": None, "moving_since": None,
-            "away_since": None, "locked": False,
+            "away_since": None, "outvoted_since": None, "locked": False,
         }
 
     # 1. Membership, smoothed.
@@ -2941,9 +2949,16 @@ def _elect_zone(entity, floor_name, instant_zone, point, kf_state, zone_polys, s
 
     # 3b. Lock and unlock.
     stationary_secs = _tuning(layout, "stationary_secs")
-    if not st["locked"] and st["still_since"] is not None and now - st["still_since"] >= stationary_secs:
+    if (
+        not st["locked"]
+        and st["still_since"] is not None
+        and now - st["still_since"] >= stationary_secs
+        and now - st["since"] >= stationary_secs   # held long enough to mean something
+        and best == incumbent                      # and the evidence still says so
+    ):
         st["locked"] = True
         st["away_since"] = None
+        st["outvoted_since"] = None
     challenge_since = None
     if st["locked"]:
         incumbent_poly = next((p for zid, p, _b, _n in zone_polys if zid == incumbent), None)
@@ -2964,14 +2979,24 @@ def _elect_zone(entity, floor_name, instant_zone, point, kf_state, zone_polys, s
             st["away_since"] = st["away_since"] or now
         elif gap is not None and gap <= margin_px * ZONE_AWAY_RESET_FRACTION:
             st["away_since"] = None
-        left_for_long = st["away_since"] is not None and now - st["away_since"] >= _tuning(layout, "zone_unlock_secs")
+        unlock_secs = _tuning(layout, "zone_unlock_secs")
+        left_for_long = st["away_since"] is not None and now - st["away_since"] >= unlock_secs
         moving_for_long = st["moving_since"] is not None and now - st["moving_since"] >= stationary_secs
-        if not left_for_long and not moving_for_long:
+        # The evidence has all but abandoned the locked zone. Deliberately a
+        # near-zero share rather than "another zone leads": a thing resting on
+        # a boundary splits its evidence about evenly, and holding through
+        # exactly that is what the lock is for.
+        if probs.get(incumbent, 0.0) < ZONE_OUTVOTED_SHARE:
+            st["outvoted_since"] = st["outvoted_since"] or now
+        else:
+            st["outvoted_since"] = None
+        outvoted_for_long = st["outvoted_since"] is not None and now - st["outvoted_since"] >= 2 * unlock_secs
+        if not left_for_long and not moving_for_long and not outvoted_for_long:
             st["challenge"] = None
             return incumbent, True, speed
         # Unlocked. Time already spent outside counts toward the dwell below.
-        challenge_since = st["away_since"]
-        st.update(locked=False, still_since=None, away_since=None)
+        challenge_since = st["away_since"] or st["outvoted_since"]
+        st.update(locked=False, still_since=None, away_since=None, outvoted_since=None)
 
     # 2. Margin and dwell.
     margin = _tuning(layout, "zone_switch_margin")
@@ -3236,6 +3261,9 @@ def _geometry_array(geoms):
 # clock are different thresholds and a fix resting on the margin resolves one
 # way or the other instead of stalling forever. See _elect_zone.
 ZONE_AWAY_RESET_FRACTION = 0.5
+# A locked zone holding less than this share of the smoothed membership
+# evidence has been left, whatever the distance margin says (see _elect_zone).
+ZONE_OUTVOTED_SHARE = 0.1
 
 
 def _snap_geometry(zone_polys):
