@@ -91,6 +91,7 @@ def house(monkeypatch):
         "d1": types.SimpleNamespace(id="d1", identifiers={("private_ble_device", OLD)}, name="Eilee Phone", name_by_user=None),
         "d2": types.SimpleNamespace(id="d2", identifiers={("bermuda", OLD)}, name="Eilee Phone", name_by_user=None),
         "d3": types.SimpleNamespace(id="d3", identifiers={("hue", 17)}, name="Lamp", name_by_user=None),   # a number, not text
+        "d4": types.SimpleNamespace(id="d4", identifiers={("solo",), ("a", "b", "c")}, name="Odd", name_by_user=None),  # not pairs
     })
     monkeypatch.setattr(ir.er, "async_get", lambda hass: er_)
     monkeypatch.setattr(ir.dr, "async_get", lambda hass: dr_)
@@ -146,4 +147,12 @@ def test_a_rerun_after_a_half_done_swap_drops_the_copies_and_finishes(house):
     assert not [e for e in er_.entities if e.endswith("_2")]
     assert er_.entities["sensor.private_ble_device_eilee_phone_area"].unique_id == f"{NEW}_area"
     assert phone.data["irk"] == NEW and dr_.devices["d3"].identifiers == {("hue", 17)}
+
+
+def test_a_dry_run_counts_and_changes_nothing(house):
+    hass, phone, er_, dr_ = house
+    out = run(ir.async_replace_irk(hass, phone, NEW, dry_run=True))
+    assert out == {"device": "Eilee Phone", "entities": 4, "devices": 2, "copies_removed": 0, "dry_run": True}
+    assert phone.data["irk"] == OLD and hass.config_entries.calls == []
+    assert er_.entities["sensor.private_ble_device_eilee_phone_area"].unique_id == f"{OLD}_area"
 

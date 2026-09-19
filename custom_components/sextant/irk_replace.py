@@ -82,8 +82,14 @@ def _devices(dev_reg):
 
 
 def _carries(identifier, irk: str) -> bool:
-    """Whether a device identifier holds the key. Some integrations use numbers."""
-    return isinstance(identifier[1], str) and irk in identifier[1]
+    """Whether a device identifier holds the key. Identifiers are meant to be
+    (domain, id) pairs of text, but integrations store numbers, and tuples of
+    one or three; look at every part."""
+    return any(isinstance(part, str) and irk in part for part in identifier)
+
+
+def _swap(identifier, old: str, new: str):
+    return tuple(part.replace(old, new) if isinstance(part, str) else part for part in identifier)
 
 
 def _device_name(hass, irk: str) -> str | None:
@@ -91,8 +97,12 @@ def _device_name(hass, irk: str) -> str | None:
     return (device.name_by_user or device.name) if device else None
 
 
-async def async_replace_irk(hass, entry, new_value: str) -> dict:
-    """Swap ``entry``'s key for ``new_value`` everywhere; returns what changed."""
+async def async_replace_irk(hass, entry, new_value: str, dry_run: bool = False) -> dict:
+    """Swap ``entry``'s key for ``new_value`` everywhere; returns what changed.
+
+    ``dry_run`` walks every entity and device the same way and says what it
+    would change, touching nothing.
+    """
     new = parse_irk(new_value)
     if new is None:
         raise IrkReplaceError("That is not a valid key: it should be 32 hex characters, or base64 ending in '='")
@@ -116,6 +126,10 @@ async def async_replace_irk(hass, entry, new_value: str) -> dict:
         else:
             entities.append(e)
     name = _device_name(hass, old)
+    carrying = [d for d in _devices(dev_reg) if d is not None and any(_carries(i, old) for i in d.identifiers)]
+    if dry_run:
+        return {"device": name or entry.title, "entities": len(entities), "devices": len(carrying),
+                "copies_removed": len(copies), "dry_run": True}
 
     # Nothing may hold the old identity while it is rewritten: the device's
     # own entry and Bermuda, which resolves through it.
@@ -130,13 +144,9 @@ async def async_replace_irk(hass, entry, new_value: str) -> dict:
         for e in entities:
             ent_reg.async_update_entity(e.entity_id, new_unique_id=e.unique_id.replace(old, new))
             renamed += 1
-        for device in _devices(dev_reg):
-            if device is not None and any(_carries(ident, old) for ident in device.identifiers):
-                dev_reg.async_update_device(
-                    device.id,
-                    new_identifiers={(d, v.replace(old, new) if isinstance(v, str) else v) for d, v in device.identifiers},
-                )
-                devices += 1
+        for device in carrying:
+            dev_reg.async_update_device(device.id, new_identifiers={_swap(i, old, new) for i in device.identifiers})
+            devices += 1
         hass.config_entries.async_update_entry(entry, data={**entry.data, "irk": new}, unique_id=new)
     finally:
         # Set everything up again whatever happened above: a failure part way

@@ -1132,6 +1132,7 @@ async def ws_irk_add(hass, connection, msg):
     vol.Required("type"): "sextant/irk/replace",
     vol.Required("thing"): str,
     vol.Optional("irk"): str,
+    vol.Optional("dry_run", default=False): bool,
 })
 @websocket_api.require_admin
 @websocket_api.async_response
@@ -1149,7 +1150,7 @@ async def ws_irk_replace(hass, connection, msg):
     if "irk" not in msg:
         return connection.send_result(msg["id"], {"device": irk_replace._device_name(hass, entry.data["irk"]) or entry.title})
     try:
-        result = await irk_replace.async_replace_irk(hass, entry, msg["irk"])
+        result = await irk_replace.async_replace_irk(hass, entry, msg["irk"], dry_run=msg["dry_run"])
     except irk_replace.IrkReplaceError as e:
         return _error(connection, msg, str(e))
     connection.send_result(msg["id"], result)
