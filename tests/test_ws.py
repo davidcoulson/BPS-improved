@@ -311,7 +311,7 @@ def test_truth_marks_are_recorded_evaluated_listed_applied_and_deleted(tmp_path,
     run(ws.ws_truth_evaluate(hass, conn, {"id": 8, "type": "sextant/truth/evaluate", "mark_id": 1}))
     assert conn.results[-1][1]["mark"]["id"] == 1 and len(conn.results[-1][1]["rows"]) >= 1
     run(ws.ws_truth_delete(hass, conn, {"id": 9, "type": "sextant/truth/delete", "mark_id": 1}))
-    assert conn.results[-1][1]["removed"] == 1 and sextant._fingerprint_db.extra_refs == []
+    assert conn.results[-1][1]["removed"] == 1 and sextant._truth_marks == []
 
 
 def test_every_websocket_handler_is_registered():

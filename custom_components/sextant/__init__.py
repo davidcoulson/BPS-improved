@@ -499,9 +499,97 @@ def _fingerprint_wanted(layout):
     return isinstance(weights, dict) and any(isinstance(w, (int, float)) and w > 0 for w in weights.values())
 
 
+# Truth marks as stored (with their samples), and the references built from
+# them under the corrections in force when they were last built.
+_truth_marks = []
+_mark_ref_cache = {"key": None, "refs": []}
+
+
+def _set_truth_marks(marks):
+    """Replace the marks the fingerprint matcher draws references from."""
+    _truth_marks[:] = list(marks or [])
+    _mark_ref_cache["key"] = None
+
+
+def _raw_vector(layout):
+    """{rx_address: metres} this cycle, before calibration and per-thing trim."""
+    out = {}
+    for floor in (layout or {}).get("floor") or []:
+        for receiver in floor.get("receivers") or []:
+            address, raw = receiver.get("address"), receiver.get("raw_distance")
+            if isinstance(address, str) and address and "distance" in receiver \
+                    and isinstance(raw, (int, float)) and not isinstance(raw, bool) and raw > 0:
+                out[address.lower()] = float(raw)
+    return out
+
+
+def _mark_rebase_fns(layout, entity):
+    """(mult, rx_at) for truth.rebase: this thing's multiplier per receiver
+    now, and the receiver placed at a point with its vertical leg."""
+    thing_h = _thing_height(layout, entity)
+    corr, placed = {}, {}
+    for floor in (layout or {}).get("floor") or []:
+        for receiver in floor.get("receivers") or []:
+            address, cords = receiver.get("address"), receiver.get("cords") or {}
+            if not isinstance(address, str) or not address:
+                continue
+            c = receiver.get("correction")
+            corr[address.lower()] = float(c) if isinstance(c, (int, float)) and not isinstance(c, bool) and c > 0 else 1.0
+            h = receiver.get("height")
+            dz = float(h) - thing_h if isinstance(h, (int, float)) and not isinstance(h, bool) and 0 <= h <= 10 else None
+            try:
+                placed.setdefault(floor.get("name"), []).append((float(cords["x"]), float(cords["y"]), address.lower(), dz))
+            except (KeyError, TypeError, ValueError):
+                continue
+    factor = _thing_distance_factor(layout, entity)
+
+    def mult(address, raw_m):
+        c = corr.get(address)
+        if c is None:
+            return None
+        # raw_m None: the multiplier a mark from before raw readings were kept
+        # was recorded with - the correction in full.
+        return (c if raw_m is None else _close_range_correction(c, raw_m, layout)) * factor
+
+    def rx_at(floor_name, x, y):
+        for rx, ry, address, dz in placed.get(floor_name, ()):
+            if abs(rx - x) <= 1.0 and abs(ry - y) <= 1.0:
+                return address, dz
+        return None
+
+    return mult, rx_at
+
+
+def _rebased_samples(layout, mark):
+    """A mark's samples with the corrections in force now (see truth.rebase)."""
+    mult, rx_at = _mark_rebase_fns(layout, mark.get("entity"))
+    return truth_mod.rebase(mark.get("samples") or [], mult, rx_at, MIN_WEIGHT_RADIUS_M)
+
+
+def _mark_basis(layout):
+    """What a mark reference depends on: corrections, heights, trims, the fade."""
+    rx = tuple(sorted(
+        (str(r.get("address")), r.get("correction"), r.get("height"))
+        for f in (layout or {}).get("floor") or [] for r in f.get("receivers") or []
+    ))
+    things = json.dumps([(layout or {}).get(k) for k in ("thing_ref_offsets", "thing_heights", "thing_height")], sort_keys=True, default=str)
+    fade = tuple(_tuning(layout, k) for k in ("correction_close_fade", "correction_fade_near_m", "correction_fade_far_m"))
+    return rx, things, fade
+
+
 def _mark_refs(layout):
     """The truth-mark references to add to the proxies', or None when switched off."""
-    return _fingerprint_db.extra_refs if _tuning(layout, "fingerprint_marks") and _fingerprint_db.extra_refs else None
+    if not _truth_marks or not _tuning(layout, "fingerprint_marks"):
+        return None
+    key = _mark_basis(layout)
+    if key != _mark_ref_cache["key"]:
+        refs = []
+        for mark in _truth_marks:
+            ref = truth_mod.mark_reference(mark, samples=_rebased_samples(layout, mark))
+            if ref:
+                refs.append(ref)
+        _mark_ref_cache.update(key=key, refs=refs)
+    return _mark_ref_cache["refs"] or None
 
 
 def _persist_fp_gains(hass, now_ts):
@@ -1922,6 +2010,7 @@ async def update_receiver_radii(hass, eids):
                 # through the slab shrink its through-floor slant and
                 # steal the election from the correct floor.
                 receiver["distance"] = distance
+                receiver["raw_distance"] = distance_m  # before correction and trim, for truth marks
                 receiver["quality"] = quality
             except ValueError:
                 #_LOGGER.info(f"Invalid numerical value: {rec_value.state}")
@@ -2077,7 +2166,8 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
         })
     # Keep this cycle's inputs so a truth mark can re-solve it under other settings.
     if jobs:
-        _truth_buffer.remember(entity, jobs, thing_vec if estimator != "geometric" else fingerprint.thing_vector(layout), fp_gain, estimator)
+        _truth_buffer.remember(entity, jobs, thing_vec if estimator != "geometric" else fingerprint.thing_vector(layout), fp_gain, estimator,
+                               raw_vec=_raw_vector(layout))
 
     solved = {}  # floor name -> everything the publish pipeline needs
     if jobs:
@@ -4186,7 +4276,7 @@ async def async_setup_entry(hass, entry):
     # Truth marks double as fingerprint references; load them before the first cycle.
     try:
         store = await load_truth(hass)
-        _fingerprint_db.extra_refs = [r for r in (truth_mod.mark_reference(m) for m in store.get("marks", [])) if r]
+        _set_truth_marks(store.get("marks", []))
         _restore_fp_gains(await load_fp_gains(hass))
     except Exception as e:  # noqa: BLE001
         _LOGGER.warning("Truth marks or learned gains not loaded: %s", e)

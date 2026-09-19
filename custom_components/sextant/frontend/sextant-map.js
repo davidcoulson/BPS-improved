@@ -342,6 +342,36 @@ export function staleness(thing, staleAfter, now = Date.now() / 1000) {
   return { age, ghost: staleAfter > 0 && age > staleAfter };
 }
 
+/**
+ * Where a thing spent its time: history points binned into square cells of
+ * cellM metres per floor, each cell holding the seconds spent in it. A point
+ * holds until the next one (history keeps a point only when something
+ * changed), but never across a dropout, and no longer than maxHoldSecs, so a
+ * thing that went unheard does not pile hours onto its last spot.
+ * points: [{t, x, y, f, gap}] in metres, oldest first; `end` closes the last.
+ * Returns {floor: {cellM, total, max, cells: [{x, y, secs}]}} (x, y = cell centre, m).
+ */
+export function heatCells(points, end, cellM = 0.5, maxHoldSecs = 300) {
+  const acc = {};
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i], next = points[i + 1];
+    if (p.f == null || !isFinite(p.x) || !isFinite(p.y)) continue;
+    const until = next ? (next.gap === 2 ? p.t + Math.min(60, maxHoldSecs) : next.t) : end;
+    const secs = Math.max(0, Math.min(until - p.t, maxHoldSecs));
+    if (!secs) continue;
+    const floor = (acc[p.f] = acc[p.f] || { cellM, total: 0, max: 0, byKey: new Map() });
+    const cx = Math.floor(p.x / cellM), cy = Math.floor(p.y / cellM), key = `${cx},${cy}`;
+    const cell = floor.byKey.get(key) || { x: (cx + 0.5) * cellM, y: (cy + 0.5) * cellM, secs: 0 };
+    cell.secs += secs;
+    floor.byKey.set(key, cell);
+    floor.total += secs;
+    floor.max = Math.max(floor.max, cell.secs);
+  }
+  const out = {};
+  for (const [f, v] of Object.entries(acc)) out[f] = { cellM: v.cellM, total: v.total, max: v.max, cells: [...v.byKey.values()] };
+  return out;
+}
+
 export class SextantMap {
   /**
    * @param {HTMLCanvasElement} canvas
@@ -359,6 +389,7 @@ export class SextantMap {
     this.trails = new Map();
     this.offline = new Set();
     this.marks = [];   // truth marks of the focused thing on this floor: [{x, y, label}]
+    this.heat = null;  // where the focused thing has been: {size, max, cells: [{x, y, secs}]} in map px
     this.suggestions = [];  // advised proxy spots on this floor: [{x, y, label}]
     // staleAfter: seconds without a fix after which a thing is drawn as a ghost (0 = never).
     this.options = { circles: false, trails: true, fingerprint: false, grid: "off", labels: true, subzones: true, image: true, focus: null, staleAfter: 120 };
@@ -414,6 +445,7 @@ export class SextantMap {
   clearTrails() { this.trails.clear(); this.invalidate(); }
   setOffline(slugs) { this.offline = new Set(slugs || []); this.invalidate(); }
   setMarks(list) { this.marks = list || []; this.invalidate(); }
+  setHeat(heat) { this.heat = heat?.cells?.length ? heat : null; this.invalidate(); }
   setSuggestions(list) { this.suggestions = list || []; this.invalidate(); }
   setOptions(opts) { Object.assign(this.options, opts); this.invalidate(); }
   setMode(mode) { this.mode = mode; if (mode !== "edit") { this.draft = null; this.tool = "select"; } this.invalidate(); }
@@ -784,6 +816,7 @@ export class SextantMap {
     this._drawGrid(ctx, size);
     this._drawPolygons(ctx, f.zones || [], "zone");
     if (this.options.subzones) this._drawPolygons(ctx, f.subzones || [], "subzone");
+    if (this.heat && this.mode !== "edit") this._drawHeat(ctx);
     this._drawDraft(ctx);
     if (this._snap) this._drawSnap(ctx);
     this._drawReceivers(ctx, f.receivers || []);
@@ -1062,6 +1095,20 @@ export class SextantMap {
       const above = screenY > TOP_OVERLAY_PX && s.y > 40 / k;
       this._label(ctx, s.label || "add a proxy here", s.x, s.y + (above ? -26 : 28) / k, 11, 1);
     });
+  }
+
+  /** Time spent per cell: blue for a moment, through yellow, to red for the longest stay. */
+  _drawHeat(ctx) {
+    const { size, max, cells } = this.heat;
+    if (!max) return;
+    ctx.save();
+    for (const c of cells) {
+      // Square root: an hour on the bed would otherwise wash every walk-through out to nothing.
+      const w = Math.sqrt(c.secs / max);
+      ctx.fillStyle = `hsla(${Math.round(230 - 230 * w)}, 90%, 50%, ${(0.18 + 0.5 * w).toFixed(3)})`;
+      ctx.fillRect(c.x - size / 2, c.y - size / 2, size, size);
+    }
+    ctx.restore();
   }
 
   _drawMarks(ctx) {

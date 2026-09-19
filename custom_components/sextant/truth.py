@@ -58,7 +58,7 @@ class Buffer:
         self._by_entity = {}
         self._maxlen = maxlen
 
-    def remember(self, entity, jobs, thing_vec, gain, estimator, now=None):
+    def remember(self, entity, jobs, thing_vec, gain, estimator, now=None, raw_vec=None):
         floors = {}
         for job in jobs:
             weighted = [[float(v) for v in pt] for pt in job.get("weighted") or []]
@@ -80,6 +80,10 @@ class Buffer:
             "thing_vec": {str(k): float(v) for k, v in (thing_vec or {}).items()},
             "floors": floors,
         }
+        if raw_vec:
+            # The same readings before any calibration or per-thing trim, so a
+            # mark can be re-based on whatever corrections are current (rebase).
+            sample["raw_vec"] = {str(k): float(v) for k, v in raw_vec.items()}
         self._by_entity.setdefault(entity, deque(maxlen=self._maxlen)).append(sample)
 
     def samples(self, entity, since=None, floor=None):
@@ -93,6 +97,59 @@ class Buffer:
             self._by_entity.clear()
         else:
             self._by_entity.pop(entity, None)
+
+
+def rebase(samples, mult, rx_at, min_radius_m):
+    """A mark's samples with the corrections in force NOW applied to their readings.
+
+    A sample stores its ranges as the cycle used them, with that day's
+    calibration and trims folded in; re-solving them after the corrections
+    change would judge (and match against) the old corrections. Samples
+    recorded since 3.17.7 carry ``raw_vec``, the readings before any of that;
+    older ones have it recovered by dividing out the correction and trim in
+    force now, which is exact unless those changed since the mark (and the
+    correction then was applied in full: there was no close-range fade).
+
+    ``mult(address, raw_m)`` is the multiplier the live path would apply to
+    that reading now, or None for a receiver no longer placed;
+    ``rx_at(floor, x, y)`` is ``(address, dz_m)`` for the receiver placed at
+    that point (``dz_m`` None without a mount height), or None. Rows and
+    readings it cannot place are kept as recorded.
+    """
+    out = []
+    for s in samples or []:
+        raw = s.get("raw_vec")
+        if raw is None:
+            raw = {}
+            for rx, d in (s.get("thing_vec") or {}).items():
+                m = mult(rx, None)
+                if m and isinstance(d, (int, float)) and d > 0:
+                    raw[rx] = float(d) / m
+        if not raw:
+            out.append(s)
+            continue
+        now_m = {}
+        for rx, r in raw.items():
+            m = mult(rx, r)
+            if m:
+                now_m[rx] = r * m
+        floors = {}
+        for name, fj in (s.get("floors") or {}).items():
+            scale = float(fj.get("scale") or 0.0)
+            rows = []
+            for row in fj.get("weighted") or []:
+                hit = rx_at(name, row[0], row[1]) if scale else None
+                d = now_m.get(hit[0]) if hit else None
+                if d is None:
+                    rows.append(list(row))
+                    continue
+                dz = hit[1]
+                h = d if dz is None else math.sqrt(max(d * d - dz * dz, min(d * d, min_radius_m * min_radius_m)))
+                rows.append([row[0], row[1], h * scale, row[3], d * scale])
+            floors[name] = {**fj, "weighted": rows}
+        thing_vec = {rx: now_m.get(rx, d) for rx, d in (s.get("thing_vec") or {}).items()}
+        out.append({**s, "thing_vec": thing_vec, "floors": floors})
+    return out
 
 
 def evaluate(samples, floor, mark, scale, zone_of, solve, refs_for_gain, k=3, missing_m=12.0,
@@ -156,14 +213,15 @@ def evaluate(samples, floor, mark, scale, zone_of, solve, refs_for_gain, k=3, mi
     return rows
 
 
-def mark_reference(mark):
+def mark_reference(mark, samples=None):
     """A fingerprint reference from a mark: the median of its samples' range
     vectors per receiving proxy, divided by the gain those cycles ran with
     so it sits in the probe scale ``build_references`` multiplies by the
-    gain in force. None when the samples share fewer than two readings."""
+    gain in force. None when the samples share fewer than two readings.
+    ``samples`` overrides the mark's own (pass them rebased)."""
     per_rx = {}
     gain = 1.0
-    for s in mark.get("samples") or []:
+    for s in (samples if samples is not None else mark.get("samples")) or []:
         gain = float(s.get("gain") or gain)
         for rx, d in (s.get("thing_vec") or {}).items():
             if isinstance(d, (int, float)) and d > 0:

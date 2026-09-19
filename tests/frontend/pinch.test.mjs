@@ -83,3 +83,24 @@ test("zoomTo fills the view with a spot", () => {
   assert.ok(b.x - a.x > 300 && b.x - a.x <= 400);
   assert.ok(Math.abs((a.x + b.x) / 2 - 200) < 1e-6 && Math.abs((a.y + b.y) / 2 - 400) < 1e-6);
 });
+
+test("heatCells adds up time per cell and stops at dropouts and long silences", async () => {
+  const { heatCells } = await import("../../custom_components/sextant/frontend/sextant-map.js");
+  const pts = [
+    { t: 0, x: 1.1, y: 1.1, f: "Up" },          // 100 s on the bed
+    { t: 100, x: 1.2, y: 1.3, f: "Up" },        // same cell, 50 s
+    { t: 150, x: 4.0, y: 1.0, f: "Up" },        // unheard 2 h (a dropout): a minute
+    { t: 7350, x: 4.0, y: 1.0, f: "Up", gap: 2 },  // heard again after a dropout
+    { t: 7400, x: 0.2, y: 0.2, f: "Down" },     // down: until `end`
+  ];
+  const h = heatCells(pts, 7460, 0.5, 300);
+  const bed = h.Up.cells.find((c) => c.x === 1.25 && c.y === 1.25);
+  assert.equal(bed.secs, 150);
+  const desk = h.Up.cells.find((c) => c.x === 4.25 && c.y === 1.25);
+  assert.equal(desk.secs, 60 + 50);
+  assert.equal(h.Up.max, 150);
+  assert.equal(h.Down.total, 60);
+  // No dropout flagged but a long wait for the next point: at most maxHoldSecs.
+  const quiet = heatCells([{ t: 0, x: 0, y: 0, f: "F" }, { t: 5000, x: 9, y: 9, f: "F" }], 5000);
+  assert.equal(quiet.F.cells.find((c) => c.x === 0.25).secs, 300);
+});

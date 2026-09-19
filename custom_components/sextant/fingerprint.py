@@ -72,8 +72,6 @@ class ReferenceDB:
         self.learned_gain = 1.0
         # Per-thing multiplier on top of learned_gain (see learn(entity=...)).
         self.thing_gain = {}
-        # References from truth marks (truth.mark_reference), in probe scale.
-        self.extra_refs = []
 
     def gain_for(self, entity=None):
         """The learned gain for one thing: the shared gain times its own multiplier."""

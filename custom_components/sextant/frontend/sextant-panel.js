@@ -12,7 +12,7 @@
  *   tuning       stability KPI, live tuning, history retention
  */
 import { LitElement, html, css, nothing } from "./lit.js";
-import { SextantMap, thingColor, thingHue, staleness, shortAge } from "./sextant-map.js";
+import { SextantMap, thingColor, thingHue, staleness, shortAge, heatCells } from "./sextant-map.js";
 import { sharedStyles, widgetStyles, fmtAge, fmtNum, toast, confirmDialog, ensureHaComponents, uiSwitch, uiSelect, uiButton, callWS, sortFloors, thingName, proxyName, fmtLen, fmtSpeed, classIcon } from "./sextant-ui.js";
 
 // The backend registers the panel at /sextant/v/<version>/sextant-panel.js
@@ -54,6 +54,13 @@ export function mapUrlFor(floorName, maps) {
   const want = norm(floorName);
   const hit = maps.find((m) => norm(m) === want) || maps.find((m) => norm(m).startsWith(want));
   return hit ? `/api/sextant/map/${encodeURIComponent(hit)}` : null;
+}
+
+/** Seconds as "40 min" / "2.5 h". */
+function shortSpan(secs) {
+  if (!(secs > 0)) return "0 min";
+  if (secs < 3600) return `${Math.max(1, Math.round(secs / 60))} min`;
+  return `${(secs / 3600).toFixed(secs < 36000 ? 1 : 0)} h`;
 }
 
 class SextantPanel extends LitElement {
@@ -280,6 +287,7 @@ class SextantLive extends LitElement {
     _scrub: { state: true },
     _links: { state: true },
     _marking: { state: true },
+    _heat: { state: true },
     _truth: { state: true },
     _marks: { state: true },
     _blend: { state: true },
@@ -294,6 +302,8 @@ class SextantLive extends LitElement {
     this._selected = null;
     this._links = null;
     this._marking = false;  // waiting for the click that says where the thing really is
+    this._heatHours = 0;    // "where it's been" window picked for the selected thing (0 = off)
+    this._heat = null;      // {ent, hours, byFloor} from heatCells
     this._truth = null;     // the last mark's evaluation {mark, rows, current_weight}
     this._marks = [];       // the selected thing's marks
     this._blend = null;     // slider value while it is being dragged (0..100)
@@ -337,7 +347,7 @@ class SextantLive extends LitElement {
   disconnectedCallback() { super.disconnectedCallback(); this._map?.destroy(); clearInterval(this._linksTimer); }
 
   _select(ent) {
-    if (ent !== this._selected) { this._truth = null; this._marking = false; this._blend = null; }
+    if (ent !== this._selected) { this._truth = null; this._marking = false; this._blend = null; this._heat = null; }
     this._selected = ent;
     if (ent) {
       this._mapOpen = true; // a phone: the map opens under this thing's details
@@ -347,7 +357,7 @@ class SextantLive extends LitElement {
       this.updateComplete.then(() => this.renderRoot.querySelector(".card.detail")?.scrollIntoView({ block: "start", behavior: "smooth" }));
     }
     this._map?.setOptions({ focus: ent });
-    if (ent) { this._loadLinks(); this._loadMarks(ent); this._loadTimeline(ent); } else { this._links = null; this._marks = []; this._map?.setMarks([]); this._timeline = null; }
+    if (ent) { this._loadLinks(); this._loadMarks(ent); this._loadTimeline(ent); if (this._heatHours) this._loadHeat(ent, this._heatHours); } else { this._links = null; this._marks = []; this._map?.setMarks([]); this._timeline = null; }
   }
 
   /** Seconds unheard before a thing is shown as a ghost (tuning stale_after_secs). */
@@ -370,6 +380,42 @@ class SextantLive extends LitElement {
   async _loadMarks(ent) {
     const r = await this.hass.callWS({ type: "sextant/truth/list", entity: ent }).catch(() => null);
     if (r && ent === this._selected) { this._marks = r.marks || []; this._pushMarks(); }
+  }
+
+  /** Where the selected thing spent the last `hours`, binned per floor (see heatCells). */
+  async _loadHeat(ent, hours) {
+    this._heatHours = hours;
+    if (!ent || !hours) { this._heat = null; return; }
+    try {
+      const now = Date.now() / 1000;
+      const r = await this.hass.callWS({ type: "sextant/history/get", entity: ent, from: now - hours * 3600, max_points: 20000 });
+      if (this._selected !== ent || this._heatHours !== hours) return;
+      const points = (r.t || []).map((t, i) => ({
+        t, x: r.x_m[i], y: r.y_m[i], gap: r.gap?.[i] || 0,
+        f: typeof r.f?.[i] === "number" ? r.floors?.[r.f[i]] : r.f?.[i],
+      }));
+      this._heat = { ent, hours, keptSecs: r.config?.max_age || null, byFloor: heatCells(points, Math.min(now, r.to || now)) };
+    } catch (e) {
+      this._heat = null;
+      toast(this, `history: ${e?.message || e}`);
+    }
+  }
+
+  _pushHeat() {
+    const f = this._floorObj(), h = this._heat;
+    const mine = h && h.ent === this._selected ? h.byFloor[this.floor] : null;
+    if (!mine || !f?.scale) { this._map?.setHeat(null); return; }
+    this._map?.setHeat({ size: mine.cellM * f.scale, max: mine.max, cells: mine.cells.map((c) => ({ x: c.x * f.scale, y: c.y * f.scale, secs: c.secs })) });
+  }
+
+  _renderHeat(sel) {
+    const h = this._heat?.ent === sel.ent ? this._heat : null;
+    const here = h?.byFloor[this.floor];
+    const elsewhere = h ? Object.entries(h.byFloor).filter(([f]) => f !== this.floor).map(([f, v]) => `${f} ${shortSpan(v.total)}`) : [];
+    return html`<div class="row heat">
+      ${uiSelect({ label: "Where it's been", value: String(this._heatHours || 0), options: [["0", "Off"], ["1", "Last hour"], ["6", "Last 6 hours"], ["24", "Last 24 hours"], ["168", "Last week"]].map(([value, label]) => ({ value, label })), onChange: (v) => this._loadHeat(sel.ent, Number(v)), style: "width: 170px" })}
+      ${h ? html`<span class="muted small">${here ? html`${shortSpan(here.total)} on this floor, longest ${shortSpan(here.max)} in one place (red)` : "Not on this floor"}${elsewhere.length ? html` · ${elsewhere.join(", ")}` : nothing}${h.keptSecs && h.hours * 3600 > h.keptSecs + 60 ? html` · history only goes back ${shortSpan(h.keptSecs)}` : nothing}</span>` : nothing}
+    </div>`;
   }
 
   _pushMarks() {
@@ -427,6 +473,7 @@ class SextantLive extends LitElement {
     if (changed.has("data") || changed.has("floor")) this._pushFloor();
     if (changed.has("positions") || changed.has("floor") || changed.has("data") || changed.has("_scrub") || changed.has("_history")) this._pushThings();
     if (changed.has("floor") || changed.has("_marks")) this._pushMarks();
+    if (changed.has("floor") || changed.has("_heat") || changed.has("data")) this._pushHeat();
     if (changed.has("_options")) this._map.setOptions(this._options);
     if (changed.has("data")) this._map.setOptions({ staleAfter: this._staleAfter() });
     // A stay grows every cycle; re-read the timeline once a minute while a thing is focused.
@@ -610,6 +657,7 @@ class SextantLive extends LitElement {
                 <dt>Speed</dt><dd>${fmtSpeed(sel.speed, this.hass)}</dd>
               </dl>
             </details>
+            ${this._renderHeat(sel)}
             ${this._renderBlend(sel)}
             ${this._renderTruth(sel)}
             <div class="row">
@@ -796,6 +844,7 @@ class SextantLive extends LitElement {
     .blend { display: flex; align-items: center; gap: 6px; margin: 10px 0 4px; flex-wrap: wrap; }
     .blend input { flex: 1; min-width: 90px; }
     .truth { margin-top: 6px; }
+    .heat { align-items: center; gap: 8px; flex-wrap: wrap; }
     .marking .zoomto { display: flex; flex-wrap: wrap; gap: 2px 6px; margin: 4px 0; }
     .marking { background: var(--warning-color, #c77800); color: #fff; padding: 6px 8px; border-radius: 6px; font-size: 13px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
     .card.inner { margin-top: 8px; padding: 8px; }

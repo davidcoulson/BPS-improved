@@ -1849,3 +1849,26 @@ def test_a_watch_beside_a_stretched_proxy_keeps_its_short_reading():
     assert abs(_radii_with_correction("0.9", 1.73)["distance"] - 0.9) < 1e-9
     assert abs(_radii_with_correction("0.9", 1.73, {"correction_close_fade": False})["distance"] - 0.9 * 1.73) < 1e-9
     assert abs(_radii_with_correction("4.0", 1.73)["distance"] - 4.0 * 1.73) < 1e-9
+
+
+def test_mark_references_follow_a_change_of_correction():
+    import copy
+    layout = {"floor": [{"name": "F", "scale": SCALE, "receivers": [
+        {"entity_id": "p", "address": "AA", "cords": {"x": 0.0, "y": 0.0}, "correction": 2.0},
+        {"entity_id": "q", "address": "BB", "cords": {"x": 100.0, "y": 0.0}},
+    ]}]}
+    mark = {"id": 1, "entity": "watch", "floor": "F", "x": 10.0, "y": 0.0, "samples": [
+        {"t": 1.0, "gain": 1.0, "estimator": "fingerprint", "thing_vec": {"aa": 8.0, "bb": 3.0},
+         "raw_vec": {"aa": 4.0, "bb": 3.0},
+         "floors": {"F": {"weighted": [[0.0, 0.0, 320.0, 1.0, 320.0], [100.0, 0.0, 120.0, 1.0, 120.0]],
+                          "bounds": None, "min_wr": 20.0, "scale": SCALE}}}] * 3}
+    sextant._set_truth_marks([mark])
+    try:
+        assert sextant._mark_refs(layout)[0]["vector"]["aa"] == 8.0
+        recal = copy.deepcopy(layout)
+        recal["floor"][0]["receivers"][0]["correction"] = 1.25
+        assert sextant._mark_refs(recal)[0]["vector"]["aa"] == 5.0
+        # Only the reading itself carries the fade: 4 m is past it, so no change there.
+        assert sextant._mark_refs(recal)[0]["vector"]["bb"] == 3.0
+    finally:
+        sextant._set_truth_marks([])

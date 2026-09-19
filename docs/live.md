@@ -62,6 +62,14 @@ row makes those the thing's settings (its blend weight, and a gain
 multiplier folded into its learned gain). One mark can overfit, so mark a
 thing in two or three rooms.
 
+A mark keeps the readings as Bermuda gave them, before calibration and
+per-thing trims, and applies whatever corrections are in force each time
+it is used, so re-running calibration or changing the close-range fade
+never leaves a mark describing yesterday's corrections. Marks made before
+3.17.7 have the correction then in force divided back out, assumed to be
+the one in force now: re-mark a spot that matters if calibration has
+changed since.
+
 Marks stay, with their samples, in `.storage/sextant_truth`, and do two
 more jobs. The Tuning page's **Accuracy** card re-solves every mark under
 the settings in force and reports, per thing, the mean error in metres
@@ -69,3 +77,17 @@ and the share of cycles in the right room: the accuracy figure the
 stability KPI cannot give. And each mark becomes a fingerprint reference
 at the marked point, in the marking thing's own scale, so rooms with no
 probe nearby get a reference too (`fingerprint_marks` turns that off).
+
+## Where it's been
+
+With a thing selected, **Where it's been** colours the plan by how long
+it spent in each half-metre square over the last hour, 6 hours, day or
+week: blue for passing through, red for the longest stay. The note beside
+it gives the time on this floor, the longest stay in one square, and the
+time on other floors. A reading holds until the next one for at most five
+minutes, and a dropout counts for one minute, so a thing that went quiet
+does not pile hours onto its last square. History keeps 6 hours by
+default (the layout's `history_max_age`, in seconds, up to a week; there
+is no control for it on the Tuning page yet); asking for more says how far
+back it goes.
+

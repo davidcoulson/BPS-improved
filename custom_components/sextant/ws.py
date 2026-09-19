@@ -454,7 +454,7 @@ async def _evaluate_mark(hass, core, mark, weights=None, gains=None):
     if gains is not None:
         kwargs["gains"] = gains
     return await hass.async_add_executor_job(
-        lambda: truth_mod.evaluate(mark["samples"], floor, (mark["x"], mark["y"]), scale, zone_of, core._solve_floor_jobs, refs_for_gain, **kwargs)
+        lambda: truth_mod.evaluate(core._rebased_samples(layout, mark), floor, (mark["x"], mark["y"]), scale, zone_of, core._solve_floor_jobs, refs_for_gain, **kwargs)
     )
 
 
@@ -467,7 +467,7 @@ def _current_weight(core, layout, entity):
 
 
 def _refresh_mark_refs(core, store):
-    core._fingerprint_db.extra_refs = [r for r in (truth_mod.mark_reference(m) for m in store.get("marks", [])) if r]
+    core._set_truth_marks(store.get("marks", []))
 
 
 @websocket_api.websocket_command({
