@@ -112,7 +112,7 @@ in the wrong room:
   offers the ones that would have put it there, and the mark becomes a
   reference for placing that thing there again
   ([Truth marks](live.md#truth-marks)).
-- **See where it has been.** **Where it's been** colours the plan by where
+- **See where it has been.** **Activity** colours the plan by where
   the selected thing spent the last hours - a quick check that the
   couch it sat on all evening is where the colour is. History keeps 6 hours
   unless **History kept (hours)** on Tuning says otherwise.

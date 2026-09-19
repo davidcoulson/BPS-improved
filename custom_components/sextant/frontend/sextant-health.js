@@ -53,7 +53,7 @@ const TUNING_LABELS = {
   spot_proxy_near_m: ["Spot proxy: full within (m)", "a spot's own proxy hearing a thing this close counts fully as the thing being on the spot"],
   spot_proxy_far_m: ["Spot proxy: nothing from (m)", "from this far the spot's proxy says nothing; between the two it fades"],
   spot_proxy_ratio: ["Spot proxy: clearly nearest ×", "every other proxy must read this many times farther for full weight (none within 1.25×)"],
-  history_hours: ["History kept (hours)", "how far back the history scrubber, the timeline and Where it's been reach (1 to 168)"],
+  history_hours: ["History kept (hours)", "how far back the history scrubber, the timeline and Activity reach (1 to 168)"],
   calibration_target: ["Calibration writes to", "sextant = a per-proxy factor in the layout; bermuda = per-scanner RSSI offsets in Bermuda"],
   correction_close_fade: ["Fade stretch up close", "a proxy calibration stretches (factor above 1) pushes a thing lying right beside it away; fade that stretch out at short range"],
   correction_fade_near_m: ["No stretch within (m)", "a reading this close gets none of its proxy's stretch"],

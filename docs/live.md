@@ -49,7 +49,7 @@ a desktop job.
 
 Selecting a thing opens a row of buttons inside its row in the list:
 **It's here** (a truth mark, with the floor's spots to zoom to),
-**Heatmap** (where it's been; again to hide it), **History** (scrub it),
+**Activity** (where it has spent its time; again to hide it), **History** (scrub it),
 and **Edit**, which opens the thing on the Things page.
 
 ## Truth marks
@@ -85,9 +85,9 @@ stability KPI cannot give. And each mark becomes a fingerprint reference
 at the marked point, in the marking thing's own scale, so rooms with no
 probe nearby get a reference too (`fingerprint_marks` turns that off).
 
-## Where it's been
+## Activity
 
-With a thing selected, **Where it's been** colours the plan by how long
+With a thing selected, **Activity** colours the plan by how long
 it spent in each half-metre square over the last hour, 6 hours, day or
 week, blended into a smooth wash: blue for passing through, red for the
 longest stay. The note beside

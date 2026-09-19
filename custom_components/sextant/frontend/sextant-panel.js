@@ -418,7 +418,7 @@ class SextantLive extends LitElement {
       <ha-icon icon=${icon}></ha-icon><span>${label}</span></button>`;
     return html`<div class="quick">
       ${btn("mdi:map-marker-check", "It's here", "It's actually here: tap where it really is", this._marking, () => { this._marking = !this._marking; })}
-      ${btn("mdi:fire", "Heatmap", "Where it's been", heatOn, () => this._loadHeat(ent, heatOn ? 0 : (this._lastHeatHours || 6)))}
+      ${btn("mdi:fire", "Activity", "Activity: where it has spent its time", heatOn, () => this._loadHeat(ent, heatOn ? 0 : (this._lastHeatHours || 6)))}
       ${btn("mdi:history", "History", "Scrub its history", h?.ent === ent, () => this._loadHistory(h?.ent === ent ? null : ent))}
       ${this._isAdmin() ? btn("mdi:pencil-outline", "Edit", "Edit this thing", false, () => this._goto({ mode: "things", thing: ent })) : nothing}
     </div>
@@ -467,7 +467,7 @@ class SextantLive extends LitElement {
     const here = h?.byFloor[this.floor];
     const elsewhere = h ? Object.entries(h.byFloor).filter(([f]) => f !== this.floor).map(([f, v]) => `${f} ${shortSpan(v.total)}`) : [];
     return html`<div class="row heat">
-      ${uiSelect({ label: "Where it's been", value: String(this._heatHours || 0), options: [["0", "Off"], ["1", "Last hour"], ["6", "Last 6 hours"], ["24", "Last 24 hours"], ["168", "Last week"]].map(([value, label]) => ({ value, label })), onChange: (v) => this._loadHeat(sel.ent, Number(v)), style: "width: 170px" })}
+      ${uiSelect({ label: "Activity", value: String(this._heatHours || 0), options: [["0", "Off"], ["1", "Last hour"], ["6", "Last 6 hours"], ["24", "Last 24 hours"], ["168", "Last week"]].map(([value, label]) => ({ value, label })), onChange: (v) => this._loadHeat(sel.ent, Number(v)), style: "width: 170px" })}
       ${h ? html`<span class="muted small">${here ? html`${shortSpan(here.total)} on this floor, longest ${shortSpan(here.max)} in one place (red)` : "Not on this floor"}${elsewhere.length ? html` · ${elsewhere.join(", ")}` : nothing}${h.keptSecs && h.hours * 3600 > h.keptSecs + 60 ? html` · history only goes back ${shortSpan(h.keptSecs)}` : nothing}</span>` : nothing}
     </div>`;
   }
