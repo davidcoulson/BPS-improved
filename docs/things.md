@@ -36,3 +36,16 @@ or maker. Adverts heard only by unplaced proxies are ignored, and the
 proxies' own probe beacons are hidden. **Track…** opens the same dialog
 first, so you choose the name, class and height before Bermuda is told and
 reloads.
+
+## A phone's new key
+
+A phone or watch followed by its Identity Resolving Key (IRK) gets a new key
+only when it is reset or its Apple ID is signed out and back in. Home
+Assistant cannot change the key on a Private BLE Device: the key is the
+device's identity, built into the entry, the device and every entity it and
+Bermuda create. The key button on the phone's row, on the Things page,
+swaps it everywhere in one go, through Home Assistant's own registries.
+Every entity keeps its id and history, and Sextant keeps the thing's name,
+class, spots, marks and heatmap. Bermuda and the device reload for a few
+seconds. Deleted entities that Home Assistant remembers keep the old key.
+

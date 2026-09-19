@@ -310,8 +310,9 @@ def _install_homeassistant_stubs():
     class _AbortFlow(Exception):
         pass
 
+    import enum
     _module("homeassistant.config_entries", ConfigFlow=_FakeConfigFlow, OptionsFlow=_FakeOptionsFlow,
-            AbortFlow=_AbortFlow)
+            AbortFlow=_AbortFlow, ConfigEntryState=enum.Enum("ConfigEntryState", "LOADED NOT_LOADED SETUP_ERROR"))
     sys.modules["homeassistant.helpers.event"].async_call_later = lambda *a, **k: None
     _module("homeassistant.const", UnitOfLength=types.SimpleNamespace(METERS="m"))
     _module("homeassistant.util", slugify=lambda s: s)

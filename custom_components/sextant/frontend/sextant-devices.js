@@ -45,6 +45,7 @@ class SextantDevices extends LitElement {
     _wizard: { state: true },
     _findmyWizard: { state: true },
     _addWizard: { state: true },
+    _irkSwap: { state: true },
   };
 
   constructor() {
@@ -66,6 +67,7 @@ class SextantDevices extends LitElement {
     this._wizard = null;        // thing dialog state
     this._findmyWizard = null;  // FindMy add-accessory dialog state
     this._addWizard = null;     // "Add a thing" chooser: {kind, irk, error}
+    this._irkSwap = null;       // "Replace key" dialog: {slug, name, device, irk, error, done}
     this._pendingTrack = null;  // config_value just sent to Bermuda: open its dialog once it appears
   }
 
@@ -484,6 +486,52 @@ class SextantDevices extends LitElement {
     }
   }
 
+  async _openIrkSwap(slug, name) {
+    this._irkSwap = { slug, name, device: null, irk: "", error: null, done: null };
+    try {
+      const r = await this.hass.callWS({ type: "sextant/irk/replace", thing: slug });
+      this._irkSwap = { ...this._irkSwap, device: r.device };
+    } catch (e) {
+      this._irkSwap = { ...this._irkSwap, error: e?.message || String(e) };
+    }
+  }
+
+  async _swapIrk() {
+    const w = this._irkSwap;
+    this._busy = "irkswap";
+    try {
+      const r = await this.hass.callWS({ type: "sextant/irk/replace", thing: w.slug, irk: (w.irk || "").trim() });
+      this._irkSwap = { ...w, irk: "", error: null, done: r };
+      this._refresh();
+    } catch (e) {
+      this._irkSwap = { ...w, error: e?.message || String(e) };
+    }
+    this._busy = null;
+  }
+
+  /** Replace a phone's key in place: same entities, same history, same Sextant setup. */
+  _renderIrkSwap() {
+    const w = this._irkSwap;
+    if (!w) return nothing;
+    const close = () => { this._irkSwap = null; };
+    return html`<div class="modal" @click=${(e) => { if (e.target === e.currentTarget) close(); }}>
+      <div class="dialog card" role="dialog" aria-label="Replace key">
+        <h3>New key for ${w.name}</h3>
+        ${w.done ? html`<p>Done: ${w.done.device} now uses the new key. ${w.done.entities} entities and ${w.done.devices} device${w.done.devices === 1 ? "" : "s"} moved over, keeping their names and history. It shows up again once a proxy hears the phone with its new key.</p>
+          <div class="row">${uiButton({ label: "Close", kind: "primary", onClick: close })}</div>`
+        : html`
+          <p class="small">${w.device ? html`Home Assistant device: <b>${w.device}</b>.` : w.error ? nothing : "Finding the device…"}
+            The key changes everywhere Home Assistant and Bermuda use it, so every entity keeps its id and history, and Sextant keeps this thing's name, class, spots, marks and heatmap. Bermuda and the device reload for a few seconds.</p>
+          ${uiField({ label: "New Identity Resolving Key", type: "password", value: w.irk, placeholder: "32 hex characters, or base64 ending in =", onChange: (v) => { this._irkSwap = { ...this._irkSwap, irk: v }; }, style: "width: 100%" })}
+          ${w.error ? html`<p class="small" style="color: var(--error-color, #db4437)">${w.error}</p>` : nothing}
+          <div class="row">
+            ${uiButton({ label: this._busy === "irkswap" ? "Replacing…" : "Replace key", kind: "primary", disabled: !!this._busy || !w.device || !(w.irk || "").trim(), onClick: () => this._swapIrk() })}
+            ${uiButton({ label: "Cancel", kind: "text", onClick: close })}
+          </div>`}
+      </div>
+    </div>`;
+  }
+
   _renderAddWizard() {
     const w = this._addWizard;
     if (!w) return nothing;
@@ -561,7 +609,7 @@ class SextantDevices extends LitElement {
     if (!this._hasApi) {
       return html`<div class="page"><div class="card">This Bermuda build has no device-management API. Update Bermuda to fork-testing.15 or later to manage things from here.</div></div>`;
     }
-    return html`<div class="page">${this.section === "bermuda" ? this._renderBermuda() : this._renderThings()}</div>${this._renderWizard()}${this._renderFindMyWizard()}${this._renderAddWizard()}`;
+    return html`<div class="page">${this.section === "bermuda" ? this._renderBermuda() : this._renderThings()}</div>${this._renderWizard()}${this._renderFindMyWizard()}${this._renderAddWizard()}${this._renderIrkSwap()}`;
   }
 
   /** The carry height used for a thing without one of its own: the layout's thing_height, else 1 m. */
@@ -647,6 +695,7 @@ class SextantDevices extends LitElement {
               <td class="num">${offsets[slug] != null && offsets[slug] !== 0 ? `${offsets[slug] > 0 ? "+" : ""}${fmtNum(offsets[slug], 1)} dB` : html`<span class="muted">0</span>`}</td>
               <td class="actions">
                 <button class="iconbtn" title="Edit ${name}" @click=${() => this._openWizard(slug, address)}><ha-icon icon="mdi:pencil-outline"></ha-icon></button>
+                ${slug.startsWith("private_ble") ? html`<button class="iconbtn" title="Give ${name} a new key (IRK), keeping its entities and history" @click=${() => this._openIrkSwap(slug, name)}><ha-icon icon="mdi:key-change"></ha-icon></button>` : nothing}
                 <button class="iconbtn danger" title="Stop tracking ${name}" ?disabled=${this._busy} @click=${() => confirmDialog(`Stop tracking ${name}?`) && this._track([], [address])}><ha-icon icon="mdi:trash-can-outline"></ha-icon></button>
               </td>
             </tr>`;
