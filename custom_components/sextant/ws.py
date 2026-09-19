@@ -80,6 +80,13 @@ def _manifest_version() -> str | None:
         return None
 
 
+# The version this Home Assistant process loaded. HACS replaces the files on
+# disk but the running code (and the panel URL, which carries the version)
+# stays the old one until Home Assistant restarts; comparing the two tells the
+# panel whether a reload is enough or a restart is needed.
+RUNNING_VERSION = _manifest_version()
+
+
 def _thing_names(hass, entities, layout=None) -> dict:
     """{slug: display name} for the tracked entities.
 
@@ -164,9 +171,11 @@ async def ws_layout_get(hass, connection, msg):
         # Display names: what Bermuda calls the device, overridden by the name
         # the user gave the device in Home Assistant (device registry).
         "names": _safe(lambda: _thing_names(hass, tracked, layout), {}),
-        # The installed integration version: the panel compares it with the
-        # module it is running and offers a reload when they differ.
+        # The installed integration version, and the one Home Assistant is
+        # running: installed but not running needs a restart; running but
+        # newer than the page only needs a reload.
         "app_version": await hass.async_add_executor_job(_manifest_version),
+        "running_version": RUNNING_VERSION,
         "scanners": {
             addr: {"slug": info.get("slug"), "name": info.get("name"), "area": info.get("area_name"),
                    "is_remote": info.get("is_remote")}

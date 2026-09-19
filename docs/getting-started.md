@@ -66,6 +66,12 @@ Open **Sextant → Edit**. Start with the floor you spend the most time on.
 
 Spots (a bed, a sofa, a desk) can wait until things are being tracked;
 you will draw better spots once you have watched where things actually sit.
+When you do: a spot belongs to the room under its first corner and is
+trimmed to that room on Save; measure the furniture and use **Set size**
+rather than drawing it by eye; and if a proxy sits on the furniture itself
+(a nightstand, a desk), pick it as **Proxy on this spot** - a thing that
+proxy hears close by counts as on the spot however wide the position
+estimate is ([Edit](edit.md)).
 
 ## 3. Track something
 
@@ -101,9 +107,15 @@ in the wrong room:
   leave it for an hour. The proxies range each other at known distances
   and each gets a correction for how loudly it hears.
 - **Mark the truth.** Select the thing, **It's actually here…**, click
-  where it really is. Sextant re-solves the last few minutes under every
-  setting and offers the ones that would have put it there
+  where it really is. On a phone, tap the spot's name to zoom to it first,
+  or pinch. Sextant re-solves the last few minutes under every setting and
+  offers the ones that would have put it there, and the mark becomes a
+  reference for placing that thing there again
   ([Truth marks](live.md#truth-marks)).
+- **See where it has been.** **Where it's been** colours the plan by where
+  the selected thing spent the last hours - a quick check that the
+  couch it sat on all evening is where the colour is. History keeps 6 hours
+  unless **History kept (hours)** on Tuning says otherwise.
 
 ## 5. More floors
 
@@ -155,7 +167,8 @@ are in [Sensors, card, services and API](automation.md).
 
 | Symptom | Look at |
 |---|---|
-| A thing reads the floor above or below | Its floor odds under **Details** on Live. An open landing or double-height room is the usual cause; see [bias fields](positioning.md). |
+| A thing reads the floor above or below | Its floor odds under **Details** on Live. An open landing or double-height room is the usual cause. **Show floor bias** on Edit shows where each floor's prior leans; raising `floor_proximity_weight` (Tuning) trusts the nearest proxies more, and [bias fields](positioning.md) shape it place by place. |
+| A thing sits a metre off the table it is on | A proxy near it may carry a calibration stretch; see [close range](calibration.md#close-range). If the proxy is on the furniture, link it to the spot. |
 | A thing flips between two rooms | It is on the boundary. The room holds against small challenges by design; if it still flips, see [Tuning](tuning.md). A spot drawn over the boundary (a sofa against a wall) often fixes it. |
 | Nothing is placed at all | Fewer than three proxies hear it, or Bermuda is not tracking it. Check the proxy list on Live and the Things page. |
 | A proxy shows orange on Edit | Bermuda does not report it any more: renamed, offline, or its address changed. |

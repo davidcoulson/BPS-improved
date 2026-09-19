@@ -56,6 +56,9 @@ def test_layout_get_reports_layout_maps_and_tuning_spec(tmp_path):
     assert result["tuning_spec"]["zone_switch_secs"]["type"] == "float"
     assert result["tuning_spec"]["position_estimator"]["choices"] == ["geometric", "fingerprint", "fused"]
     assert result["entities"] == [] and result["features"] == []
+    # Installed (on disk) and running (loaded at start-up) are both reported,
+    # so the panel can tell "restart Home Assistant" from "reload the page".
+    assert result["running_version"] == ws.RUNNING_VERSION
 
 
 def test_layout_save_validates_then_persists(tmp_path):

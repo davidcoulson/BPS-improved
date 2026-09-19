@@ -172,10 +172,34 @@ class SextantPanel extends LitElement {
         <a class="repo" href=${REPO_URL} target="_blank" rel="noopener" title="Sextant on GitHub"><ha-icon icon="mdi:github"></ha-icon></a>
       </div>
       ${this._error ? html`<div class="banner error">${this._error} <button @click=${() => this._load()}>Retry</button></div>` : nothing}
-      ${this._data?.app_version && PANEL_VERSION && this._data.app_version !== PANEL_VERSION ? html`<div class="banner update">Sextant ${this._data.app_version} is installed; this page is still running ${PANEL_VERSION}. <button @click=${() => window.location.reload()}>Reload</button></div>` : nothing}
+      ${this._renderVersionBanner()}
       <div class="body">${this._renderMode()}</div>
       <div class="bottombar narrow-only">${this._renderFloorAndStamp(floors)}</div>
     `;
+  }
+
+  /**
+   * After an update: HACS swaps the files, but Home Assistant keeps running
+   * (and serving the panel of) the old version until it restarts, so a reload
+   * alone cannot help then. Only once it runs the new version does a reload
+   * fetch the new page.
+   */
+  _renderVersionBanner() {
+    const installed = this._data?.app_version, running = this._data?.running_version || installed;
+    if (!installed || !PANEL_VERSION) return nothing;
+    if (installed !== running) {
+      return html`<div class="banner update">Sextant ${installed} is installed; Home Assistant is still running ${running}. Restart Home Assistant to finish the update.
+        ${this.hass?.user?.is_admin ? html`<button @click=${() => this._restartHa()}>Restart</button>` : nothing}</div>`;
+    }
+    if (running !== PANEL_VERSION) {
+      return html`<div class="banner update">Sextant ${running} is running; this page is still ${PANEL_VERSION}. <button @click=${() => window.location.reload()}>Reload</button></div>`;
+    }
+    return nothing;
+  }
+
+  async _restartHa() {
+    if (!confirmDialog("Restart Home Assistant now? Everything is unavailable for a minute or two.")) return;
+    await this.hass.callService("homeassistant", "restart");
   }
 
   /** The floor picker (when the mode has floors) and the cycle-age stamp.
