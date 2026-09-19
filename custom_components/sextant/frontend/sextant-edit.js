@@ -494,7 +494,7 @@ class SextantEdit extends LitElement {
             : this._measure ? "Click the second point." : `Click two points a known distance apart. Current scale: ${fmtScale(f?.scale, this.hass)}`}
         </div>` : nothing}
         ${this._tool === "pin" ? html`<div class="hint">Click a point you can find on every floor: an outside corner, a stair post, a chimney. It lands on a room corner when one is near (Alt places it freely). Then switch floor and pin the same points - the names carry over in order.</div>` : nothing}
-        ${["zone", "subzone", "nogo"].includes(this._tool) ? html`<div class="hint">Click to add corners; click the first corner or double-click to close. An edge close to horizontal or vertical snaps straight (orange); hold Alt to place a corner freely. ${uiButton({ label: "Cancel", kind: "text", onClick: () => { this._map.cancelDraft(); } })}</div>` : nothing}
+        ${["zone", "subzone", "nogo"].includes(this._tool) ? html`<div class="hint">Click to add corners; click the first corner or double-click to close. An edge close to horizontal, vertical or 45° snaps exact (orange); hold Alt to place a corner freely. ${uiButton({ label: "Cancel", kind: "text", onClick: () => { this._map.cancelDraft(); } })}</div>` : nothing}
       </div>
       <aside class="side">
         ${f ? html`
@@ -599,7 +599,7 @@ class SextantEdit extends LitElement {
           <div class="classpick">${this._classPicker(item)}</div>
           <div class="muted small">A ringed group goes together: pick Person or Pet and its kinds count too, shown without the grey background.</div>
         </div>` : nothing}
-      <div class="row"><span class="muted small">${(item.cords?.length ?? 1)} point(s)</span><span class="grow"></span>${sel.kind === "zone" || sel.kind === "subzone" ? uiButton({ label: "Square up", icon: "mdi:vector-square", onClick: () => this._squareUp(), title: "Make every edge that is nearly straight exactly horizontal or vertical. Diagonals stay as drawn" }) : nothing}${uiButton({ label: "Delete", kind: "danger", onClick: () => this._deleteSelection() })}</div>
+      <div class="row"><span class="muted small">${(item.cords?.length ?? 1)} point(s)</span><span class="grow"></span>${sel.kind === "zone" || sel.kind === "subzone" ? uiButton({ label: "Square up", icon: "mdi:vector-square", onClick: () => this._squareUp(), title: "Make every edge that is nearly horizontal, vertical or 45° exactly that. Other angles stay as drawn" }) : nothing}${uiButton({ label: "Delete", kind: "danger", onClick: () => this._deleteSelection() })}</div>
     </div>`;
   }
 

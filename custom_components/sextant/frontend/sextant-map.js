@@ -221,46 +221,74 @@ async function resolveImageUrl(url, authFetch) {
   return objectUrl;
 }
 
-/** Within this many degrees of horizontal or vertical, an edge is snapped straight. */
+/** Within this many degrees of horizontal, vertical or 45°, an edge is snapped exact. */
 export const ORTHO_SNAP_DEG = 7;
 
-function nearAxis(dx, dy, tolDeg) {
-  // "v" when the edge is within tolDeg of vertical, "h" of horizontal, else null.
-  const len = Math.hypot(dx, dy);
-  if (len < 1e-9) return null;
-  const s = Math.sin((tolDeg * Math.PI) / 180);
-  if (Math.abs(dx) / len <= s) return "v";
-  if (Math.abs(dy) / len <= s) return "h";
+// Unit directions of the edges a plan is drawn with. Screen y points down,
+// so d1 (1, 1) runs down-right and d2 (1, -1) up-right.
+const R2 = Math.SQRT1_2;
+const DIRS = { h: [1, 0], v: [0, 1], d1: [R2, R2], d2: [R2, -R2] };
+
+function edgeClass(dx, dy, tolDeg) {
+  // "h", "v", "d1" or "d2" when the edge is within tolDeg of that direction, else null.
+  if (Math.hypot(dx, dy) < 1e-9) return null;
+  let a = (Math.atan2(dy, dx) * 180) / Math.PI;       // (-180, 180]
+  a = ((a % 180) + 180) % 180;                        // an edge has no direction: [0, 180)
+  for (const [target, cls] of [[0, "h"], [45, "d1"], [90, "v"], [135, "d2"], [180, "h"]]) {
+    if (Math.abs(a - target) <= tolDeg) return cls;
+  }
   return null;
+}
+
+function nearAxis(dx, dy, tolDeg) {
+  const c = edgeClass(dx, dy, tolDeg);
+  return c === "h" || c === "v" ? c : null;
+}
+
+/** The point on the line through `o` along unit `d` nearest to `p`. */
+function project(p, o, d) {
+  const s = (p.x - o.x) * d[0] + (p.y - o.y) * d[1];
+  return { x: o.x + s * d[0], y: o.y + s * d[1] };
+}
+
+/** Where two lines (point + unit direction) cross, or null when parallel. */
+function intersect(o1, d1, o2, d2) {
+  const den = d1[0] * d2[1] - d1[1] * d2[0];
+  if (Math.abs(den) < 1e-9) return null;
+  const s = ((o2.x - o1.x) * d2[1] - (o2.y - o1.y) * d2[0]) / den;
+  return { x: o1.x + s * d1[0], y: o1.y + s * d1[1] };
 }
 
 /**
  * Where a corner should land so its edges to `prev` and `next` come out
- * straight. An edge already within ORTHO_SNAP_DEG of vertical takes its
- * neighbour's x, one near horizontal its neighbour's y; a deliberate
- * diagonal is nowhere near the tolerance and is left exactly as drawn.
- * Either neighbour may be null (the first corner, or a draft with no
- * closing corner yet). Returns the point, and which axes snapped.
+ * exact. An edge within ORTHO_SNAP_DEG of horizontal, vertical or 45° is
+ * made exactly that; with both edges constrained the corner lands where the
+ * two lines cross. Anything further off - a wall at 30° - is left exactly as
+ * drawn. Either neighbour may be null (the first corner, or a draft with no
+ * closing corner yet).
  */
 export function snapCorner(p, prev, next, tolDeg = ORTHO_SNAP_DEG) {
-  let x = p.x, y = p.y, sx = false, sy = false;
+  const lines = [];
   for (const n of [prev, next]) {
     if (!n) continue;
-    const axis = nearAxis(p.x - n.x, p.y - n.y, tolDeg);
-    if (axis === "v" && !sx) { x = n.x; sx = true; }
-    if (axis === "h" && !sy) { y = n.y; sy = true; }
+    const cls = edgeClass(p.x - n.x, p.y - n.y, tolDeg);
+    if (cls) lines.push({ o: n, d: DIRS[cls] });
   }
-  return { x, y, snapped: sx || sy };
+  if (!lines.length) return { x: p.x, y: p.y, snapped: false };
+  const at = (lines.length === 2 && intersect(lines[0].o, lines[0].d, lines[1].o, lines[1].d)) || project(p, lines[0].o, lines[0].d);
+  return { x: at.x, y: at.y, snapped: true };
 }
 
 /**
- * The same polygon with every near-straight edge made exactly straight.
+ * The same polygon with every nearly-straight edge made exact.
  *
- * Corners joined by a near-vertical edge share one x (their mean), corners
- * joined by a near-horizontal edge one y - taken across whole runs, so two
- * collinear edges in a row end up on one line rather than a step. Edges
- * that are really diagonal are left alone. Corners move by at most about
- * half the tolerance times the edge length.
+ * First the horizontal and vertical runs: corners joined by a near-vertical
+ * edge share one x (their mean), by a near-horizontal edge one y - across
+ * whole runs, so two collinear edges in a row line up rather than stepping.
+ * Then the 45° edges: each becomes an exact diagonal through its own
+ * midpoint, and its corners move to where it crosses the edge on their
+ * other side, which keeps an edge squared in the first pass exactly square.
+ * Edges that fit none of the four directions are left alone.
  */
 export function squareUp(points, tolDeg = ORTHO_SNAP_DEG + 3) {
   const n = points.length;
@@ -280,10 +308,24 @@ export function squareUp(points, tolDeg = ORTHO_SNAP_DEG + 3) {
     return (i) => { const s = sums.get(find(i)); return s.c > 1 ? s.v / s.c : null; };
   };
   const vx = groups("v"), hy = groups("h");
-  return points.map((q, i) => {
-    const x = vx(i), y = hy(i);
-    return { ...q, x: Math.round((x ?? q.x) * 1000) / 1000, y: Math.round((y ?? q.y) * 1000) / 1000 };
+  const pts = points.map((q, i) => ({ ...q, x: vx(i) ?? q.x, y: hy(i) ?? q.y }));
+
+  // The line each edge lies on, exact where it has a class.
+  const line = (i) => {
+    const a = pts[i], b = pts[(i + 1) % n];
+    const cls = edgeClass(b.x - a.x, b.y - a.y, tolDeg);
+    if (cls === "d1" || cls === "d2") return { o: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, d: DIRS[cls], diag: true };
+    const len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+    return { o: a, d: [(b.x - a.x) / len, (b.y - a.y) / len], diag: false };
+  };
+  const lines = pts.map((_q, i) => line(i));
+  const out = pts.map((q, i) => {
+    const before = lines[(i - 1 + n) % n], after = lines[i];   // the two edges meeting at corner i
+    if (!before.diag && !after.diag) return q;
+    const hit = intersect(before.o, before.d, after.o, after.d);
+    return hit || project(q, (before.diag ? before : after).o, (before.diag ? before : after).d);
   });
+  return out.map((q) => ({ ...q, x: Math.round(q.x * 1000) / 1000, y: Math.round(q.y * 1000) / 1000 }));
 }
 
 /** Seconds as the shortest honest phrase: "45s", "3m", "2h", "1d". */

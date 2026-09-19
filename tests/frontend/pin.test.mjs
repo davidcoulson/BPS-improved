@@ -49,7 +49,7 @@ test("a corner near a straight edge snaps onto it; a real diagonal does not", ()
   const prev = { x: 0, y: 0 };
   assert.deepEqual(snapCorner({ x: 5, y: 100 }, prev, null), { x: 0, y: 100, snapped: true });     // ~3 deg off vertical
   assert.deepEqual(snapCorner({ x: 100, y: -6 }, prev, null), { x: 100, y: 0, snapped: true });    // ~3 deg off horizontal
-  const diag = snapCorner({ x: 100, y: 60 }, prev, null);                                            // 31 deg: deliberate
+  const diag = snapCorner({ x: 100, y: 60 }, prev, null);                                            // 31 deg: between the snaps
   assert.equal(diag.snapped, false);
   assert.deepEqual([diag.x, diag.y], [100, 60]);
   assert.ok(ORTHO_SNAP_DEG >= 5 && ORTHO_SNAP_DEG <= 10);
@@ -79,6 +79,30 @@ test("squareUp keeps a diagonal wall and lines up collinear runs", () => {
   const sq = squareUp(shape);
   assert.equal(sq[0].y, sq[1].y); assert.equal(sq[1].y, sq[2].y);   // one straight top edge, not a step
   assert.equal(sq[0].x, sq[4].x);                                     // left side straight
-  assert.deepEqual([sq[3].x, sq[3].y], [300, 200]);                   // the diagonal's far end untouched
+  assert.deepEqual([sq[3].x, sq[3].y], [300, 200]);                   // a 63 deg wall's far end untouched
   assert.deepEqual(squareUp([{ x: 0, y: 0 }, { x: 1, y: 1 }]), [{ x: 0, y: 0 }, { x: 1, y: 1 }]);
+});
+
+
+test("45 degree edges snap too, and a corner between two constrained edges lands on the crossing", () => {
+  const near45 = snapCorner({ x: 100, y: 104 }, { x: 0, y: 0 }, null);               // ~46 deg
+  assert.equal(near45.snapped, true);
+  assert.ok(Math.abs(near45.x - near45.y) < 1e-9, `not on the diagonal: ${JSON.stringify(near45)}`);
+  const up = snapCorner({ x: 100, y: -97 }, { x: 0, y: 0 }, null);                   // ~44 deg the other way
+  assert.ok(Math.abs(up.x + up.y) < 1e-9, `not on the other diagonal: ${JSON.stringify(up)}`);
+  // A cut corner: vertical edge up from (200, 0), 45 degree edge from (150, 250).
+  const cut = snapCorner({ x: 203, y: 198 }, { x: 200, y: 0 }, { x: 150, y: 250 });
+  assert.ok(Math.abs(cut.x - 200) < 1e-9 && Math.abs(cut.y - 200) < 1e-9, JSON.stringify(cut));
+  const free = snapCorner({ x: 100, y: 58 }, { x: 0, y: 0 }, null);                 // 30 deg: nowhere near
+  assert.equal(free.snapped, false);
+});
+
+test("squareUp makes a chamfered corner an exact 45 and keeps the square edges square", () => {
+  const bay = [{ x: 0, y: 0 }, { x: 300, y: 2 }, { x: 301, y: 200 }, { x: 250, y: 248 }, { x: 1, y: 251 }];
+  const sq = squareUp(bay);
+  const dir = (a, b) => Math.round((Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI);
+  const headings = sq.map((q, i) => dir(q, sq[(i + 1) % sq.length]));
+  assert.deepEqual(headings, [0, 90, 135, 180, -90]);
+  const worst = Math.max(...sq.map((q, i) => Math.hypot(q.x - bay[i].x, q.y - bay[i].y)));
+  assert.ok(worst < 6, `a corner moved ${worst} px`);
 });
