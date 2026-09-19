@@ -375,10 +375,10 @@ class SextantLive extends LitElement {
     this._selected = ent;
     if (ent) {
       this._mapOpen = true; // a phone: the map opens under this thing's details
-      // On a phone the list (13+ rows) is taller than the space it is given
-      // and scrolls on its own; without this the detail card lands below
-      // the fold of that scroller and the tap looks like it did nothing.
-      this.updateComplete.then(() => this.renderRoot.querySelector(".card.detail")?.scrollIntoView({ block: "start", behavior: "smooth" }));
+      // The quick actions open inside the selected row, so keep that row in
+      // view - no further: tapping a visible row moves nothing, picking a
+      // thing on the map brings its row into the list's view.
+      this.updateComplete.then(() => this.renderRoot.querySelector(".list li.selected")?.scrollIntoView({ block: "nearest", behavior: "smooth" }));
     }
     this._map?.setOptions({ focus: ent });
     if (ent) { this._loadLinks(); this._loadMarks(ent); this._loadTimeline(ent); if (this._heatHours) this._loadHeat(ent, this._heatHours); } else { this._links = null; this._marks = []; this._map?.setMarks([]); this._timeline = null; }
