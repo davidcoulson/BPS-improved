@@ -13,7 +13,7 @@
  */
 import { LitElement, html, css, nothing } from "./lit.js";
 import { SextantMap, thingColor, thingHue, staleness, shortAge, heatCells } from "./sextant-map.js";
-import { sharedStyles, widgetStyles, fmtAge, fmtNum, toast, confirmDialog, ensureHaComponents, uiSwitch, uiSelect, uiButton, callWS, sortFloors, thingName, proxyName, fmtLen, fmtSpeed, classIcon } from "./sextant-ui.js";
+import { sharedStyles, widgetStyles, fmtAge, fmtNum, toast, confirmDialog, ensureHaComponents, uiSwitch, uiSelect, uiButton, callWS, sortFloors, thingName, proxyName, fmtLen, fmtSpeed, classIcon, pronounsFor } from "./sextant-ui.js";
 
 // The backend registers the panel at /sextant/v/<version>/sextant-panel.js
 // (older releases used ?v=<version>), so a page loaded before an update carries
@@ -412,14 +412,14 @@ class SextantLive extends LitElement {
    * been, scrub its history, edit it.
    */
   _renderQuick(sel) {
-    const ent = sel.ent, h = this._history;
+    const ent = sel.ent, h = this._history, name = this._label(ent), pn = this._pn(ent);
     const heatOn = this._heat?.ent === ent && this._heatHours > 0;
     const btn = (icon, label, title, on, onClick) => html`<button class="qa ${on ? "on" : ""}" title=${title} aria-label=${title} aria-pressed=${on} @click=${onClick}>
       <ha-icon icon=${icon}></ha-icon><span>${label}</span></button>`;
     return html`<div class="quick">
-      ${btn("mdi:map-marker-check", "It's here", "It's actually here: tap where it really is", this._marking, () => { this._marking = !this._marking; })}
-      ${btn("mdi:fire", "Activity", "Activity: where it has spent its time", heatOn, () => this._loadHeat(ent, heatOn ? 0 : (this._lastHeatHours || 6)))}
-      ${btn("mdi:history", "History", "Scrub its history", h?.ent === ent, () => this._loadHistory(h?.ent === ent ? null : ent))}
+      ${btn("mdi:map-marker-check", "Here", `Tap where ${name} really is`, this._marking, () => { this._marking = !this._marking; })}
+      ${btn("mdi:fire", "Activity", `Where ${name} ${pn.has} spent ${pn.poss} time`, heatOn, () => this._loadHeat(ent, heatOn ? 0 : (this._lastHeatHours || 6)))}
+      ${btn("mdi:history", "History", `Scrub ${name}'s history`, h?.ent === ent, () => this._loadHistory(h?.ent === ent ? null : ent))}
       ${this._isAdmin() ? btn("mdi:pencil-outline", "Edit", "Edit this thing", false, () => this._goto({ mode: "things", thing: ent })) : nothing}
     </div>
     ${this._marking ? this._renderMarkingPrompt(ent) : nothing}`;
@@ -578,6 +578,9 @@ class SextantLive extends LitElement {
 
   _label(ent) { return thingName(this.data, ent); }
 
+  /** He, she, they or it for a thing (its setting, else its class; people and pets are never "it"). */
+  _pn(ent) { return pronounsFor(this.data?.layout, ent); }
+
   /** The same disc the map draws: the thing's hue, with its custom icon, its class icon, or initials. */
   _avatar(ent) {
     const color = thingColor(ent, this.data?.layout?.thing_colors?.[ent]);
@@ -680,7 +683,7 @@ class SextantLive extends LitElement {
         </h3>
         <ul class="list">
           ${rows.map((p) => { const st = staleness(p, this._staleAfter()); return html`
-            <li class="${p.ent === this._selected ? "selected" : ""} ${st.ghost ? "ghost" : ""}" title=${st.ghost ? `Not heard for ${fmtAge(st.age)}: this is where it was last placed` : ""} @click=${() => { this._select(p.ent === this._selected ? null : p.ent); if (p.floor && p.floor !== this.floor) this.dispatchEvent(new CustomEvent("floor-changed", { detail: p.floor })); }}>
+            <li class="${p.ent === this._selected ? "selected" : ""} ${st.ghost ? "ghost" : ""}" title=${st.ghost ? `Not heard for ${fmtAge(st.age)}: this is where ${this._label(p.ent)} ${this._pn(p.ent).was} last placed` : ""} @click=${() => { this._select(p.ent === this._selected ? null : p.ent); if (p.floor && p.floor !== this.floor) this.dispatchEvent(new CustomEvent("floor-changed", { detail: p.floor })); }}>
               ${this._avatar(p.ent)}
               <span class="name">${this._label(p.ent)}</span>
               <span class="where">${p.zone}${p.sub_zone && p.sub_zone !== "unknown" ? ` · ${p.sub_zone}` : ""}</span>
@@ -696,13 +699,13 @@ class SextantLive extends LitElement {
               <dt>Room</dt><dd>${sel.zone} ${sel.zone_locked ? html`<ha-icon icon="mdi:lock" title="stationary lock: still for a while, so the room holds"></ha-icon>` : nothing}</dd>
               <dt>Spot</dt><dd>${sel.sub_zone && sel.sub_zone !== "unknown" ? sel.sub_zone : "—"}</dd>
               <dt>Floor</dt><dd>${sel.floor}</dd>
-              <dt>Proxies</dt><dd>${sel.radii?.length ?? 0} in the solve${sel.anchor ? html`<br><span class="pill ok" title="one proxy reads it within arm's reach and no other comes close: placed on that proxy">anchored to ${proxyName(this.data, sel.anchor)}</span>` : nothing}</dd>
+              <dt>Proxies</dt><dd>${sel.radii?.length ?? 0} in the solve${sel.anchor ? html`<br><span class="pill ok" title=${`one proxy reads ${this._label(sel.ent)} within arm's reach and no other comes close: placed on that proxy`}>anchored to ${proxyName(this.data, sel.anchor)}</span>` : nothing}</dd>
               ${this._renderHere(sel)}
-              <dt>Updated</dt><dd>${fmtAge(Date.now() / 1000 - sel.updated)} ago${staleness(sel, this._staleAfter()).ghost ? html` <span class="pill warn" title="Nothing has heard it since; the position is where it was last placed">not heard</span>` : nothing}</dd>
+              <dt>Updated</dt><dd>${fmtAge(Date.now() / 1000 - sel.updated)} ago${staleness(sel, this._staleAfter()).ghost ? html` <span class="pill warn" title=${`Nothing has heard ${this._label(sel.ent)} since; this is where ${this._pn(sel.ent).subj} ${this._pn(sel.ent).was} last placed`}>not heard</span>` : nothing}</dd>
             </dl>
             ${this._renderTimeline(sel)}
             <details class="telemetry">
-              <summary>Details <span class="muted small">how sure it is, and why</span></summary>
+              <summary>Details <span class="muted small">how sure Sextant is, and why</span></summary>
               <dl>
                 <dt>Floor odds</dt><dd>${sel.floors ? Object.entries(sel.floors).sort((a, b) => b[1] - a[1]).map(([f, p]) => `${f} ${(p * 100).toFixed(0)}%`).join(" · ") : "—"}</dd>
                 <dt>Spot shares</dt><dd>${sel.sub_zones ? Object.entries(sel.sub_zones).sort((a, b) => b[1] - a[1]).map(([s, p]) => `${s === "unknown" ? "none" : s} ${(p * 100).toFixed(0)}%`).join(" · ") : "—"}</dd>
@@ -772,7 +775,7 @@ class SextantLive extends LitElement {
     return html`
       <details class="timeline" open>
         <summary>Timeline <span class="muted small">last ${fmtAge(span)}${stays[0].partial ? " (all that is kept)" : ""}</span></summary>
-        <div class="band" role="img" aria-label="Where it has been, oldest on the left">
+        <div class="band" role="img" aria-label=${`Where ${this._label(sel.ent)} has been, oldest on the left`}>
           ${stays.map((s) => html`<span class="seg ${s.unheard ? "unheard" : ""}" style="flex-grow: ${Math.max(0.002, (s.end - s.start) / span)}; background: ${colour(s)}" title="${at(s.start)}–${at(s.end)} · ${place(s)} · ${fmtAge(s.end - s.start)}"></span>`)}
         </div>
         <div class="band-ends muted small"><span>${at(from)}</span><span>${to >= now - 5 ? "now" : at(to)}</span></div>
@@ -810,7 +813,7 @@ class SextantLive extends LitElement {
     const rows = (t?.rows || []).slice(0, 6);
     return html`<div class="truth">
       ${this._marking ? nothing
-        : html`<div class="row">${uiButton({ label: "It's actually here…", icon: "mdi:map-marker-check", onClick: () => { this._marking = true; }, title: "Tell Sextant where this thing really is; it re-solves the last few minutes under every setting and shows which fits best" })}
+        : html`<div class="row">${uiButton({ label: `${this._label(ent)} is actually here…`, icon: "mdi:map-marker-check", onClick: () => { this._marking = true; }, title: `Tell Sextant where ${this._label(ent)} really is; Sextant re-solves the last few minutes under every setting and shows which fits best` })}
             ${this._marks.length ? html`<span class="muted small">${this._marks.length} mark${this._marks.length === 1 ? "" : "s"}</span>` : nothing}</div>`}
       ${t ? html`<div class="card inner">
         <h4>Mark ${t.mark.id} <span class="muted small">${t.mark.samples} cycles re-solved · now ${Math.round((t.current_weight ?? 0) * 100)}% fingerprint</span></h4>
@@ -818,7 +821,7 @@ class SextantLive extends LitElement {
           ${rows.map((r) => html`<tr><td>${r.estimator}${r.estimator === "fused" ? ` ${Math.round(r.weight * 100)}%` : ""}</td><td class="num">×${fmtNum(r.gain, 1)}</td><td class="num">${fmtLen(r.mean_m, this.hass)}</td><td class="num">${Math.round(r.room_ok * 100)}%</td>
             <td>${uiButton({ label: "Apply", kind: "text", onClick: () => this._applyRow(ent, r) })}</td></tr>`)}
         </table>
-        <p class="muted small">Error is the mean distance from the mark; Room is how often the fix landed in the mark's room. One mark can overfit: mark it in another room too.</p>` : html`<p class="muted small">Nothing could be re-solved for this mark.</p>`}
+        <p class="muted small">Error is the mean distance from the mark; Room is how often the fix landed in the mark's room. One mark can overfit: mark ${this._pn(ent).obj} in another room too.</p>` : html`<p class="muted small">Nothing could be re-solved for this mark.</p>`}
         <div class="row">${uiButton({ label: "Close", kind: "text", onClick: () => { this._truth = null; } })}${uiButton({ label: "Forget mark", kind: "text", onClick: () => this._deleteMark(t.mark.id) })}</div>
       </div>` : nothing}
       ${!t && this._marks.length ? html`<details class="marks"><summary>Marks</summary><ul class="plain">${this._marks.map((m) => html`<li>mark ${m.id} · ${m.floor} · ${m.samples} cycles · ${new Date(m.t * 1000).toLocaleString()} ${uiButton({ label: "Forget", kind: "text", onClick: () => this._deleteMark(m.id) })}</li>`)}</ul></details>` : nothing}

@@ -307,6 +307,9 @@ async def ws_tuning_set(hass, connection, msg):
     vol.Optional("icon"): vol.Any(None, str),
     vol.Optional("name"): vol.Any(None, str),
     vol.Optional("thing_class"): vol.Any(None, str),
+    # How the panel refers to the thing: he, she, they or it. None or "" falls
+    # back to its class (a man is he, a phone is it, a pet or person they).
+    vol.Optional("pronouns"): vol.Any(None, "", "he", "she", "they", "it"),
     vol.Optional("estimator"): vol.Any(None, "", "geometric", "fingerprint", "fused"),
     vol.Optional("fp_weight"): vol.Any(None, vol.Coerce(float)),
     vol.Optional("color"): vol.Any(None, str),
@@ -401,7 +404,7 @@ async def ws_thing_tune(hass, connection, msg):
                 estimators.pop(entity, None)
             data["thing_estimators"] = estimators
             changes["estimator"] = msg["estimator"] or None
-        for key, store in (("name", "thing_names"), ("thing_class", "thing_classes")):
+        for key, store in (("name", "thing_names"), ("thing_class", "thing_classes"), ("pronouns", "thing_pronouns")):
             if key in msg:
                 values = data.get(store)
                 if not isinstance(values, dict):
