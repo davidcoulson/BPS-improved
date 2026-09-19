@@ -897,7 +897,8 @@ class SextantLive extends LitElement {
     .heat { align-items: center; gap: 8px; flex-wrap: wrap; }
     .list li .quickin { grid-column: 1 / -1; cursor: default; padding-top: 6px; }
     .quick { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 6px; margin: 2px 0 4px; }
-    .quick .qa { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; padding: 6px 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border: 1px solid var(--divider-color, #ddd); border-radius: 10px; background: transparent; color: var(--primary-text-color); font: inherit; font-size: 11px; cursor: pointer; }
+    .quick .qa { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; padding: 6px 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border: 1px solid var(--divider-color, #ddd); border-radius: 10px; background: var(--ha-card-background, var(--card-background-color, #fff)); color: var(--primary-text-color); font: inherit; font-size: 11px; cursor: pointer; }
+    .quick .qa:hover { filter: brightness(0.97); }
     .quick .qa ha-icon { --mdc-icon-size: 22px; }
     .quick .qa.on { background: var(--primary-color, #03a9f4); border-color: var(--primary-color, #03a9f4); color: var(--text-primary-color, #fff); }
     .quick .qa:focus-visible { outline: 2px solid var(--primary-color, #03a9f4); outline-offset: 2px; }
