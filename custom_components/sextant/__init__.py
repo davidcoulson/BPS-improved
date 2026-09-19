@@ -2845,6 +2845,7 @@ def _update_person_sensors(hass):
     sensor_mod.ensure_person_sensors(hass, list(by_person))
     rows = {r.get("ent"): r for r in (hass.data.get(DOMAIN, {}).get("apitricords") or []) if isinstance(r, dict)}
     classes = layout.get("thing_classes") or {}
+    chargers = layout.get("thing_charging_entity") or {}
     now, stale = time.time(), _tuning(layout, "stale_after_secs")
     for person, things in by_person.items():
         candidates = []
@@ -2857,6 +2858,8 @@ def _update_person_sensors(hass):
                 "arrived": _arrived_at(hass, layout, ent, row, now),
                 "zone": row.get("zone"), "sub_zone": row.get("sub_zone"), "floor": row.get("floor"),
                 "area": room_area(layout, row.get("floor"), row.get("zone")),
+                "on_charger": bool(chargers.get(ent)) and persons_mod.on_charger(
+                    getattr(hass.states.get(chargers[ent]), "state", None)),
             })
         slug = person.split(".", 1)[1]
         why = persons_mod.considered(candidates, now)
