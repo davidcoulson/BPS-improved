@@ -122,3 +122,21 @@ def test_a_field_laid_before_cell_px_was_recorded_still_reads():
     legacy = {"name": "F", "scale": 100.0, "bias_field": {"cell_m": 1.0, "x0": 0, "y0": 0, "values": [[1.0, 2.0]]}}
     assert ff.sample(legacy, (150, 50)) == 2.0
     assert ff.flat((0, 0, 300, 200), 100.0, cell_m=0.5)["cell_px"] == 50.0
+
+
+def test_floor_bias_map_compares_this_floors_prior_with_anothers_place_by_place():
+    import sextant
+    from sextant import floor_field as ff
+    room = {"zone_id": "r", "entity_id": "Room", "cords": [{"x": 0, "y": 0}, {"x": 400, "y": 0}, {"x": 400, "y": 200}, {"x": 0, "y": 200}]}
+    up = {"name": "Up", "scale": 100.0, "zones": [room], "receivers": []}
+    down = {"name": "Down", "scale": 100.0, "bias": 1.25, "zones": [dict(room)], "receivers": []}
+    up["bias_field"] = ff.flat((0, 0, 400, 200), 100.0, cell_m=1.0)
+    ff.paint(up, [(0, 0), (200, 0), (200, 200), (0, 200)], 2.5)   # the left half of Up is favoured
+    layout = {"floor": [up, down]}
+    out = sextant.floor_bias_map(layout, {}, "Up", "Down", cell_m=0.5)
+    assert out["registered"] is False and len(out["cells"]) == 8 * 4
+    right = [c for c in out["cells"] if c[0] > 350]
+    left = [c for c in out["cells"] if c[0] < 50]
+    assert all(abs(c[2] - 1 / 1.25) < 1e-6 for c in right)    # scalar only: Down leans
+    assert all(abs(c[2] - 2.5 / 1.25) < 1e-6 for c in left)   # the painted half leans to Up
+    assert sextant.floor_bias_map(layout, {}, "Up", "Nowhere") is None

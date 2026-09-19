@@ -2842,6 +2842,51 @@ def _floor_bias(layout, floor_name, fix=None):
     return 1.0
 
 
+def floor_bias_map(layout, frames, floor_name, other_name, cell_m=0.5):
+    """How much this floor's election prior favours it over another floor, place by place.
+
+    For a grid of points inside this floor's rooms: this floor's bias (scalar
+    x field) there, divided by the other floor's bias at the same place in
+    the house - mapped through the floors' registration when both are
+    registered, by metres from the plan origin otherwise. Above 1, a thing
+    here leans to this floor; below 1, to the other. Returns
+    ``{cell_px, registered, cells: [[x, y, ratio]], min, max}`` in this floor's pixels.
+    """
+    floors = {f.get("name"): f for f in (layout or {}).get("floor") or [] if isinstance(f, dict)}
+    mine, other = floors.get(floor_name), floors.get(other_name)
+    if mine is None or other is None or not mine.get("scale") or not other.get("scale"):
+        return None
+    scale_a, scale_b = float(mine["scale"]), float(other["scale"])
+    rooms = [Polygon([(c["x"], c["y"]) for c in z.get("cords") or []])
+             for z in mine.get("zones") or [] if len(z.get("cords") or []) >= 3 and not z.get("no_go")]
+    rooms = [r if r.is_valid else r.buffer(0) for r in rooms]
+    if not rooms:
+        return None
+    x0 = min(r.bounds[0] for r in rooms); y0 = min(r.bounds[1] for r in rooms)
+    x1 = max(r.bounds[2] for r in rooms); y1 = max(r.bounds[3] for r in rooms)
+    step = cell_m * scale_a
+    fa, fb = frames.get(floor_name), frames.get(other_name)
+    registered = bool(fa and fa.get("ok") and fb and fb.get("ok"))
+    cells = []
+    y = y0 + step / 2
+    while y < y1:
+        x = x0 + step / 2
+        while x < x1:
+            if any(r.covers(Point(x, y)) for r in rooms):
+                if registered:
+                    hx, hy = registration.to_house(fa, x, y)
+                    there = registration.from_house(fb, hx, hy)
+                else:
+                    there = (x / scale_a * scale_b, y / scale_a * scale_b)
+                a = _floor_bias(layout, floor_name, (x, y))
+                b = _floor_bias(layout, other_name, there)
+                cells.append([round(x, 1), round(y, 1), round(a / b, 4) if b > 0 else 1.0])
+            x += step
+        y += step
+    ratios = [c[2] for c in cells] or [1.0]
+    return {"cell_px": step, "registered": registered, "cells": cells, "min": min(ratios), "max": max(ratios)}
+
+
 def _proximity_weighted_scores(scores, nearest_by_floor, weight):
     """Scale each solved floor's confidence by receiver proximity.
 

@@ -33,7 +33,13 @@ Pinch to zoom on a phone or tablet. Set the scale
 by measuring a known distance. Give a floor a *level* (0 ground, -1
 basement, 1 above) for ordering and an election *bias* (1.15 gives the
 ground floor a standing head start; where one number for the whole floor
-is too blunt, see [bias fields](positioning.md)). Padlocks lock rooms, spots and
+is too blunt, see [bias fields](positioning.md)). **Show floor bias**
+under the floor's settings colours the plan by where its election prior
+leans against a neighbouring floor's, at the same place in the house: grey
+where the two are even, green where a thing leans to the other floor, red
+where it leans to this one. The Basement and the Second Floor are compared
+with the floor nearest in level; a floor between two picks either. It
+shows the saved layout. Padlocks lock rooms, spots and
 proxies against selection so you cannot drag a wall while placing a proxy;
 rooms start locked. A spot belongs to one room: the room under its first
 corner (or under its middle, if that corner is outside every room). Save

@@ -647,6 +647,23 @@ async def ws_history_timeline(hass, connection, msg):
     connection.send_result(msg["id"], data)
 
 
+@websocket_api.websocket_command({
+    vol.Required("type"): "sextant/floor_bias_map",
+    vol.Required("floor"): str,
+    vol.Required("other"): str,
+})
+@websocket_api.async_response
+async def ws_floor_bias_map(hass, connection, msg):
+    """This floor's election prior against another's, per half-metre cell (see floor_bias_map)."""
+    core = _core()
+    layout = get_layout(hass)
+    frames = core._floor_frames(hass, layout)
+    result = await hass.async_add_executor_job(core.floor_bias_map, layout, frames, msg["floor"], msg["other"])
+    if result is None:
+        return _error(connection, msg, "both floors need a scale and this one needs rooms")
+    connection.send_result(msg["id"], result)
+
+
 @websocket_api.websocket_command({vol.Required("type"): "sextant/thing/readings", vol.Required("entity"): str})
 @websocket_api.async_response
 async def ws_thing_readings(hass, connection, msg):
@@ -1298,7 +1315,7 @@ async def ws_advice(hass, connection, msg):
 COMMANDS = (
     ws_advice,
     ws_layout_get, ws_layout_save, ws_tuning_set, ws_thing_tune,
-    ws_history_index, ws_history_get, ws_history_timeline, ws_history_clear, ws_thing_readings,
+    ws_history_index, ws_history_get, ws_history_timeline, ws_history_clear, ws_thing_readings, ws_floor_bias_map,
     ws_calibration_status, ws_calibration_action, ws_selftest, ws_scanner_linking, ws_receivers, ws_beacon_links,
     ws_adjust_zones, ws_registration, ws_scanner_ignore, ws_kpi, ws_kpi_baselines, ws_kpi_baseline_save, ws_kpi_baseline_delete,
     ws_truth_mark, ws_truth_list, ws_truth_delete, ws_truth_evaluate, ws_truth_apply,

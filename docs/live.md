@@ -82,7 +82,8 @@ probe nearby get a reference too (`fingerprint_marks` turns that off).
 
 With a thing selected, **Where it's been** colours the plan by how long
 it spent in each half-metre square over the last hour, 6 hours, day or
-week: blue for passing through, red for the longest stay. The note beside
+week, blended into a smooth wash: blue for passing through, red for the
+longest stay. The note beside
 it gives the time on this floor, the longest stay in one square, and the
 time on other floors. A reading holds until the next one for at most five
 minutes, and a dropout counts for one minute, so a thing that went quiet

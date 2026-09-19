@@ -48,6 +48,7 @@ class SextantEdit extends LitElement {
     _placing: { state: true },
     _measure: { state: true },
     _proposal: { state: true },
+    _biasView: { state: true },
     _busy: { state: true },
     _locks: { state: true },
     _undo: { state: true },
@@ -117,6 +118,7 @@ class SextantEdit extends LitElement {
     if (!this._map) return;
     if (changed.has("data")) this._syncDraft(!this._dirty);
     if (changed.has("floor")) this._pushFloor();
+    if (changed.has("floor") || changed.has("data")) this._loadBiasView();
     if (changed.has("spots") || changed.has("floor")) this._map.setSuggestions((this.spots || []).filter((s) => s.floor === this.floor).map((s) => ({ x: s.x, y: s.y, label: `add a proxy here · ${s.room}` })));
     if (changed.has("_tool")) { this._map.setTool(["measure", "receiver", "pin"].includes(this._tool) ? "select" : this._tool); }
   }
@@ -360,6 +362,42 @@ class SextantEdit extends LitElement {
     toast(this, m != null ? `Squared up; no corner moved more than ${Math.round(m * 100)} cm. Save to keep it` : "Squared up. Save to keep it");
   }
 
+  /** The floors this floor can be compared with, nearest level first (Basement and Second Floor both want Ground). */
+  _biasPartners(f) {
+    const lvl = (x) => (typeof x.level === "number" ? x.level : 0);
+    return (this._draft?.floor || []).filter((o) => o.name !== f.name)
+      .sort((a, b) => Math.abs(lvl(a) - lvl(f)) - Math.abs(lvl(b) - lvl(f)) || lvl(b) - lvl(a));
+  }
+
+  async _loadBiasView() {
+    const f = this._floorObj(), v = this._biasView;
+    if (!v?.on || !f) { this._map?.setBiasMap(null); return; }
+    const partners = this._biasPartners(f);
+    const other = partners.some((o) => o.name === v.other) ? v.other : partners[0]?.name;
+    if (!other) { this._map?.setBiasMap(null); return; }
+    const r = await this.hass.callWS({ type: "sextant/floor_bias_map", floor: f.name, other }).catch((e) => { toast(this, `bias map: ${e?.message || e}`); return null; });
+    if (!this._biasView?.on || this._floorObj()?.name !== f.name) return;
+    this._biasView = { ...this._biasView, other, result: r };
+    this._map?.setBiasMap(r ? { size: r.cell_px, cells: r.cells } : null);
+  }
+
+  /** Where this floor's election prior leans against a neighbour's: saved values, so Save before looking. */
+  _renderBiasView(f) {
+    const v = this._biasView || {};
+    const partners = this._biasPartners(f);
+    if (!partners.length) return nothing;
+    const r = v.on ? v.result : null;
+    const pct = (x) => `${x >= 1 ? "+" : "−"}${Math.round(Math.abs(x - 1) * 100)}%`;
+    return html`<div class="card">
+      <div class="row" style="align-items: center; gap: 8px; flex-wrap: wrap">
+        ${uiSwitch({ label: "Show floor bias", checked: !!v.on, onChange: (on) => { this._biasView = { ...v, on }; this._loadBiasView(); } })}
+        ${v.on && partners.length > 1 ? uiSelect({ label: "Against", value: v.other || partners[0].name, options: partners.map((o) => ({ value: o.name, label: o.name })), onChange: (other) => { this._biasView = { ...this._biasView, other }; this._loadBiasView(); }, style: "width: 170px" }) : nothing}
+        ${v.on && partners.length === 1 ? html`<span class="muted small">against ${partners[0].name}</span>` : nothing}
+      </div>
+      ${r ? html`<div class="muted small">Grey: ${f.name} and ${v.other} even. <span style="color:#1eaa46">Green</span>: a thing here leans to ${v.other}; <span style="color:#d72828">red</span>: to ${f.name}. Here it runs from ${pct(r.min)} to ${pct(r.max)}.${r.registered ? "" : " The floors are not lined up with pins, so places are matched by distance from each plan's corner."} Shows the saved layout.</div>` : nothing}
+    </div>`;
+  }
+
   /** Spot size in the unit a tape measure reads: inches when imperial, cm otherwise. */
   _sizeUnit() { return isImperial(this.hass) ? { name: "in", perM: 39.3701 } : { name: "cm", perM: 100 }; }
 
@@ -584,6 +622,7 @@ class SextantEdit extends LitElement {
               ${uiButton({ label: "Delete floor", kind: "danger", disabled: this._busy, onClick: () => this._removeFloor() })}
             </div>
           </div>` : html`<div class="card muted">No floor yet. Add one below.</div>`}
+        ${f ? this._renderBiasView(f) : nothing}
         ${f ? this._renderAlignment(f) : nothing}
         ${this._proposal ? html`<div class="card">
           <h4>Proposed ${this._proposal.target}</h4>

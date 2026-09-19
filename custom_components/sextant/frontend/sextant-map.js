@@ -372,6 +372,24 @@ export function heatCells(points, end, cellM = 0.5, maxHoldSecs = 300) {
   return out;
 }
 
+/** Heat ramp 0..1: blue, through yellow, to red. */
+export function heatRgb(w) {
+  const stops = [[40, 110, 255], [255, 215, 0], [225, 30, 30]];
+  const u = Math.min(1, Math.max(0, w)) * 2, i = Math.min(1, Math.floor(u)), f = u - i;
+  return stops[i].map((a, k) => Math.round(a + (stops[i + 1][k] - a) * f));
+}
+
+/**
+ * A bias ratio as a colour: neutral grey at 1, green below (this floor is
+ * favoured less than the other), red above, full strength at 2x either way.
+ */
+export function biasRgba(ratio) {
+  const r = Math.max(1e-3, Number(ratio) || 1);
+  const s = Math.min(1, Math.abs(Math.log(r)) / Math.log(2));
+  const grey = [140, 140, 140], hue = r < 1 ? [30, 170, 70] : [215, 40, 40];
+  return [...grey.map((g, k) => Math.round(g + (hue[k] - g) * s)), Math.round(255 * (0.3 + 0.35 * s))];
+}
+
 export class SextantMap {
   /**
    * @param {HTMLCanvasElement} canvas
@@ -390,6 +408,7 @@ export class SextantMap {
     this.offline = new Set();
     this.marks = [];   // truth marks of the focused thing on this floor: [{x, y, label}]
     this.heat = null;  // where the focused thing has been: {size, max, cells: [{x, y, secs}]} in map px
+    this.biasMap = null;  // this floor's election prior against another's: {size, cells: [[x, y, ratio]]} in map px
     this.suggestions = [];  // advised proxy spots on this floor: [{x, y, label}]
     // staleAfter: seconds without a fix after which a thing is drawn as a ghost (0 = never).
     this.options = { circles: false, trails: true, fingerprint: false, grid: "off", labels: true, subzones: true, image: true, focus: null, staleAfter: 120 };
@@ -445,7 +464,8 @@ export class SextantMap {
   clearTrails() { this.trails.clear(); this.invalidate(); }
   setOffline(slugs) { this.offline = new Set(slugs || []); this.invalidate(); }
   setMarks(list) { this.marks = list || []; this.invalidate(); }
-  setHeat(heat) { this.heat = heat?.cells?.length ? heat : null; this.invalidate(); }
+  setHeat(heat) { this.heat = heat?.cells?.length ? heat : null; this._heatImg = null; this.invalidate(); }
+  setBiasMap(m) { this.biasMap = m?.cells?.length ? m : null; this._biasImg = null; this.invalidate(); }
   setSuggestions(list) { this.suggestions = list || []; this.invalidate(); }
   setOptions(opts) { Object.assign(this.options, opts); this.invalidate(); }
   setMode(mode) { this.mode = mode; if (mode !== "edit") { this.draft = null; this.tool = "select"; } this.invalidate(); }
@@ -816,6 +836,7 @@ export class SextantMap {
     this._drawGrid(ctx, size);
     this._drawPolygons(ctx, f.zones || [], "zone");
     if (this.options.subzones) this._drawPolygons(ctx, f.subzones || [], "subzone");
+    if (this.biasMap) this._drawBiasMap(ctx);
     if (this.heat && this.mode !== "edit") this._drawHeat(ctx);
     this._drawDraft(ctx);
     if (this._snap) this._drawSnap(ctx);
@@ -1097,18 +1118,58 @@ export class SextantMap {
     });
   }
 
+  /**
+   * A regular grid of cells drawn smooth: one pixel per cell in a small
+   * image, scaled up with bilinear smoothing, so cell edges become gradients
+   * instead of squares. A transparent cell of padding all round lets the
+   * edges fade out. cells: [{x, y, rgba: [r, g, b, a 0..255]}], centres in map px.
+   */
+  _smoothGrid(cells, size) {
+    if (typeof document === "undefined" || !cells.length) return null;
+    const xs = cells.map((c) => c.x), ys = cells.map((c) => c.y);
+    const x0 = Math.min(...xs), y0 = Math.min(...ys);
+    const cols = Math.round((Math.max(...xs) - x0) / size) + 3, rows = Math.round((Math.max(...ys) - y0) / size) + 3;
+    const img = document.createElement("canvas");
+    img.width = cols; img.height = rows;
+    const g = img.getContext("2d"), data = g.createImageData(cols, rows);
+    for (const c of cells) {
+      const i = ((Math.round((c.y - y0) / size) + 1) * cols + Math.round((c.x - x0) / size) + 1) * 4;
+      data.data.set(c.rgba, i);
+    }
+    g.putImageData(data, 0, 0);
+    return { img, x: x0 - 1.5 * size, y: y0 - 1.5 * size, w: cols * size, h: rows * size };
+  }
+
+  _blit(ctx, grid) {
+    if (!grid) return;
+    ctx.save();
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(grid.img, grid.x, grid.y, grid.w, grid.h);
+    ctx.restore();
+  }
+
   /** Time spent per cell: blue for a moment, through yellow, to red for the longest stay. */
   _drawHeat(ctx) {
     const { size, max, cells } = this.heat;
     if (!max) return;
-    ctx.save();
-    for (const c of cells) {
+    if (!this._heatImg) {
       // Square root: an hour on the bed would otherwise wash every walk-through out to nothing.
-      const w = Math.sqrt(c.secs / max);
-      ctx.fillStyle = `hsla(${Math.round(230 - 230 * w)}, 90%, 50%, ${(0.18 + 0.5 * w).toFixed(3)})`;
-      ctx.fillRect(c.x - size / 2, c.y - size / 2, size, size);
+      this._heatImg = this._smoothGrid(cells.map((c) => {
+        const w = Math.sqrt(c.secs / max);
+        return { x: c.x, y: c.y, rgba: [...heatRgb(w), Math.round(255 * (0.25 + 0.5 * w))] };
+      }), size);
     }
-    ctx.restore();
+    this._blit(ctx, this._heatImg);
+  }
+
+  /** Grey where the two floors' priors are even, green where this floor is favoured less, red more. */
+  _drawBiasMap(ctx) {
+    const { size, cells } = this.biasMap;
+    if (!this._biasImg) {
+      this._biasImg = this._smoothGrid(cells.map(([x, y, ratio]) => ({ x, y, rgba: biasRgba(ratio) })), size);
+    }
+    this._blit(ctx, this._biasImg);
   }
 
   _drawMarks(ctx) {

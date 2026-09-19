@@ -104,3 +104,14 @@ test("heatCells adds up time per cell and stops at dropouts and long silences", 
   const quiet = heatCells([{ t: 0, x: 0, y: 0, f: "F" }, { t: 5000, x: 9, y: 9, f: "F" }], 5000);
   assert.equal(quiet.F.cells.find((c) => c.x === 0.25).secs, 300);
 });
+
+test("bias colours: grey when even, green when this floor is favoured less, red when more", async () => {
+  const { biasRgba, heatRgb } = await import("../../custom_components/sextant/frontend/sextant-map.js");
+  assert.deepEqual(biasRgba(1).slice(0, 3), [140, 140, 140]);
+  const less = biasRgba(0.5), more = biasRgba(2);
+  assert.ok(less[1] > less[0] && less[1] > less[2]);           // green
+  assert.ok(more[0] > more[1] && more[0] > more[2]);           // red
+  assert.ok(biasRgba(1.1)[3] < more[3]);                       // stronger lean, stronger colour
+  assert.deepEqual(heatRgb(0), [40, 110, 255]);
+  assert.deepEqual(heatRgb(1), [225, 30, 30]);
+});
