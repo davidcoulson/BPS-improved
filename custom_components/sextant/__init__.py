@@ -2722,13 +2722,33 @@ async def process_entities(hass, new_global_data):
 _arrivals = {}
 
 
+def _history_arrival(hass, ent, floor, x, y, now):
+    """When the position history says this thing came to stay within a couple
+    of metres of (x, y), or None when it has nothing to say (yet)."""
+    try:
+        q = get_position_history(hass).query(ent, now - 86400, now, 5000)
+        floors = q.get("floors") or []
+        points = [(t, floors[fi] if isinstance(fi, int) and fi < len(floors) else fi, xm, ym)
+                  for t, fi, xm, ym in zip(q.get("t", []), q.get("f", []), q.get("x_m", []), q.get("y_m", []))]
+        return persons_mod.settled_since(points, (floor, x, y))
+    except Exception:  # noqa: BLE001 - no history is not an error
+        return None
+
+
+# How long after first seeing a thing the history is asked again when it had
+# no answer: it is loaded from disk a little after the first cycle of a start.
+ARRIVAL_RETRY_SECS = 600.0
+
+
 def _arrived_at(hass, layout, ent, row, now):
     """When this thing arrived within a couple of metres of where it is now.
 
-    Kept up to date here from each cycle's fix; the first time a thing is
-    seen after a start, taken from the position history instead, which
-    outlives restarts - otherwise everything would look freshly arrived
-    after each one.
+    The position history decides, whenever a thing is first seen or has
+    moved: it outlives restarts and passes over short absences, so neither a
+    restart nor the wrong-floor fix that often follows one makes a thing that
+    has sat on a nightstand all night look freshly arrived. Between moves the
+    answer is kept. A history with nothing to say yet (it loads a little
+    after the first cycle) is asked again rather than taken as "just now".
     """
     floor, cords = row.get("floor"), row.get("cords")
     scale = next((f.get("scale") for f in layout.get("floor") or [] if f.get("name") == floor), None)
@@ -2736,29 +2756,24 @@ def _arrived_at(hass, layout, ent, row, now):
         return now
     x, y = float(cords[0]) / float(scale), float(cords[1]) / float(scale)
     st = _arrivals.get(ent)
+    if st is not None and st["floor"] == floor and math.hypot(x - st["x"], y - st["y"]) <= persons_mod.STAY_RADIUS_M:
+        st["away_since"] = None
+        if st["provisional"] and now - st["first_seen"] <= ARRIVAL_RETRY_SECS:
+            found = _history_arrival(hass, ent, floor, x, y, now)
+            if found is not None and found < st["since"]:
+                st["since"], st["provisional"] = found, False
+        return st["since"]
+    fallback = now
     if st is not None:
-        if st["floor"] == floor and math.hypot(x - st["x"], y - st["y"]) <= persons_mod.STAY_RADIUS_M:
-            st["away_since"] = None
-            return st["since"]
-        # Elsewhere: a move only once it has lasted (a stray fix, or the
-        # minute after a restart, is not one).
+        # Elsewhere: a move only once it has lasted (a stray fix is not one).
         st["away_since"] = st.get("away_since") or now
         if now - st["away_since"] < persons_mod.MOVE_CONFIRM_SECS:
             return st["since"]
-        _arrivals[ent] = {"floor": floor, "x": x, "y": y, "since": st["away_since"], "away_since": None}
-        return st["away_since"]
-    since = now
-    if st is None:
-        try:
-            q = get_position_history(hass).query(ent, now - 86400, now, 5000)
-            floors = q.get("floors") or []
-            points = [(t, floors[fi] if isinstance(fi, int) and fi < len(floors) else fi, xm, ym)
-                      for t, fi, xm, ym in zip(q.get("t", []), q.get("f", []), q.get("x_m", []), q.get("y_m", []))]
-            since = persons_mod.settled_since(points, (floor, x, y)) or now
-        except Exception:  # noqa: BLE001 - no history is not an error; "just arrived" is
-            since = now
-    _arrivals[ent] = {"floor": floor, "x": x, "y": y, "since": since, "away_since": None}
-    return since
+        fallback = st["away_since"]
+    found = _history_arrival(hass, ent, floor, x, y, now)
+    _arrivals[ent] = {"floor": floor, "x": x, "y": y, "since": found if found is not None else fallback,
+                      "provisional": found is None, "first_seen": now, "away_since": None}
+    return _arrivals[ent]["since"]
 
 
 def _update_person_sensors(hass):

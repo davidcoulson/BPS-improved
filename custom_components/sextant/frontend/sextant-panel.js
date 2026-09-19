@@ -574,9 +574,10 @@ class SextantLive extends LitElement {
 
   /**
    * The list, grouped by whose things they are: each Home Assistant person
-   * with two or more things gets a header (their picture, name and where
-   * their own location sensor puts them) that folds the group away; the rest
-   * follow. With nobody owning two things it is the plain list it was.
+   * gets a header (their picture, their name, and under it where their own
+   * location sensor puts them) that folds the group away; the rest follow.
+   * One thing is enough for a section - a person is tracked as a person -
+   * except a pet whose one thing is its own tag (Meg over Meg says nothing).
    */
   _renderGroupedRows(rows) {
     const owners = this.data?.layout?.thing_owners || {};
@@ -585,8 +586,10 @@ class SextantLive extends LitElement {
       const o = owners[p.ent];
       if (o) byOwner.set(o, [...(byOwner.get(o) || []), p]);
     }
-    const groups = [...byOwner].filter(([, list]) => list.length >= 2)
+    const same = (a, b) => String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
+    const groups = [...byOwner]
       .map(([person, list]) => ({ person, list, name: this.hass?.states?.[person]?.attributes?.friendly_name || person.slice(7) }))
+      .filter((g) => g.list.length >= 2 || !same(this._label(g.list[0].ent), g.name))
       .sort((a, b) => a.name.localeCompare(b.name));
     if (!groups.length) return rows.map((p) => this._renderRow(p));
     const grouped = new Set(groups.flatMap((g) => g.list.map((p) => p.ent)));
@@ -598,17 +601,17 @@ class SextantLive extends LitElement {
       this._folded = next;
       try { localStorage.setItem("sextant.live.folded", JSON.stringify([...next])); } catch { /* ignore */ }
     };
-    const header = (key, title, count, extra) => html`<li class="group" @click=${() => fold(key)} role="button" aria-expanded=${!folded.has(key)}>
+    const header = (key, title, extra) => html`<li class="group" @click=${() => fold(key)} role="button" aria-expanded=${!folded.has(key)}>
       <ha-icon class="chev" icon=${folded.has(key) ? "mdi:chevron-right" : "mdi:chevron-down"}></ha-icon>${extra.avatar || nothing}
-      <span class="gname">${title}</span><span class="muted small gcount">${count}</span>${extra.where ? html`<span class="gwhere small">${extra.where}</span>` : nothing}</li>`;
+      <span class="gtext"><span class="gname">${title}</span>${extra.where ? html`<span class="gwhere small">${extra.where}</span>` : nothing}</span></li>`;
     return html`${groups.map((g) => {
       const st = this.hass?.states?.[g.person], pic = st?.attributes?.entity_picture;
       const where = this.hass?.states?.[`sensor.${g.person.slice(7)}_sextant_person_location`]?.state;
       const avatar = html`<span class="gavatar">${pic ? html`<img src=${pic} alt="">` : g.name.slice(0, 2).toUpperCase()}</span>`;
-      return html`${header(g.person, g.name, g.list.length, { avatar, where: where && where !== "unknown" ? where : "" })}
+      return html`${header(g.person, g.name, { avatar, where: where && where !== "unknown" ? where : "" })}
         ${folded.has(g.person) ? nothing : g.list.map((p) => this._renderRow(p))}`;
     })}
-    ${rest.length ? html`${header("_rest", "Everything else", rest.length, {})}${folded.has("_rest") ? nothing : rest.map((p) => this._renderRow(p))}` : nothing}`;
+    ${rest.length ? html`${header("_rest", "Everything else", {})}${folded.has("_rest") ? nothing : rest.map((p) => this._renderRow(p))}` : nothing}`;
   }
 
   _renderRow(p) {
@@ -940,12 +943,12 @@ class SextantLive extends LitElement {
     .list li.group { display: flex; align-items: center; gap: 6px; padding: 8px 4px 4px; margin-top: 4px; border-top: 1px solid var(--divider-color, #e0e0e0); border-radius: 0; font-weight: 500; }
     .list li.group:first-child { border-top: none; margin-top: 0; }
     .list li.group .chev { --mdc-icon-size: 18px; color: var(--secondary-text-color); }
-    .list li.group .gavatar { width: 22px; height: 22px; border-radius: 50%; overflow: hidden; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; background: var(--secondary-background-color, #eee); }
+    .list li.group .gavatar { width: 30px; height: 30px; border-radius: 50%; overflow: hidden; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; background: var(--secondary-background-color, #eee); }
     .list li.group .gavatar img { width: 100%; height: 100%; object-fit: cover; }
     .list li.group .gavatar { flex: none; }
-    .list li.group .gname { flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .list li.group .gcount { flex: none; }
-    .list li.group .gwhere { margin-left: auto; min-width: 0; max-width: 55%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right; color: var(--secondary-text-color); }
+    .list li.group .gtext { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+    .list li.group .gname, .list li.group .gwhere { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .list li.group .gwhere { font-weight: 400; color: var(--secondary-text-color); }
     .quick { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 6px; margin: 2px 0 4px; }
     .quick .qa { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; padding: 6px 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border: 1px solid var(--divider-color, #ddd); border-radius: 10px; background: var(--ha-card-background, var(--card-background-color, #fff)); color: var(--primary-text-color); font: inherit; font-size: 11px; cursor: pointer; }
     .quick .qa:hover { filter: brightness(0.97); }

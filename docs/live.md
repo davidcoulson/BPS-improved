@@ -47,10 +47,12 @@ a desktop job.
 
 ## Grouped by person
 
-When things have owners (**Belongs to** on the Things page), everyone with
-two or more things gets a heading in the list - their picture, how many
-things, and where their own location sensor puts them - and a click on the
-heading folds the group away. The rest follow under **Everything else**.
+When things have owners (**Belongs to** on the Things page), each person
+gets a heading in the list - their picture, their name, and under it where
+their own location sensor puts them - and a click on the heading folds the
+group away. One thing is enough for a section; only a pet whose one thing
+is its own tag stays a plain row. The rest follow under **Everything
+else**.
 
 ## Quick actions
 

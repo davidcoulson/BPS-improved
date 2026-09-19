@@ -83,3 +83,35 @@ def test_settled_since_counts_metres_not_room_names_and_ignores_one_stray_fix():
     assert persons.settled_since([], here) is None
     assert persons.settled_since([(0, "Down", 5.0, 5.0)], here) is None
 
+
+
+def test_arrival_survives_a_restart_with_a_late_history_and_a_wrong_floor_blip(monkeypatch):
+    """What happened on 2026-09-19: after a restart the history had not loaded on
+    the first cycle, the watch was placed a floor down for a minute, and every
+    thing looked freshly arrived - so the watch on its charger won on class."""
+    sextant._arrivals.clear()
+    layout = {"floor": [{"name": "Up", "scale": 100.0}, {"name": "Down", "scale": 100.0}]}
+    night = 1000.0                       # when the watch really came to rest
+    answers = {"ready": False}
+
+    def history(hass, ent, floor, x, y, now):
+        return night if answers["ready"] and floor == "Up" else None
+
+    monkeypatch.setattr(sextant, "_history_arrival", history)
+    at_table = {"floor": "Up", "cords": [500.0, 500.0]}
+    downstairs = {"floor": "Down", "cords": [900.0, 400.0]}
+    t = 50_000.0
+    # First cycle after the restart: history not loaded yet.
+    assert sextant._arrived_at(None, layout, "watch", at_table, t) == t
+    # It loads; the next cycle corrects the provisional answer.
+    answers["ready"] = True
+    assert sextant._arrived_at(None, layout, "watch", at_table, t + 15) == night
+    # A wrong-floor blip for a minute: not a move.
+    for dt in (30, 45, 60, 75):
+        assert sextant._arrived_at(None, layout, "watch", downstairs, t + dt) == night
+    assert sextant._arrived_at(None, layout, "watch", at_table, t + 90) == night
+    # Really carried downstairs (over two minutes): a new arrival, from when it left.
+    for dt in (100, 160, 230):
+        got = sextant._arrived_at(None, layout, "watch", downstairs, t + dt)
+    assert got == t + 100
+    sextant._arrivals.clear()
