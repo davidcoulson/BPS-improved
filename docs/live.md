@@ -45,6 +45,13 @@ thing and starting calibration — jumps straight to the right page
 without hunting through the tabs. Editing the floor plan itself is still
 a desktop job.
 
+## Grouped by person
+
+When things have owners (**Belongs to** on the Things page), everyone with
+two or more things gets a heading in the list - their picture, how many
+things, and where their own location sensor puts them - and a click on the
+heading folds the group away. The rest follow under **Everything else**.
+
 ## Quick actions
 
 Selecting a thing opens a row of buttons inside its row in the list:

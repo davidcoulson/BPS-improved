@@ -231,6 +231,7 @@ class SextantDevices extends LitElement {
       placeholder: thingName({ ...this.data, names: { ...(this.data?.names || {}), [slug]: undefined } }, slug),
       thing_class: layout.thing_classes?.[slug] || "",
       pronouns: layout.thing_pronouns?.[slug] || "",
+      owner: layout.thing_owners?.[slug] || "",
       height: toDisplayLen(layout.thing_heights?.[slug], this.hass),
       ref: layout.thing_ref_offsets?.[slug] ?? "",
       icon: layout.thing_icons?.[slug] || "",
@@ -331,6 +332,7 @@ class SextantDevices extends LitElement {
       name: w.name.trim() || null,
       thing_class: w.thing_class || null,
       pronouns: w.pronouns || null,
+      owner: w.owner || null,
       height: w.height === "" || w.height == null ? null : fromDisplayLen(w.height, this.hass),
       ref_offset_db: w.ref === "" || w.ref == null ? null : Number(w.ref),
       icon: w.icon || null,
@@ -376,6 +378,14 @@ class SextantDevices extends LitElement {
             { value: "they", label: "They / them" }, { value: "it", label: "It" },
           ], onChange: (v) => { w.pronouns = v; this.requestUpdate(); }, style: "width: 220px" })}
           <span class="small muted">How Sextant refers to this thing. A person or pet with no pronouns set is "they".</span>
+        </div>
+        <div class="row">
+          ${uiSelect({ label: "Belongs to", value: w.owner || "", options: [{ value: "", label: "Nobody" },
+            ...Object.values(this.hass?.states || {}).filter((s) => s.entity_id.startsWith("person."))
+              .map((s) => ({ value: s.entity_id, label: s.attributes.friendly_name || s.entity_id }))
+              .sort((a, b) => a.label.localeCompare(b.label))],
+            onChange: (v) => { w.owner = v; this.requestUpdate(); }, style: "width: 220px" })}
+          <span class="small muted">A Home Assistant person. Their things are grouped together on Live, and the one they are carrying gives them a location sensor of their own.</span>
         </div>
         <div class="row colour">
           <span class="avatar-preview" style="background: ${thingColor(w.slug, w.color || null)}" title="how this thing will look">${w.preview || w.icon ? html`<img src=${w.preview || w.icon} alt="">` : classIcon(w.thing_class) ? html`<ha-icon icon=${classIcon(w.thing_class)}></ha-icon>` : html`<span class="initials">${(w.name || w.placeholder || "?").slice(0, 2).toUpperCase()}</span>`}</span>

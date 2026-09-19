@@ -573,3 +573,15 @@ def test_history_timeline_is_served_for_the_last_hours(tmp_path):
     assert result["stays"][0]["partial"] is False
     assert result["stays"][1]["start"] == round(now - 3600, 1)
     assert result["last_heard"] == round(now - 60, 1)
+
+
+def test_thing_tune_sets_and_clears_an_owner_and_pronouns(tmp_path):
+    hass = _hass_with_layout(tmp_path, _layout())
+    conn = _Conn()
+    run(ws.ws_thing_tune(hass, conn, {"id": 1, "type": "sextant/thing/tune", "entity": "watch",
+                                        "owner": "person.david", "pronouns": "it"}))
+    layout = st.get_layout(hass)
+    assert layout["thing_owners"] == {"watch": "person.david"} and layout["thing_pronouns"] == {"watch": "it"}
+    run(ws.ws_thing_tune(hass, conn, {"id": 2, "type": "sextant/thing/tune", "entity": "watch", "owner": ""}))
+    assert st.get_layout(hass)["thing_owners"] == {}
+

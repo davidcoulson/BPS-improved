@@ -310,6 +310,9 @@ async def ws_tuning_set(hass, connection, msg):
     # How the panel refers to the thing: he, she, they or it. None or "" falls
     # back to its class (a man is he, a phone is it, a pet or person they).
     vol.Optional("pronouns"): vol.Any(None, "", "he", "she", "they", "it"),
+    # Whose it is: a Home Assistant person (person.david). Groups the Live
+    # list, and is what a per-person location will be built from.
+    vol.Optional("owner"): vol.Any(None, str),
     vol.Optional("estimator"): vol.Any(None, "", "geometric", "fingerprint", "fused"),
     vol.Optional("fp_weight"): vol.Any(None, vol.Coerce(float)),
     vol.Optional("color"): vol.Any(None, str),
@@ -325,6 +328,9 @@ async def ws_thing_tune(hass, connection, msg):
     core = _core()
     entity = msg["entity"]
     changes = {}
+    owner = msg.get("owner")
+    if owner and not re.fullmatch(r"person\.[a-z0-9_]+", owner):
+        return _error(connection, msg, "owner must be a Home Assistant person, like person.david")
     async with LAYOUT_LOCK:
         data = get_layout_for_edit(hass)
         if not isinstance(data, dict):
@@ -404,7 +410,8 @@ async def ws_thing_tune(hass, connection, msg):
                 estimators.pop(entity, None)
             data["thing_estimators"] = estimators
             changes["estimator"] = msg["estimator"] or None
-        for key, store in (("name", "thing_names"), ("thing_class", "thing_classes"), ("pronouns", "thing_pronouns")):
+        for key, store in (("name", "thing_names"), ("thing_class", "thing_classes"), ("pronouns", "thing_pronouns"),
+                           ("owner", "thing_owners")):
             if key in msg:
                 values = data.get(store)
                 if not isinstance(values, dict):

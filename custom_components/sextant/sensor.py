@@ -373,6 +373,37 @@ def ensure_sensors_for_things(hass, things):
         normalize_sextant_registry_entity_ids_from_cache(hass)
 
 
+@callback
+def ensure_person_sensors(hass, people):
+    """Create the location sensors of any owner (a person.* entity) that has none yet.
+
+    sensor.<person>_sextant_person_location / _room / _floor, grouped under a
+    Sextant device for the person. "_person_" keeps them apart from a thing
+    that shares the person's name (Meg the cat is person.meg and her tag meg).
+    """
+    from .persons import PERSON_SENSOR_KINDS  # noqa: PLC0415
+
+    sensors_cache = hass.data.get("sextant_sensors")
+    add_entities = hass.data.get("sextant_add_entities")
+    if sensors_cache is None or add_entities is None:
+        return
+    new_sensors = []
+    for person in people:
+        slug = person.split(".", 1)[1]
+        for suffix, label in PERSON_SENSOR_KINDS:
+            entity_id = f"sensor.{slug}_{suffix}"
+            if entity_id in sensors_cache:
+                continue
+            name = (hass.states.get(person).attributes.get("friendly_name") if hass.states.get(person) else None) or slug
+            sensor = CustomDistanceSensor(f"{name} {label}", f"{suffix}_{slug}", entity_id, f"person_{slug}",
+                                          attrs={"via": None})
+            sensors_cache[entity_id] = sensor
+            new_sensors.append(sensor)
+    if new_sensors:
+        _LOGGER.info("Creating Sextant location sensors for %d person(s)", len(new_sensors) // 3 or 1)
+        add_entities(new_sensors, update_before_add=True)
+
+
 def cleanup_legacy_sextant_entities(hass):
     """Remove old duplicated-name Sextant entities from entity registry."""
     entity_registry = er.async_get(hass)

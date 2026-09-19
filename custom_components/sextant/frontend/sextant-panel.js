@@ -312,6 +312,7 @@ class SextantLive extends LitElement {
     _links: { state: true },
     _marking: { state: true },
     _heat: { state: true },
+    _folded: { state: true },
     _truth: { state: true },
     _marks: { state: true },
     _blend: { state: true },
@@ -326,7 +327,8 @@ class SextantLive extends LitElement {
     this._selected = null;
     this._links = null;
     this._marking = false;  // waiting for the click that says where the thing really is
-    this._heatHours = 0;    // "where it's been" window picked for the selected thing (0 = off)
+    this._heatHours = 0;    // Activity window picked for the selected thing (0 = off)
+    try { this._folded = new Set(JSON.parse(localStorage.getItem("sextant.live.folded") || "[]")); } catch { this._folded = new Set(); }
     this._heat = null;      // {ent, hours, byFloor} from heatCells
     this._truth = null;     // the last mark's evaluation {mark, rows, current_weight}
     this._marks = [];       // the selected thing's marks
@@ -578,6 +580,57 @@ class SextantLive extends LitElement {
 
   _label(ent) { return thingName(this.data, ent); }
 
+  /**
+   * The list, grouped by whose things they are: each Home Assistant person
+   * with two or more things gets a header (their picture, name and where
+   * their own location sensor puts them) that folds the group away; the rest
+   * follow. With nobody owning two things it is the plain list it was.
+   */
+  _renderGroupedRows(rows) {
+    const owners = this.data?.layout?.thing_owners || {};
+    const byOwner = new Map();
+    for (const p of rows) {
+      const o = owners[p.ent];
+      if (o) byOwner.set(o, [...(byOwner.get(o) || []), p]);
+    }
+    const groups = [...byOwner].filter(([, list]) => list.length >= 2)
+      .map(([person, list]) => ({ person, list, name: this.hass?.states?.[person]?.attributes?.friendly_name || person.slice(7) }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    if (!groups.length) return rows.map((p) => this._renderRow(p));
+    const grouped = new Set(groups.flatMap((g) => g.list.map((p) => p.ent)));
+    const rest = rows.filter((p) => !grouped.has(p.ent));
+    const folded = this._folded || new Set();
+    const fold = (key) => {
+      const next = new Set(folded);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      this._folded = next;
+      try { localStorage.setItem("sextant.live.folded", JSON.stringify([...next])); } catch { /* ignore */ }
+    };
+    const header = (key, title, count, extra) => html`<li class="group" @click=${() => fold(key)} role="button" aria-expanded=${!folded.has(key)}>
+      <ha-icon class="chev" icon=${folded.has(key) ? "mdi:chevron-right" : "mdi:chevron-down"}></ha-icon>${extra.avatar || nothing}
+      <span class="gname">${title}</span><span class="muted small gcount">${count}</span>${extra.where ? html`<span class="gwhere small">${extra.where}</span>` : nothing}</li>`;
+    return html`${groups.map((g) => {
+      const st = this.hass?.states?.[g.person], pic = st?.attributes?.entity_picture;
+      const where = this.hass?.states?.[`sensor.${g.person.slice(7)}_sextant_person_location`]?.state;
+      const avatar = html`<span class="gavatar">${pic ? html`<img src=${pic} alt="">` : g.name.slice(0, 2).toUpperCase()}</span>`;
+      return html`${header(g.person, g.name, g.list.length, { avatar, where: where && where !== "unknown" ? where : "" })}
+        ${folded.has(g.person) ? nothing : g.list.map((p) => this._renderRow(p))}`;
+    })}
+    ${rest.length ? html`${header("_rest", "Everything else", rest.length, {})}${folded.has("_rest") ? nothing : rest.map((p) => this._renderRow(p))}` : nothing}`;
+  }
+
+  _renderRow(p) {
+    const st = staleness(p, this._staleAfter());
+    return html`
+            <li class="${p.ent === this._selected ? "selected" : ""} ${st.ghost ? "ghost" : ""}" title=${st.ghost ? `Not heard for ${fmtAge(st.age)}: this is where ${this._label(p.ent)} ${this._pn(p.ent).was} last placed` : ""} @click=${() => { this._select(p.ent === this._selected ? null : p.ent); if (p.floor && p.floor !== this.floor) this.dispatchEvent(new CustomEvent("floor-changed", { detail: p.floor })); }}>
+              ${this._avatar(p.ent)}
+              <span class="name">${this._label(p.ent)}</span>
+              <span class="where">${p.zone}${p.sub_zone && p.sub_zone !== "unknown" ? ` · ${p.sub_zone}` : ""}</span>
+              <span class="muted small">${st.ghost ? html`<ha-icon class="ghosticon" icon="mdi:ghost-outline"></ha-icon>seen ${shortAge(st.age)} ago · ` : nothing}${p.floor}</span>
+              ${p.ent === this._selected ? html`<div class="quickin" @click=${(e) => e.stopPropagation()}>${this._renderQuick(p)}</div>` : nothing}
+            </li>`;
+  }
+
   /** He, she, they or it for a thing (its setting, else its class; people and pets are never "it"). */
   _pn(ent) { return pronounsFor(this.data?.layout, ent); }
 
@@ -682,14 +735,7 @@ class SextantLive extends LitElement {
           })}</span>
         </h3>
         <ul class="list">
-          ${rows.map((p) => { const st = staleness(p, this._staleAfter()); return html`
-            <li class="${p.ent === this._selected ? "selected" : ""} ${st.ghost ? "ghost" : ""}" title=${st.ghost ? `Not heard for ${fmtAge(st.age)}: this is where ${this._label(p.ent)} ${this._pn(p.ent).was} last placed` : ""} @click=${() => { this._select(p.ent === this._selected ? null : p.ent); if (p.floor && p.floor !== this.floor) this.dispatchEvent(new CustomEvent("floor-changed", { detail: p.floor })); }}>
-              ${this._avatar(p.ent)}
-              <span class="name">${this._label(p.ent)}</span>
-              <span class="where">${p.zone}${p.sub_zone && p.sub_zone !== "unknown" ? ` · ${p.sub_zone}` : ""}</span>
-              <span class="muted small">${st.ghost ? html`<ha-icon class="ghosticon" icon="mdi:ghost-outline"></ha-icon>seen ${shortAge(st.age)} ago · ` : nothing}${p.floor}</span>
-              ${p.ent === this._selected ? html`<div class="quickin" @click=${(e) => e.stopPropagation()}>${this._renderQuick(p)}</div>` : nothing}
-            </li>`; })}
+          ${this._renderGroupedRows(rows)}
           ${rows.length ? nothing : html`<li class="muted">No positions yet.</li>`}
         </ul>
         ${sel ? html`
@@ -899,6 +945,13 @@ class SextantLive extends LitElement {
     .truth { margin-top: 6px; }
     .heat { align-items: center; gap: 8px; flex-wrap: wrap; }
     .list li .quickin { grid-column: 1 / -1; cursor: default; padding-top: 6px; }
+    .list li.group { display: flex; align-items: center; gap: 6px; padding: 8px 4px 4px; margin-top: 4px; border-top: 1px solid var(--divider-color, #e0e0e0); border-radius: 0; font-weight: 500; }
+    .list li.group:first-child { border-top: none; margin-top: 0; }
+    .list li.group .chev { --mdc-icon-size: 18px; color: var(--secondary-text-color); }
+    .list li.group .gavatar { width: 22px; height: 22px; border-radius: 50%; overflow: hidden; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; background: var(--secondary-background-color, #eee); }
+    .list li.group .gavatar img { width: 100%; height: 100%; object-fit: cover; }
+    .list li.group .gname { flex: 0 1 auto; }
+    .list li.group .gwhere { margin-left: auto; color: var(--secondary-text-color); }
     .quick { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 6px; margin: 2px 0 4px; }
     .quick .qa { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; padding: 6px 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border: 1px solid var(--divider-color, #ddd); border-radius: 10px; background: var(--ha-card-background, var(--card-background-color, #fff)); color: var(--primary-text-color); font: inherit; font-size: 11px; cursor: pointer; }
     .quick .qa:hover { filter: brightness(0.97); }

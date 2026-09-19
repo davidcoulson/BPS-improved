@@ -73,6 +73,7 @@ from . import fingerprint
 from . import floor_field
 from . import registration
 from . import truth as truth_mod
+from . import persons as persons_mod
 from .zone_adjust import adjust_zones, adjust_subzones
 
 _LOGGER = logging.getLogger(__name__)
@@ -2701,6 +2702,38 @@ async def process_entities(hass, new_global_data):
     for eids in new_global_data:
         await process_single_entity(hass, new_global_data, eids)
         await asyncio.sleep(0)  # a thing with nothing to solve never awaits: yield for it
+    try:
+        _update_person_sensors(hass)
+    except Exception as e:  # noqa: BLE001 - a person's sensor must never stop the things'
+        _LOGGER.warning("Person locations not updated: %s", e)
+
+
+def _update_person_sensors(hass):
+    """Each owner's location from the thing that speaks for them (persons.py)."""
+    layout = get_layout(hass)
+    by_person = persons_mod.owners(layout)
+    if not by_person:
+        return
+    from . import sensor as sensor_mod  # noqa: PLC0415 - the platform imports this module
+
+    sensor_mod.ensure_person_sensors(hass, list(by_person))
+    rows = {r.get("ent"): r for r in (hass.data.get(DOMAIN, {}).get("apitricords") or []) if isinstance(r, dict)}
+    classes = layout.get("thing_classes") or {}
+    now, stale = time.time(), _tuning(layout, "stale_after_secs")
+    for person, things in by_person.items():
+        candidates = []
+        for ent in things:
+            row = rows.get(ent)
+            if not row:
+                continue
+            candidates.append({
+                "ent": ent, "cls": classes.get(ent), "updated": row.get("updated"),
+                "still_since": (_zone_state.get(ent) or {}).get("still_since"),
+                "zone": row.get("zone"), "sub_zone": row.get("sub_zone"), "floor": row.get("floor"),
+            })
+        slug = person.split(".", 1)[1]
+        for suffix, (state, attrs) in persons_mod.states(persons_mod.pick(candidates, now, stale)).items():
+            update_sextant_sensor_state(hass, f"sensor.{slug}_{suffix}", state, attrs)
 
 def extract_candidate_floors(new_global_data, tmpentity):
     """Every floor hearing the thing, ranked by its nearest receiver.
