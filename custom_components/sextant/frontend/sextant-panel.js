@@ -406,9 +406,39 @@ class SextantLive extends LitElement {
     if (r && ent === this._selected) { this._marks = r.marks || []; this._pushMarks(); }
   }
 
+  /**
+   * The things you do to a selected thing, one tap away at the top of its
+   * card instead of a scroll down: mark where it really is, where it has
+   * been, scrub its history, edit it.
+   */
+  _renderQuick(sel) {
+    const ent = sel.ent, h = this._history;
+    const heatOn = this._heat?.ent === ent && this._heatHours > 0;
+    const btn = (icon, label, on, onClick, disabled = false) => html`<button class="qa ${on ? "on" : ""}" title=${label} aria-label=${label} aria-pressed=${on} ?disabled=${disabled} @click=${onClick}>
+      <ha-icon icon=${icon}></ha-icon><span>${label}</span></button>`;
+    return html`<div class="quick">
+      ${btn("mdi:map-marker-check", "It's here", this._marking, () => { this._marking = !this._marking; })}
+      ${btn("mdi:fire", "Where it's been", heatOn, () => this._loadHeat(ent, heatOn ? 0 : (this._lastHeatHours || 6)))}
+      ${btn("mdi:history", "Scrub history", h?.ent === ent, () => this._loadHistory(h?.ent === ent ? null : ent))}
+      ${this._isAdmin() ? btn("mdi:pencil-outline", "Edit", false, () => this._goto({ mode: "things", thing: ent })) : nothing}
+    </div>
+    ${this._marking ? this._renderMarkingPrompt(ent) : nothing}`;
+  }
+
+  _renderMarkingPrompt(ent) {
+    return html`
+<div class="marking">Tap where ${this._label(ent)} really is on the ${this.floor} plan. Pinch to zoom, or zoom straight to a spot:
+          <div class="zoomto">${(this._floorObj()?.subzones || []).filter((s) => (s.cords || []).length >= 3)
+            .sort((a, b) => String(a.entity_id).localeCompare(String(b.entity_id)))
+            .map((s) => uiButton({ label: s.entity_id, kind: "text", onClick: () => this._map?.zoomTo(s.cords) }))}
+            ${uiButton({ label: "Whole floor", kind: "text", onClick: () => this._map?.fit() })}</div>
+          ${uiButton({ label: "Cancel", kind: "text", onClick: () => { this._marking = false; } })}</div>`;
+  }
+
   /** Where the selected thing spent the last `hours`, binned per floor (see heatCells). */
   async _loadHeat(ent, hours) {
     this._heatHours = hours;
+    if (hours) this._lastHeatHours = hours;
     if (!ent || !hours) { this._heat = null; return; }
     try {
       const now = Date.now() / 1000;
@@ -655,6 +685,7 @@ class SextantLive extends LitElement {
               <span class="name">${this._label(p.ent)}</span>
               <span class="where">${p.zone}${p.sub_zone && p.sub_zone !== "unknown" ? ` · ${p.sub_zone}` : ""}</span>
               <span class="muted small">${st.ghost ? html`<ha-icon class="ghosticon" icon="mdi:ghost-outline"></ha-icon>seen ${shortAge(st.age)} ago · ` : nothing}${p.floor}</span>
+              ${p.ent === this._selected ? html`<div class="quickin" @click=${(e) => e.stopPropagation()}>${this._renderQuick(p)}</div>` : nothing}
             </li>`; })}
           ${rows.length ? nothing : html`<li class="muted">No positions yet.</li>`}
         </ul>
@@ -778,12 +809,7 @@ class SextantLive extends LitElement {
     const t = this._truth && this._truth.mark?.entity === ent ? this._truth : null;
     const rows = (t?.rows || []).slice(0, 6);
     return html`<div class="truth">
-      ${this._marking ? html`<div class="marking">Tap where ${this._label(ent)} really is on the ${this.floor} plan. Pinch to zoom, or zoom straight to a spot:
-          <div class="zoomto">${(this._floorObj()?.subzones || []).filter((s) => (s.cords || []).length >= 3)
-            .sort((a, b) => String(a.entity_id).localeCompare(String(b.entity_id)))
-            .map((s) => uiButton({ label: s.entity_id, kind: "text", onClick: () => this._map?.zoomTo(s.cords) }))}
-            ${uiButton({ label: "Whole floor", kind: "text", onClick: () => this._map?.fit() })}</div>
-          ${uiButton({ label: "Cancel", kind: "text", onClick: () => { this._marking = false; } })}</div>`
+      ${this._marking ? nothing
         : html`<div class="row">${uiButton({ label: "It's actually here…", icon: "mdi:map-marker-check", onClick: () => { this._marking = true; }, title: "Tell Sextant where this thing really is; it re-solves the last few minutes under every setting and shows which fits best" })}
             ${this._marks.length ? html`<span class="muted small">${this._marks.length} mark${this._marks.length === 1 ? "" : "s"}</span>` : nothing}</div>`}
       ${t ? html`<div class="card inner">
@@ -869,6 +895,12 @@ class SextantLive extends LitElement {
     .blend input { flex: 1; min-width: 90px; }
     .truth { margin-top: 6px; }
     .heat { align-items: center; gap: 8px; flex-wrap: wrap; }
+    .list li .quickin { grid-column: 1 / -1; cursor: default; padding-top: 6px; }
+    .quick { display: flex; gap: 6px; margin: 2px 0 4px; flex-wrap: wrap; }
+    .quick .qa { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 64px; padding: 6px 8px; border: 1px solid var(--divider-color, #ddd); border-radius: 10px; background: transparent; color: var(--primary-text-color); font: inherit; font-size: 11px; cursor: pointer; }
+    .quick .qa ha-icon { --mdc-icon-size: 22px; }
+    .quick .qa.on { background: var(--primary-color, #03a9f4); border-color: var(--primary-color, #03a9f4); color: var(--text-primary-color, #fff); }
+    .quick .qa:focus-visible { outline: 2px solid var(--primary-color, #03a9f4); outline-offset: 2px; }
     .marking .zoomto { display: flex; flex-wrap: wrap; gap: 2px 6px; margin: 4px 0; }
     .marking { background: var(--warning-color, #c77800); color: #fff; padding: 6px 8px; border-radius: 6px; font-size: 13px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
     .card.inner { margin-top: 8px; padding: 8px; }

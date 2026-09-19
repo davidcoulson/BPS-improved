@@ -45,6 +45,13 @@ thing and starting calibration — jumps straight to the right page
 without hunting through the tabs. Editing the floor plan itself is still
 a desktop job.
 
+## Quick actions
+
+Selecting a thing opens four buttons inside its row in the list: **It's
+here** (a truth mark, with the floor's spots to zoom to), **Where it's
+been** (the heatmap; again to hide it), **Scrub history**, and **Edit**,
+which opens the thing on the Things page.
+
 ## Truth marks
 
 When a thing sits in the wrong place, select it on the Live page, click
