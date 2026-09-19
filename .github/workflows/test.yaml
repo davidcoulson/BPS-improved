@@ -12,7 +12,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          # Home Assistant 2026.9 runs on Python 3.14.
+          python-version: "3.14"
       - name: Install test dependencies
         run: pip install -r requirements_test.txt
       - name: Byte-compile the integration
@@ -21,14 +22,15 @@ jobs:
         run: pytest tests/ -q
 
   javascript:
-    name: JS syntax check
+    name: Frontend syntax + unit tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
       - name: node --check the frontend
         run: |
           for f in custom_components/sextant/frontend/sextant-*.js; do node --check "$f"; done
-          node --check custom_components/sextant/frontend/sextant-map-card.js
+      - name: Frontend unit tests
+        run: node --test tests/frontend/
