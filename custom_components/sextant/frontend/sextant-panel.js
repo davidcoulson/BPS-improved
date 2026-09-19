@@ -591,9 +591,13 @@ class SextantLive extends LitElement {
       .map(([person, list]) => ({ person, list, name: this.hass?.states?.[person]?.attributes?.friendly_name || person.slice(7) }))
       .filter((g) => g.list.length >= 2 || !same(this._label(g.list[0].ent), g.name))
       .sort((a, b) => a.name.localeCompare(b.name));
-    if (!groups.length) return rows.map((p) => this._renderRow(p));
+    if (!groups.length && !rows.some((p) => ["cat", "dog", "paw"].includes((this.data?.layout?.thing_classes || {})[p.ent]))) return rows.map((p) => this._renderRow(p));
     const grouped = new Set(groups.flatMap((g) => g.list.map((p) => p.ent)));
-    const rest = rows.filter((p) => !grouped.has(p.ent));
+    // Then the pets (by class), then whatever is left.
+    const classes = this.data?.layout?.thing_classes || {};
+    const isPet = (p) => ["cat", "dog", "paw"].includes(classes[p.ent]);
+    const pets = rows.filter((p) => !grouped.has(p.ent) && isPet(p));
+    const rest = rows.filter((p) => !grouped.has(p.ent) && !isPet(p));
     const folded = this._folded || new Set();
     const fold = (key) => {
       const next = new Set(folded);
@@ -611,6 +615,7 @@ class SextantLive extends LitElement {
       return html`${header(g.person, g.name, { avatar, where: where && where !== "unknown" ? where : "" })}
         ${folded.has(g.person) ? nothing : g.list.map((p) => this._renderRow(p))}`;
     })}
+    ${pets.length ? html`${header("_pets", "Pets", { avatar: html`<span class="gavatar"><ha-icon icon="mdi:paw"></ha-icon></span>` })}${folded.has("_pets") ? nothing : pets.map((p) => this._renderRow(p))}` : nothing}
     ${rest.length ? html`${header("_rest", "Everything else", {})}${folded.has("_rest") ? nothing : rest.map((p) => this._renderRow(p))}` : nothing}`;
   }
 
@@ -945,6 +950,7 @@ class SextantLive extends LitElement {
     .list li.group .chev { --mdc-icon-size: 18px; color: var(--secondary-text-color); }
     .list li.group .gavatar { width: 30px; height: 30px; border-radius: 50%; overflow: hidden; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; background: var(--secondary-background-color, #eee); }
     .list li.group .gavatar img { width: 100%; height: 100%; object-fit: cover; }
+    .list li.group .gavatar ha-icon { --mdc-icon-size: 18px; color: var(--secondary-text-color); }
     .list li.group .gavatar { flex: none; }
     .list li.group .gtext { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
     .list li.group .gname, .list li.group .gwhere { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
