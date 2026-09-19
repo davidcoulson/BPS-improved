@@ -32,10 +32,19 @@ class EntReg:
     def async_update_entity(self, entity_id, new_unique_id=None):
         self.entities[entity_id].unique_id = new_unique_id
 
+    def async_remove(self, entity_id):
+        del self.entities[entity_id]
+
 
 class DevReg:
     def __init__(self, devices):
         self.devices = devices
+
+    def async_get(self, device_id):
+        return self.devices.get(device_id)
+
+    def async_get_device(self, identifiers=None):
+        return next((d for d in self.devices.values() if d.identifiers & set(identifiers)), None)
 
     def async_update_device(self, device_id, new_identifiers=None):
         self.devices[device_id].identifiers = new_identifiers
@@ -81,6 +90,7 @@ def house(monkeypatch):
     er_, dr_ = EntReg(ents), DevReg({
         "d1": types.SimpleNamespace(id="d1", identifiers={("private_ble_device", OLD)}, name="Eilee Phone", name_by_user=None),
         "d2": types.SimpleNamespace(id="d2", identifiers={("bermuda", OLD)}, name="Eilee Phone", name_by_user=None),
+        "d3": types.SimpleNamespace(id="d3", identifiers={("hue", 17)}, name="Lamp", name_by_user=None),   # a number, not text
     })
     monkeypatch.setattr(ir.er, "async_get", lambda hass: er_)
     monkeypatch.setattr(ir.dr, "async_get", lambda hass: dr_)
@@ -105,7 +115,7 @@ def test_the_thing_finds_its_entry_through_bermudas_entities(house):
 def test_replace_moves_every_entity_device_and_the_entry_then_reloads(house):
     hass, phone, er_, dr_ = house
     out = run(ir.async_replace_irk(hass, phone, NEW))
-    assert out == {"device": "Eilee Phone", "entities": 4, "devices": 2}
+    assert out == {"device": "Eilee Phone", "entities": 4, "devices": 2, "copies_removed": 0}
     assert all(OLD not in e.unique_id for e in er_.entities.values())
     assert er_.entities["sensor.private_ble_device_eilee_phone_area"].unique_id == f"{NEW}_area"
     assert er_.entities["sensor.someone_else_area"].unique_id == "aa" * 16 + "_area"   # untouched
@@ -121,3 +131,19 @@ def test_replace_refuses_bad_or_taken_keys_and_changes_nothing(house):
         with pytest.raises(ir.IrkReplaceError, match=why):
             run(ir.async_replace_irk(hass, phone, bad))
     assert phone.data["irk"] == OLD and hass.config_entries.calls == []
+
+
+def test_a_rerun_after_a_half_done_swap_drops_the_copies_and_finishes(house):
+    # The first run moved the entities, then the device came back on the old
+    # key and made "_2" copies of them.
+    hass, phone, er_, dr_ = house
+    for e in [e for e in er_.entities.values() if OLD in e.unique_id]:
+        e.unique_id = e.unique_id.replace(OLD, NEW)
+        copy = Ent(e.entity_id + "_2", e.platform, e.unique_id.replace(NEW, OLD))
+        er_.entities[copy.entity_id] = copy
+    out = run(ir.async_replace_irk(hass, phone, NEW))
+    assert out["copies_removed"] == 4 and out["entities"] == 0 and out["devices"] == 2
+    assert not [e for e in er_.entities if e.endswith("_2")]
+    assert er_.entities["sensor.private_ble_device_eilee_phone_area"].unique_id == f"{NEW}_area"
+    assert phone.data["irk"] == NEW and dr_.devices["d3"].identifiers == {("hue", 17)}
+

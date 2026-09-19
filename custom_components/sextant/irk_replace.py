@@ -74,11 +74,21 @@ def entry_for_thing(hass, thing: str):
     return None
 
 
+def _devices(dev_reg):
+    """Every device entry, by iterating the registry's devices - not through
+    their mapping interface, which Home Assistant deprecated for integrations.
+    (Older versions iterate to ids; those are looked up.)"""
+    return [d if not isinstance(d, str) else dev_reg.async_get(d) for d in list(dev_reg.devices)]
+
+
+def _carries(identifier, irk: str) -> bool:
+    """Whether a device identifier holds the key. Some integrations use numbers."""
+    return isinstance(identifier[1], str) and irk in identifier[1]
+
+
 def _device_name(hass, irk: str) -> str | None:
-    for device in dr.async_get(hass).devices.values():
-        if (PBD_DOMAIN, irk) in device.identifiers:
-            return device.name_by_user or device.name
-    return None
+    device = dr.async_get(hass).async_get_device(identifiers={(PBD_DOMAIN, irk)})
+    return (device.name_by_user or device.name) if device else None
 
 
 async def async_replace_irk(hass, entry, new_value: str) -> dict:
@@ -93,11 +103,18 @@ async def async_replace_irk(hass, entry, new_value: str) -> dict:
         raise IrkReplaceError("Another device already uses that key")
 
     ent_reg, dev_reg = er.async_get(hass), dr.async_get(hass)
-    entities = [e for e in ent_reg.entities.values() if old in e.unique_id]
-    for e in entities:
-        taken = ent_reg.async_get_entity_id(e.domain, e.platform, e.unique_id.replace(old, new))
-        if taken and taken != e.entity_id:
-            raise IrkReplaceError(f"{taken} already carries the new key; remove it first")
+    entities, copies = [], []
+    for e in list(ent_reg.entities.values()):
+        if not isinstance(e.unique_id, str) or old not in e.unique_id:
+            continue
+        # An entity already carrying the new key means a run that stopped
+        # part way: the originals were moved, then the device came back up on
+        # the old key and made copies of them. The original keeps its id and
+        # history; the copy goes.
+        if ent_reg.async_get_entity_id(e.domain, e.platform, e.unique_id.replace(old, new)):
+            copies.append(e.entity_id)
+        else:
+            entities.append(e)
     name = _device_name(hass, old)
 
     # Nothing may hold the old identity while it is rewritten: the device's
@@ -108,14 +125,16 @@ async def async_replace_irk(hass, entry, new_value: str) -> dict:
         await hass.config_entries.async_unload(b.entry_id)
     renamed = devices = 0
     try:
+        for entity_id in copies:
+            ent_reg.async_remove(entity_id)
         for e in entities:
             ent_reg.async_update_entity(e.entity_id, new_unique_id=e.unique_id.replace(old, new))
             renamed += 1
-        for device in list(dev_reg.devices.values()):
-            if any(old in ident[1] for ident in device.identifiers):
+        for device in _devices(dev_reg):
+            if device is not None and any(_carries(ident, old) for ident in device.identifiers):
                 dev_reg.async_update_device(
                     device.id,
-                    new_identifiers={(d, v.replace(old, new)) for d, v in device.identifiers},
+                    new_identifiers={(d, v.replace(old, new) if isinstance(v, str) else v) for d, v in device.identifiers},
                 )
                 devices += 1
         hass.config_entries.async_update_entry(entry, data={**entry.data, "irk": new}, unique_id=new)
@@ -126,5 +145,6 @@ async def async_replace_irk(hass, entry, new_value: str) -> dict:
         await hass.config_entries.async_setup(entry.entry_id)
         for b in bermuda:
             await hass.config_entries.async_setup(b.entry_id)
-    _LOGGER.info("Replaced the key of %s: %d entities, %d devices", name or entry.title, renamed, devices)
-    return {"device": name or entry.title, "entities": renamed, "devices": devices}
+    _LOGGER.info("Replaced the key of %s: %d entities, %d devices, %d leftover copies removed",
+                 name or entry.title, renamed, devices, len(copies))
+    return {"device": name or entry.title, "entities": renamed, "devices": devices, "copies_removed": len(copies)}
