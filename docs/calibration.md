@@ -25,5 +25,9 @@ factors with the layout, or with `calibration_target: bermuda` writes them
 into Bermuda as per-scanner RSSI offsets so Bermuda's own sensors are
 corrected too. **Reset** removes them.
 
+Re-run calibration after changing a floor's scale, whether by hand or from
+its [alignment pins](edit.md#lining-the-floors-up): the corrections were
+learned against distances measured at the old scale.
+
 How the solve works, and how a factor maps onto a Bermuda RSSI offset, is in
 [How positioning works](positioning.md).

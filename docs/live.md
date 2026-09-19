@@ -8,7 +8,9 @@ focus it: everything else fades, it grows a halo, the panel switches to its
 floor, and the side panel shows its room, spot, floor, the proxy it is
 anchored to if any, and every proxy that hears it with the distance; a
 **Details** disclosure holds the floor odds, spot shares, confidence,
-estimator telemetry, trust and speed. A **blend slider** from geometric to
+estimator telemetry, trust and speed. **Edit** (administrators) opens the
+thing's dialog on the Things page - name, class, colour, photo, height -
+without hunting for it in the list. A **blend slider** from geometric to
 fingerprint sets how this thing's position is estimated (the two ends
 are drawn on the map when the fingerprint switch is on), and **It's
 actually here…** records a [truth mark](live.md#truth-marks). A thing with no fix shows *seen 40s

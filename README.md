@@ -41,9 +41,12 @@ room** when the fix sits between two.
 
 ## Docs
 
+**New here? Start with [Getting started](docs/getting-started.md)**: from
+nothing to a thing on your floor plan and a first automation.
+
 | Install | Configure | Tune | Automate |
 |---|---|---|---|
-| [Installing](docs/install.md) · [What you need](docs/install.md#what-you-need) · [Upgrading from BPS](docs/install.md#upgrading-from-bps-or-bps-improved) | [Edit](docs/edit.md) · [Things](docs/things.md) · [Bermuda](docs/bermuda.md) · [Proxies](docs/proxies.md) | [Live](docs/live.md) · [Calibration](docs/calibration.md) · [Tuning](docs/tuning.md) · [Advice](docs/advice.md) · [How positioning works](docs/positioning.md) | [Sensors, card, services and API](docs/automation.md) |
+| [Getting started](docs/getting-started.md) · [Installing](docs/install.md) · [What you need](docs/install.md#what-you-need) · [Upgrading from BPS](docs/install.md#upgrading-from-bps-or-bps-improved) | [Edit](docs/edit.md) · [Things](docs/things.md) · [Bermuda](docs/bermuda.md) · [Proxies](docs/proxies.md) | [Live](docs/live.md) · [Calibration](docs/calibration.md) · [Tuning](docs/tuning.md) · [Advice](docs/advice.md) · [How positioning works](docs/positioning.md) | [Sensors, card, services and API](docs/automation.md) |
 
 Also [Hardware](docs/hardware.md) (turning outlets and switches into
 proxies, with the pin maps), [Where Sextant fits](docs/compared.md) (Bermuda, BPS, BPS-improved and
@@ -60,6 +63,10 @@ Sextant side by side) and [Data and development](docs/development.md).
    image, set its scale, place the proxies, draw the rooms, Save.
 4. On **Things**, pick what to track. Positions appear on **Live**
    within a cycle.
+5. With more than one floor, give each an elevation and line them up with
+   [alignment pins](docs/edit.md#lining-the-floors-up).
+
+[Getting started](docs/getting-started.md) walks through all of it.
 
 You want three or more proxies per floor, and each ESPHome proxy should
 advertise an iBeacon so its siblings can range it. The details, including
@@ -88,7 +95,11 @@ token, in Home Assistant's own theme and unit system. Eight pages:
 - Rooms as polygons with spots and no-go areas. Room and spot elections
   with a margin, a dwell and a stationary lock, so sensors do not flap.
 - Floor election by competition between floors, scaled by proximity and a
-  per-floor bias.
+  per-floor bias that can vary across the plan (a bias field), for landings
+  and double-height rooms where both floors hear a thing equally.
+- Alignment pins that say how the floors stack, with an elevation per
+  floor: shared named points on every plan, fitted into one house frame,
+  with misplaced pins found and named and each floor's scale audited.
 - Proxy calibration with 3D heights, written into Bermuda if you like.
 - Truth marks: say where a thing really is and Sextant finds the settings
   that fit it, and reports accuracy in metres.

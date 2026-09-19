@@ -57,7 +57,10 @@ whether a spot on the Second Floor plan is above the foyer or above the
 garage. **Pins** fix that.
 
 Pick points that run straight up through the house and that you can find on
-every plan: outside corners, a stair post, a chimney breast. With the **Pin**
+every plan: outside corners, a stair post, a stair opening, a chimney
+breast. Avoid interior room corners: interior walls move between storeys,
+so the corner of a room upstairs is often not above the corner of the room
+below, even when the plans make it look that way. With the **Pin**
 tool, click each one. A pin lands exactly on a room corner when one is near
 (hold Alt to place it freely), which is both easier than aiming and more
 accurate. Then switch floor and click the same points in the same order: the
@@ -83,14 +86,19 @@ sets those aside and names them, rather than letting two bad pins drag every
 good one a metre off. On the plan, a grey ring marks where the *other*
 floors put each pin; a pin that disagrees is joined to its ring by a red
 line, so a wrong corner shows as a long red line rather than a number. Move
-the pin to its ring's corner, or to whatever point really is straight above.
+the pin to its ring's corner, or to whatever point really is straight above
+- or delete it, which is usually the better answer: a pin does not have to
+exist on every floor, it only links the floors that carry it.
 Pins sit on corners, where proxies and walls also are, so they have their
 own padlock in the toolbar: lock them to reach a proxy underneath one.
 With fewer than five shared pins nothing can be set aside with any
 confidence, which is one more reason to place more than two.
 
 The pins' scale is only offered when at least four pins agree with each
-other. A scale read out of pins that disagree is noise with two decimals.
+other, and only when it differs from the floor's by 1 % or more; below that
+the difference is smaller than the pins' own placement error. A scale read
+out of pins that disagree is noise with two decimals. After adopting it,
+re-run [calibration](calibration.md) on that floor.
 
 Pins cannot give the vertical leg. **Elevation** is how far this floor's
 finished floor sits above the ground floor's: the ceiling height below it
