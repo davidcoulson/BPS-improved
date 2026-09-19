@@ -47,10 +47,10 @@ a desktop job.
 
 ## Quick actions
 
-Selecting a thing opens four buttons inside its row in the list: **It's
-here** (a truth mark, with the floor's spots to zoom to), **Where it's
-been** (the heatmap; again to hide it), **Scrub history**, and **Edit**,
-which opens the thing on the Things page.
+Selecting a thing opens a row of buttons inside its row in the list:
+**It's here** (a truth mark, with the floor's spots to zoom to),
+**Heatmap** (where it's been; again to hide it), **History** (scrub it),
+and **Edit**, which opens the thing on the Things page.
 
 ## Truth marks
 

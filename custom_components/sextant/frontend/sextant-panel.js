@@ -414,13 +414,13 @@ class SextantLive extends LitElement {
   _renderQuick(sel) {
     const ent = sel.ent, h = this._history;
     const heatOn = this._heat?.ent === ent && this._heatHours > 0;
-    const btn = (icon, label, on, onClick, disabled = false) => html`<button class="qa ${on ? "on" : ""}" title=${label} aria-label=${label} aria-pressed=${on} ?disabled=${disabled} @click=${onClick}>
+    const btn = (icon, label, title, on, onClick) => html`<button class="qa ${on ? "on" : ""}" title=${title} aria-label=${title} aria-pressed=${on} @click=${onClick}>
       <ha-icon icon=${icon}></ha-icon><span>${label}</span></button>`;
     return html`<div class="quick">
-      ${btn("mdi:map-marker-check", "It's here", this._marking, () => { this._marking = !this._marking; })}
-      ${btn("mdi:fire", "Where it's been", heatOn, () => this._loadHeat(ent, heatOn ? 0 : (this._lastHeatHours || 6)))}
-      ${btn("mdi:history", "Scrub history", h?.ent === ent, () => this._loadHistory(h?.ent === ent ? null : ent))}
-      ${this._isAdmin() ? btn("mdi:pencil-outline", "Edit", false, () => this._goto({ mode: "things", thing: ent })) : nothing}
+      ${btn("mdi:map-marker-check", "It's here", "It's actually here: tap where it really is", this._marking, () => { this._marking = !this._marking; })}
+      ${btn("mdi:fire", "Heatmap", "Where it's been", heatOn, () => this._loadHeat(ent, heatOn ? 0 : (this._lastHeatHours || 6)))}
+      ${btn("mdi:history", "History", "Scrub its history", h?.ent === ent, () => this._loadHistory(h?.ent === ent ? null : ent))}
+      ${this._isAdmin() ? btn("mdi:pencil-outline", "Edit", "Edit this thing", false, () => this._goto({ mode: "things", thing: ent })) : nothing}
     </div>
     ${this._marking ? this._renderMarkingPrompt(ent) : nothing}`;
   }
@@ -896,8 +896,8 @@ class SextantLive extends LitElement {
     .truth { margin-top: 6px; }
     .heat { align-items: center; gap: 8px; flex-wrap: wrap; }
     .list li .quickin { grid-column: 1 / -1; cursor: default; padding-top: 6px; }
-    .quick { display: flex; gap: 6px; margin: 2px 0 4px; flex-wrap: wrap; }
-    .quick .qa { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 64px; padding: 6px 8px; border: 1px solid var(--divider-color, #ddd); border-radius: 10px; background: transparent; color: var(--primary-text-color); font: inherit; font-size: 11px; cursor: pointer; }
+    .quick { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 6px; margin: 2px 0 4px; }
+    .quick .qa { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; padding: 6px 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border: 1px solid var(--divider-color, #ddd); border-radius: 10px; background: transparent; color: var(--primary-text-color); font: inherit; font-size: 11px; cursor: pointer; }
     .quick .qa ha-icon { --mdc-icon-size: 22px; }
     .quick .qa.on { background: var(--primary-color, #03a9f4); border-color: var(--primary-color, #03a9f4); color: var(--text-primary-color, #fff); }
     .quick .qa:focus-visible { outline: 2px solid var(--primary-color, #03a9f4); outline-offset: 2px; }
