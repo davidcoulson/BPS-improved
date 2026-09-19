@@ -86,6 +86,12 @@ never leaves a mark describing yesterday's corrections. Marks made before
 the one in force now: re-mark a spot that matters if calibration has
 changed since.
 
+A mark guides the thing that made it and things of the same class - the
+cats share one another's marks, a phone's mark helps the other phones -
+and nothing else: a mark records how one device looks from one place, and
+a watch on a wrist does not look like a phone in a hand
+(`fingerprint_marks_scope`: `own`, `class` or `all`).
+
 Marks stay, with their samples, in `.storage/sextant_truth`, and do two
 more jobs. The Tuning page's **Accuracy** card re-solves every mark under
 the settings in force and reports, per thing, the mean error in metres

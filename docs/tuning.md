@@ -63,6 +63,7 @@ distances in metres.
 | `correction_close_fade` | on | fade a proxy's calibration stretch out at close range (see [calibration](calibration.md#close-range)) |
 | `correction_fade_near_m` | 1.0 | a reading this close gets none of the stretch |
 | `correction_fade_far_m` | 2.5 | from this far the stretch applies in full |
+| `fingerprint_marks_scope` | `class` | whose truth marks place a thing: `own`, `class` (also things of its class) or `all` |
 | `history_hours` | 6 | hours of position history kept (scrubber, timeline, Activity), 1 to 168 |
 | `history_admin_only` | off | only administrators may read where things have been (scrubber, timeline, Activity) |
 | `stale_after_secs` | 120 | unheard this long, a thing is drawn as a ghost on Live (display only) |

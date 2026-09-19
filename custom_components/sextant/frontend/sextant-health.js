@@ -54,6 +54,7 @@ const TUNING_LABELS = {
   spot_proxy_far_m: ["Spot proxy: nothing from (m)", "from this far the spot's proxy says nothing; between the two it fades"],
   spot_proxy_ratio: ["Spot proxy: clearly nearest ×", "every other proxy must read this many times farther for full weight (none within 1.25×)"],
   zone_lock_warmup_secs: ["Lock warm-up (s)", "no stationary lock until a thing has been tracked this long since a start or a floor change"],
+  fingerprint_marks_scope: ["Marks guide", "whose truth marks place a thing: own = only its own; class = also those of things of its class (the cats share one another's); all = everyone's"],
   history_admin_only: ["History for admins only", "only administrators may read where things have been (scrubber, timeline, Activity); live positions stay visible to everyone"],
   history_hours: ["History kept (hours)", "how far back the history scrubber, the timeline and Activity reach (1 to 168)"],
   calibration_target: ["Calibration writes to", "sextant = a per-proxy factor in the layout; bermuda = per-scanner RSSI offsets in Bermuda"],
@@ -604,7 +605,7 @@ class SextantHealth extends LitElement {
   _renderTuning() {
     const spec = this.data?.tuning_spec || {};
     const groups = [
-      ["Estimator", ["position_estimator", "fingerprint_weight", "fingerprint_floor_weight", "fingerprint_k", "fingerprint_missing_m", "fingerprint_ref_gain", "fingerprint_auto_gain", "fingerprint_marks", "distance_estimator", "median_window_secs", "median_min_samples"]],
+      ["Estimator", ["position_estimator", "fingerprint_weight", "fingerprint_floor_weight", "fingerprint_k", "fingerprint_missing_m", "fingerprint_ref_gain", "fingerprint_auto_gain", "fingerprint_marks", "fingerprint_marks_scope", "distance_estimator", "median_window_secs", "median_min_samples"]],
       ["Solver", ["solver_max_receivers", "solver_max_range", "solver_near_always"]],
       ["Rooms", ["zone_hysteresis", "zone_prob_smoothing", "zone_switch_margin", "zone_switch_secs", "stationary_speed", "stationary_secs", "zone_unlock_margin", "zone_unlock_secs", "zone_lock_warmup_secs"]],
       ["Spots", ["subzone_switch_secs", "subzone_enter_prob", "subzone_unlock_margin", "spot_proxy_near_m", "spot_proxy_far_m", "spot_proxy_ratio"]],

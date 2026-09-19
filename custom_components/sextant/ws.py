@@ -494,7 +494,7 @@ async def _evaluate_mark(hass, core, mark, weights=None, gains=None):
     if core._tuning(layout, "fingerprint_auto_gain"):
         base_gain *= core._fingerprint_db.gain_for(mark["entity"])
     vectors = core._fingerprint_db.vectors()
-    extra = core._mark_refs(layout)
+    extra = core._mark_refs(layout, mark["entity"])
     # A mark must not match its own reference, or the score would be circular.
     own = f"mark:{mark['id']}"
     extra = [r for r in extra if r.get("slug") != own] if extra else None

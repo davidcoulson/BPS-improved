@@ -1945,3 +1945,28 @@ def test_no_lock_in_the_first_minutes_after_a_start():
         assert _elect("e", 90, t, layout=warm) == ("Kitchen", False)
     assert _elect("e", 90, 130.0, layout=warm) == ("Kitchen", True)
 
+
+
+def test_marks_guide_their_own_thing_and_its_class_not_everything():
+    # Michelle's phone marked on the couch must not drag David's watch there.
+    layout = {"thing_classes": {"m_phone": "phone", "d_phone": "phone", "d_watch": "watch", "meg": "cat", "socks": "cat"},
+              "floor": [{"name": "F", "scale": SCALE, "receivers": []}]}
+    sample = {"t": 1.0, "gain": 1.0, "estimator": "fingerprint", "thing_vec": {"aa": 2.0, "bb": 3.0},
+              "raw_vec": {"aa": 2.0, "bb": 3.0}, "floors": {}}
+    sextant._set_truth_marks([
+        {"id": 1, "entity": "m_phone", "floor": "F", "x": 10.0, "y": 0.0, "samples": [sample] * 3},
+        {"id": 2, "entity": "meg", "floor": "F", "x": 50.0, "y": 0.0, "samples": [sample] * 3},
+    ])
+    try:
+        slugs = lambda ent, lay=layout: sorted(r["slug"] for r in (sextant._mark_refs(lay, ent) or []))  # noqa: E731
+        assert slugs("m_phone") == ["mark:1"]          # its own
+        assert slugs("d_phone") == ["mark:1"]          # same class
+        assert slugs("d_watch") == []                  # a different kind of device
+        assert slugs("socks") == ["mark:2"]            # the cats share Meg's
+        assert slugs("unclassified") == []
+        own = {**layout, "tuning": {"fingerprint_marks_scope": "own"}}
+        assert slugs("d_phone", own) == [] and slugs("m_phone", own) == ["mark:1"]
+        everyone = {**layout, "tuning": {"fingerprint_marks_scope": "all"}}
+        assert slugs("d_watch", everyone) == ["mark:1", "mark:2"]
+    finally:
+        sextant._set_truth_marks([])

@@ -440,6 +440,13 @@ TUNING_SPEC = {
     # Truth marks ("it is actually here", Live page) double as fingerprint references at
     # the marked point, in the marking thing's own scale: off to use only the proxies.
     "fingerprint_marks": (True, bool),
+    # Whose marks guide a thing. A mark records how ONE device looks from one
+    # place; a phone held in a hand and a watch on a wrist do not look alike.
+    # With every mark used for everything, a watch at the kitchen counter
+    # matched two marks of someone else's phone on the couch and was averaged
+    # half way there. "class": a thing's own marks and those of things of its
+    # class (the cats share Meg's); "own": its own only; "all": as before 3.17.35.
+    "fingerprint_marks_scope": ("class", str, ("own", "class", "all")),
     # Near-field anchor (see _elect_anchor): a thing one proxy reads at
     # under anchor_max_m, with every other proxy at least anchor_ratio times
     # farther, for anchor_secs, is placed AT that proxy - a watch on the
@@ -599,8 +606,25 @@ def _mark_basis(layout):
     return rx, things, fade
 
 
-def _mark_refs(layout):
-    """The truth-mark references to add to the proxies', or None when switched off."""
+def _mark_refs(layout, entity=None):
+    """The truth-mark references that may guide ``entity`` (every one when it
+    is None), or None when there are none or they are switched off."""
+    refs = _all_mark_refs(layout)
+    scope = _tuning(layout, "fingerprint_marks_scope")
+    if not refs or entity is None or scope == "all":
+        return refs
+    classes = layout.get("thing_classes") if isinstance(layout, dict) else None
+    mine = (classes or {}).get(entity)
+
+    def guides(ref):
+        if ref.get("entity") == entity:
+            return True
+        return scope == "class" and mine is not None and (classes or {}).get(ref.get("entity")) == mine
+
+    return [r for r in refs if guides(r)] or None
+
+
+def _all_mark_refs(layout):
     if not _truth_marks or not _tuning(layout, "fingerprint_marks"):
         return None
     key = _mark_basis(layout)
@@ -609,6 +633,7 @@ def _mark_refs(layout):
         for mark in _truth_marks:
             ref = truth_mod.mark_reference(mark, samples=_rebased_samples(layout, mark))
             if ref:
+                ref["entity"] = mark.get("entity")   # whose mark it is: see fingerprint_marks_scope
                 refs.append(ref)
         _mark_ref_cache.update(key=key, refs=refs)
     return _mark_ref_cache["refs"] or None
@@ -2096,7 +2121,7 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
         fp_gain = _tuning(layout, "fingerprint_ref_gain")
         if _tuning(layout, "fingerprint_auto_gain"):
             fp_gain *= _fingerprint_db.gain_for(entity)
-        refs_by_floor = fingerprint.build_references(layout, _fingerprint_db.vectors(), fp_gain, extra=_mark_refs(layout))
+        refs_by_floor = fingerprint.build_references(layout, _fingerprint_db.vectors(), fp_gain, extra=_mark_refs(layout, entity))
         thing_vec = fingerprint.thing_vector(layout)
     # A floor with references can compete on its fingerprint with a single
     # receiver hearing the thing; trilateration alone needs three.
