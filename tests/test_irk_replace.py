@@ -17,8 +17,8 @@ def run(coro):
 
 
 class Ent:
-    def __init__(self, entity_id, platform, unique_id):
-        self.entity_id, self.platform, self.unique_id = entity_id, platform, unique_id
+    def __init__(self, entity_id, platform, unique_id, device_id=None):
+        self.entity_id, self.platform, self.unique_id, self.device_id = entity_id, platform, unique_id, device_id
         self.domain = entity_id.split(".")[0]
 
 
@@ -29,8 +29,11 @@ class EntReg:
     def async_get_entity_id(self, domain, platform, uid):
         return next((e.entity_id for e in self.entities.values() if (e.domain, e.platform, e.unique_id) == (domain, platform, uid)), None)
 
-    def async_update_entity(self, entity_id, new_unique_id=None):
-        self.entities[entity_id].unique_id = new_unique_id
+    def async_update_entity(self, entity_id, new_unique_id=None, device_id=None):
+        if new_unique_id:
+            self.entities[entity_id].unique_id = new_unique_id
+        if device_id:
+            self.entities[entity_id].device_id = device_id
 
     def async_remove(self, entity_id):
         del self.entities[entity_id]
@@ -45,6 +48,12 @@ class DevReg:
 
     def async_get_device(self, identifiers=None):
         return next((d for d in self.devices.values() if d.identifiers & set(identifiers)), None)
+
+    def async_remove_device(self, device_id):
+        # As Home Assistant does: removing a device removes its entities.
+        del self.devices[device_id]
+        for e in [e for e in self.er.entities.values() if e.device_id == device_id]:
+            del self.er.entities[e.entity_id]
 
     def async_update_device(self, device_id, new_identifiers=None):
         self.devices[device_id].identifiers = new_identifiers
@@ -93,7 +102,10 @@ def house(monkeypatch):
         "d3": types.SimpleNamespace(id="d3", identifiers={("hue", 17)}, name="Lamp", name_by_user=None),   # a number, not text
         "d4": types.SimpleNamespace(id="d4", identifiers={("solo",), ("a", "b", "c")}, name="Odd", name_by_user=None),  # not pairs
     })
+    dr_.er = er_
     monkeypatch.setattr(ir.er, "async_get", lambda hass: er_)
+    monkeypatch.setattr(ir.er, "async_entries_for_device", lambda reg, device_id, include_disabled_entities=False:
+                        [e for e in reg.entities.values() if e.device_id == device_id], raising=False)
     monkeypatch.setattr(ir.dr, "async_get", lambda hass: dr_)
     hass = types.SimpleNamespace(config_entries=Entries([phone, other, bermuda]))
     return hass, phone, er_, dr_
@@ -152,7 +164,32 @@ def test_a_rerun_after_a_half_done_swap_drops_the_copies_and_finishes(house):
 def test_a_dry_run_counts_and_changes_nothing(house):
     hass, phone, er_, dr_ = house
     out = run(ir.async_replace_irk(hass, phone, NEW, dry_run=True))
-    assert out == {"device": "Eilee Phone", "entities": 4, "devices": 2, "copies_removed": 0, "dry_run": True}
+    assert out == {"device": "Eilee Phone", "entities": 4, "devices": 2, "copies_removed": 0, "merges": 0, "dry_run": True}
     assert phone.data["irk"] == OLD and hass.config_entries.calls == []
     assert er_.entities["sensor.private_ble_device_eilee_phone_area"].unique_id == f"{OLD}_area"
+
+
+def test_two_devices_on_the_new_key_become_the_older_one_keeping_every_original(house):
+    # The live state after two runs that stopped part way: the original
+    # Bermuda entities hang off a device made today on the NEW key; the user's
+    # July device still has the OLD key and holds only copies.
+    hass, phone, er_, dr_ = house
+    dr_.devices = {
+        "july": types.SimpleNamespace(id="july", identifiers={("bermuda", OLD)}, name="562ea2", name_by_user="Eilee Phone", created_at=1),
+        "today": types.SimpleNamespace(id="today", identifiers={("bermuda", NEW)}, name="Eilee Phone", name_by_user=None, created_at=2),
+    }
+    er_.entities = {}
+    for eid, uid, dev in (("sensor.private_ble_device_eilee_phone_area", f"{NEW}_area", "today"),
+                          ("sensor.private_ble_device_eilee_phone_area_2", f"{OLD}_area", "july")):
+        er_.entities[eid] = Ent(eid, "bermuda", uid, dev)
+    out = run(ir.async_replace_irk(hass, phone, NEW, dry_run=True))
+    assert out["merges"] == 1 and out["copies_removed"] == 1
+    run(ir.async_replace_irk(hass, phone, NEW))
+    assert list(dr_.devices) == ["july"] and dr_.devices["july"].identifiers == {("bermuda", NEW)}
+    assert list(er_.entities) == ["sensor.private_ble_device_eilee_phone_area"]
+    assert er_.entities["sensor.private_ble_device_eilee_phone_area"].device_id == "july"
+
+
+def test_mask_hides_keys():
+    assert ir.mask(f"Identifiers {{('private_ble_device', '{NEW}')}} taken") == "Identifiers {('private_ble_device', '<key>')} taken"
 

@@ -1153,6 +1153,9 @@ async def ws_irk_replace(hass, connection, msg):
         result = await irk_replace.async_replace_irk(hass, entry, msg["irk"], dry_run=msg["dry_run"])
     except irk_replace.IrkReplaceError as e:
         return _error(connection, msg, str(e))
+    except Exception as e:  # noqa: BLE001 - the registries' own errors quote identifiers, i.e. keys
+        _LOGGER.error("Replacing a key failed: %s", irk_replace.mask(e))
+        return _error(connection, msg, f"Home Assistant refused part of the change: {irk_replace.mask(e)}")
     connection.send_result(msg["id"], result)
 
 

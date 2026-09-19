@@ -22,6 +22,7 @@ from __future__ import annotations
 import base64
 import binascii
 import logging
+import re
 
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.helpers import device_registry as dr
@@ -35,6 +36,14 @@ BERMUDA_DOMAIN = "bermuda"
 
 class IrkReplaceError(Exception):
     """Why the key could not be replaced, in words for the person asking."""
+
+
+_KEY = re.compile(r"[0-9a-fA-F]{32}")
+
+
+def mask(text) -> str:
+    """Hide anything shaped like a key: an error from the registries quotes identifiers verbatim."""
+    return _KEY.sub("<key>", str(text))
 
 
 def parse_irk(value: str) -> str | None:
@@ -97,6 +106,28 @@ def _device_name(hass, irk: str) -> str | None:
     return (device.name_by_user or device.name) if device else None
 
 
+def _merge_or_move(ent_reg, dev_reg, device, swapped) -> None:
+    """Give ``device`` its new identifiers, merging with a device that already has them.
+
+    A swap that stopped part way leaves a second device on the new key (the
+    integration made it when it came back up). Two devices cannot share an
+    identifier, so they become one: the older - the one people named and put
+    in an area - is kept, the other's entities move onto it (removing a device
+    removes its entities), and the other goes.
+    """
+    other = dev_reg.async_get_device(identifiers=swapped)
+    if other is None or other.id == device.id:
+        dev_reg.async_update_device(device.id, new_identifiers=swapped)
+        return
+    born = lambda d: getattr(d, "created_at", None) or 0  # noqa: E731
+    keep, drop = (device, other) if born(device) <= born(other) else (other, device)
+    for e in er.async_entries_for_device(ent_reg, drop.id, include_disabled_entities=True):
+        ent_reg.async_update_entity(e.entity_id, device_id=keep.id)
+    dev_reg.async_remove_device(drop.id)
+    if keep is device:
+        dev_reg.async_update_device(device.id, new_identifiers=swapped | set(other.identifiers))
+
+
 async def async_replace_irk(hass, entry, new_value: str, dry_run: bool = False) -> dict:
     """Swap ``entry``'s key for ``new_value`` everywhere; returns what changed.
 
@@ -128,8 +159,12 @@ async def async_replace_irk(hass, entry, new_value: str, dry_run: bool = False) 
     name = _device_name(hass, old)
     carrying = [d for d in _devices(dev_reg) if d is not None and any(_carries(i, old) for i in d.identifiers)]
     if dry_run:
+        merges = sum(
+            1 for d in carrying
+            if (o := dev_reg.async_get_device(identifiers={_swap(i, old, new) for i in d.identifiers})) is not None and o.id != d.id
+        )
         return {"device": name or entry.title, "entities": len(entities), "devices": len(carrying),
-                "copies_removed": len(copies), "dry_run": True}
+                "copies_removed": len(copies), "merges": merges, "dry_run": True}
 
     # Nothing may hold the old identity while it is rewritten: the device's
     # own entry and Bermuda, which resolves through it.
@@ -145,7 +180,9 @@ async def async_replace_irk(hass, entry, new_value: str, dry_run: bool = False) 
             ent_reg.async_update_entity(e.entity_id, new_unique_id=e.unique_id.replace(old, new))
             renamed += 1
         for device in carrying:
-            dev_reg.async_update_device(device.id, new_identifiers={_swap(i, old, new) for i in device.identifiers})
+            if dev_reg.async_get(device.id) is None:
+                continue   # merged into another already
+            _merge_or_move(ent_reg, dev_reg, device, {_swap(i, old, new) for i in device.identifiers})
             devices += 1
         hass.config_entries.async_update_entry(entry, data={**entry.data, "irk": new}, unique_id=new)
     finally:
