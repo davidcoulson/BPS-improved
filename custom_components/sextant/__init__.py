@@ -2708,6 +2708,35 @@ async def process_entities(hass, new_global_data):
         _LOGGER.warning("Person locations not updated: %s", e)
 
 
+# thing -> ((floor, room, spot), when it got there): when an owned thing
+# arrived at its current place, for persons.pick.
+_arrivals = {}
+
+
+def _arrived_at(hass, ent, row, now):
+    """When this thing reached the room or spot it is in now.
+
+    Watched from here while it stays put; the first time a thing is seen
+    after a start, asked of the position history instead, which outlives
+    restarts - otherwise every thing would look freshly arrived after each one.
+    """
+    key = (row.get("floor"), row.get("zone"), row.get("sub_zone"))
+    prev = _arrivals.get(ent)
+    if prev is not None and prev[0] == key:
+        return prev[1]
+    since = now
+    if prev is None:
+        try:
+            stays = [s for s in get_position_history(hass).timeline(ent, now - 86400, now, max_segments=50).get("stays", [])
+                     if not s.get("unheard")]
+            if stays and stays[-1].get("room") == row.get("zone"):
+                since = float(stays[-1]["start"])
+        except Exception:  # noqa: BLE001 - no history is not an error; "just arrived" is
+            pass
+    _arrivals[ent] = (key, since)
+    return since
+
+
 def _update_person_sensors(hass):
     """Each owner's location from the thing that speaks for them (persons.py)."""
     layout = get_layout(hass)
@@ -2726,9 +2755,11 @@ def _update_person_sensors(hass):
             row = rows.get(ent)
             if not row or not persons_mod.locates_owner(layout, ent, classes.get(ent)):
                 continue
+            zst = _zone_state.get(ent)
             candidates.append({
                 "ent": ent, "cls": classes.get(ent), "updated": row.get("updated"),
-                "still_since": (_zone_state.get(ent) or {}).get("still_since"),
+                "moving": bool(zst) and zst.get("still_since") is None,
+                "arrived": _arrived_at(hass, ent, row, now),
                 "zone": row.get("zone"), "sub_zone": row.get("sub_zone"), "floor": row.get("floor"),
             })
         slug = person.split(".", 1)[1]

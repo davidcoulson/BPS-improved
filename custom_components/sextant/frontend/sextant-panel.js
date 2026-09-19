@@ -950,8 +950,10 @@ class SextantLive extends LitElement {
     .list li.group .chev { --mdc-icon-size: 18px; color: var(--secondary-text-color); }
     .list li.group .gavatar { width: 22px; height: 22px; border-radius: 50%; overflow: hidden; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; background: var(--secondary-background-color, #eee); }
     .list li.group .gavatar img { width: 100%; height: 100%; object-fit: cover; }
-    .list li.group .gname { flex: 0 1 auto; }
-    .list li.group .gwhere { margin-left: auto; color: var(--secondary-text-color); }
+    .list li.group .gavatar { flex: none; }
+    .list li.group .gname { flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .list li.group .gcount { flex: none; }
+    .list li.group .gwhere { margin-left: auto; min-width: 0; max-width: 55%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right; color: var(--secondary-text-color); }
     .quick { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 6px; margin: 2px 0 4px; }
     .quick .qa { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; padding: 6px 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border: 1px solid var(--divider-color, #ddd); border-radius: 10px; background: var(--ha-card-background, var(--card-background-color, #fff)); color: var(--primary-text-color); font: inherit; font-size: 11px; cursor: pointer; }
     .quick .qa:hover { filter: brightness(0.97); }

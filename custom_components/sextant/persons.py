@@ -6,9 +6,13 @@ question is which one speaks for them. The phone left on the couch for an
 hour does not; the watch that just crossed the room does. So:
 
 1. Only things heard recently (within stale_after_secs) and placed in a room.
-2. A thing that moved in the last RECENT_MOVE_SECS beats one that has sat
-   still longer - it is being carried.
-3. Then what is usually on a body: a pet's own tag, a watch, a phone.
+2. A thing moving now, or that arrived where it is within RECENT_MOVE_SECS,
+   beats one that has sat there longer - it is being carried. Among those,
+   what is usually on a body wins: a pet's own tag, a watch, a phone.
+3. When nothing is on the move, the thing that arrived where it is most
+   recently wins: the phone that came downstairs this morning, not the
+   watch that has sat on its charger since last night. Class does not
+   decide here - it did at first, and the watch on the nightstand won.
 
 Only things that give their owner's location take part (locates_owner): by
 class a watch, a phone or a person's or pet's own tag; headphones, keys, a
@@ -57,8 +61,9 @@ def locates_owner(layout, ent, cls) -> bool:
 def pick(things, now: float, stale_after: float):
     """The thing that speaks for its owner now, or None.
 
-    ``things`` are dicts: ent, cls, updated (epoch s), still_since (epoch s or
-    None while moving), zone, sub_zone, floor.
+    ``things`` are dicts: ent, cls, updated (epoch s), moving (bool),
+    arrived (epoch s: when it reached the room or spot it is in now),
+    zone, sub_zone, floor.
     """
     fresh = [
         t for t in things
@@ -69,8 +74,10 @@ def pick(things, now: float, stale_after: float):
         return None
 
     def key(t):
-        still = 0.0 if t.get("still_since") is None else max(0.0, now - t["still_since"])
-        return (still > RECENT_MOVE_SECS, -CARRY_PRIORITY.get(t.get("cls"), 0), still)
+        arrived = t.get("arrived")
+        age = 0.0 if t.get("moving") else max(0.0, now - arrived) if isinstance(arrived, (int, float)) else float("inf")
+        recent = age <= RECENT_MOVE_SECS
+        return (not recent, -CARRY_PRIORITY.get(t.get("cls"), 0) if recent else 0, age)
 
     return min(fresh, key=key)
 

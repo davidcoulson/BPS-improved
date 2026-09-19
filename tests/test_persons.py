@@ -7,8 +7,9 @@ NOW = 10_000.0
 
 
 def thing(ent, cls, still_for=None, heard_ago=5.0, zone="Great Room", spot=None, floor="Ground Floor"):
+    # still_for: how long since it arrived where it is (None: moving now).
     return {"ent": ent, "cls": cls, "updated": NOW - heard_ago,
-            "still_since": None if still_for is None else NOW - still_for,
+            "moving": still_for is None, "arrived": NOW - (still_for or 0),
             "zone": zone, "sub_zone": spot or "unknown", "floor": floor}
 
 
@@ -59,4 +60,14 @@ def test_headphones_keys_and_bags_do_not_locate_their_owner_unless_asked():
     assert not persons.locates_owner(layout, "bag", "bag") and not persons.locates_owner(layout, "x", None)
     assert persons.locates_owner(layout, "pods2", "headphones")      # switched on for this pair
     assert not persons.locates_owner(layout, "phone2", "phone")      # switched off for this phone
+
+
+def test_when_nothing_moves_the_latest_to_arrive_speaks_not_the_watch_on_its_charger():
+    # The watch has sat on the nightstand since last night; the phone came
+    # downstairs an hour ago. Neither is moving now.
+    watch = thing("watch", "watch", still_for=9 * 3600, zone="Master Bedroom", spot="David Bedside Table")
+    phone = thing("phone", "phone", still_for=3600, zone="Morning Room")
+    assert persons.pick([watch, phone], NOW, 120)["ent"] == "phone"
+    # Walking with the phone in a pocket (moving, same room) keeps it ahead too.
+    assert persons.pick([watch, thing("phone", "phone")], NOW, 120)["ent"] == "phone"
 

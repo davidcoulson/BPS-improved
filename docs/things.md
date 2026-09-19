@@ -55,8 +55,10 @@ Which thing speaks for a person: only things that **give their owner's
 location** count - by default a watch, a phone, or a person's or pet's own
 tag, not headphones, keys, a bag or other tags, which go along only some of
 the time (the thing dialog switches it either way); of those, only ones
-heard recently and placed in a room; one that moved in the last ten minutes beats one that has
-sat still longer (the phone left on the couch is not you); then what is
-usually on a body - a pet's own tag, a watch, a phone, headphones; then
-whichever moved last.
+heard recently and placed in a room. One moving now, or that arrived where
+it is in the last ten minutes, beats one that has sat still longer (the
+phone left on the couch is not you), and among those a pet's own tag, a
+watch, then a phone. When nothing is on the move, the one that arrived
+where it is most recently wins - the phone you carried downstairs, not the
+watch on its charger since last night.
 
