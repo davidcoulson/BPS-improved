@@ -925,6 +925,9 @@ def _kf(x, y, vx=0.0, vy=0.0, sigma_px=10.0, floor="F"):
 
 def _elect(entity, x, t, vx=0.0, layout=None, sigma=10.0):
     layout = layout if layout is not None else {}
+    # These tests start the clock at 0; the warm-up has its own test below.
+    tuning = {"zone_lock_warmup_secs": 0.0, **(layout.get("tuning") or {})}
+    layout = {**layout, "tuning": tuning}
     zone, locked, _speed = sextant._elect_zone(
         entity, "F", "Kitchen" if x < 100 else "Dining", Point(x, 50.0),
         _kf(x, 50.0, vx=vx, sigma_px=sigma), _two_rooms(), 100.0, layout, now=t,
@@ -1931,4 +1934,14 @@ def test_two_proxies_on_one_spot_are_not_each_others_runner_up():
     assert ev(lay, ["right", "left"]) == 1.0
     assert sextant._spot_proxies({"proxy": ["a", "", 3, "b"]}) == ("a", "b")
     assert sextant._spot_proxies({"proxy": "a"}) == ("a",) and sextant._spot_proxies({}) == ()
+
+
+def test_no_lock_in_the_first_minutes_after_a_start():
+    # A phone on a kitchen counter against the foyer wall was locked into the
+    # foyer by the wandering first fixes after a restart.
+    sextant._zone_state.clear()
+    warm = {"tuning": {"zone_lock_warmup_secs": 120.0}}
+    for t in (0.0, 10.0, 20.0, 30.0, 60.0, 110.0):
+        assert _elect("e", 90, t, layout=warm) == ("Kitchen", False)
+    assert _elect("e", 90, 130.0, layout=warm) == ("Kitchen", True)
 

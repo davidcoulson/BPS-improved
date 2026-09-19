@@ -370,6 +370,10 @@ TUNING_SPEC = {
     "stationary_secs": (20.0, float, 0.0, 600.0),       # still this long -> zone locked
     "zone_unlock_margin": (1.0, float, 0.0, 20.0),      # m outside the locked zone...
     "zone_unlock_secs": (30.0, float, 0.0, 600.0),      # ...for this long -> unlocked
+    # No lock until a thing has been tracked this long since Sextant started
+    # (or since it changed floor): the first fixes after a restart wander, and
+    # a phone on a kitchen counter was locked into the foyer next door that way.
+    "zone_lock_warmup_secs": (120.0, float, 0.0, 3600.0),
     "subzone_switch_secs": (20.0, float, 0.0, 600.0),
     # Sub-zone election (see _elect_subzone): the smoothed share of the fix's
     # uncertainty that must fall inside a sub-zone before it is entered, and
@@ -3158,7 +3162,7 @@ def _elect_zone(entity, floor_name, instant_zone, point, kf_state, zone_polys, s
         st = _zone_state[entity] = {
             "floor": floor_name, "zone": None, "since": now, "probs": {},
             "challenge": None, "still_since": None, "moving_since": None,
-            "away_since": None, "outvoted_since": None, "locked": False,
+            "away_since": None, "outvoted_since": None, "locked": False, "born": now,
         }
 
     # 1. Membership, smoothed.
@@ -3211,6 +3215,7 @@ def _elect_zone(entity, floor_name, instant_zone, point, kf_state, zone_polys, s
         and now - st["still_since"] >= stationary_secs
         and now - st["since"] >= stationary_secs   # held long enough to mean something
         and best == incumbent                      # and the evidence still says so
+        and now - st.get("born", now) >= _tuning(layout, "zone_lock_warmup_secs")  # not in the settling first minutes
     ):
         st["locked"] = True
         st["away_since"] = None

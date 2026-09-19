@@ -43,6 +43,7 @@ distances in metres.
 | `stationary_secs` | 20 | still this long locks the room |
 | `zone_unlock_margin` | 1.0 | metres outside the locked room |
 | `zone_unlock_secs` | 30 | for this long to unlock |
+| `zone_lock_warmup_secs` | 120 | no stationary lock until a thing has been tracked this long since a start or floor change |
 | `subzone_switch_secs` | 20 | dwell before a spot change |
 | `subzone_enter_prob` | 0.5 | smoothed share needed to enter a spot |
 | `subzone_unlock_margin` | 1.0 | metres outside a spot before leaving it |
