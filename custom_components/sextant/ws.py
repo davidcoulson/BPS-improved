@@ -80,6 +80,13 @@ def _manifest_version() -> str | None:
         return None
 
 
+# The version this Home Assistant process loaded. HACS replaces the files on
+# disk but the running code (and the panel URL, which carries the version)
+# stays the old one until Home Assistant restarts; comparing the two tells the
+# panel whether a reload is enough or a restart is needed.
+RUNNING_VERSION = _manifest_version()
+
+
 def _thing_names(hass, entities, layout=None) -> dict:
     """{slug: display name} for the tracked entities.
 
@@ -164,9 +171,11 @@ async def ws_layout_get(hass, connection, msg):
         # Display names: what Bermuda calls the device, overridden by the name
         # the user gave the device in Home Assistant (device registry).
         "names": _safe(lambda: _thing_names(hass, tracked, layout), {}),
-        # The installed integration version: the panel compares it with the
-        # module it is running and offers a reload when they differ.
+        # The installed integration version, and the one Home Assistant is
+        # running: installed but not running needs a restart; running but
+        # newer than the page only needs a reload.
         "app_version": await hass.async_add_executor_job(_manifest_version),
+        "running_version": RUNNING_VERSION,
         "scanners": {
             addr: {"slug": info.get("slug"), "name": info.get("name"), "area": info.get("area_name"),
                    "is_remote": info.get("is_remote")}
@@ -187,7 +196,8 @@ def merge_editor_layout(current, incoming):
     thing names, classes, colours, heights, the auto-calibration flag) is
     written by other pages and by the backend, and inside a floor the
     per-proxy ``correction`` and the ``calibration`` stamp are written by
-    calibration - none of which the editor edits. Taking them from the
+    calibration, and the ``bias_field`` by its service - none of which the
+    editor edits. Taking them from the
     current layout means a Save can no longer wipe corrections that auto
     calibration applied five minutes earlier, or a colour picked on the
     Things page while the editor sat open (that is what happened).
@@ -203,9 +213,12 @@ def merge_editor_layout(current, incoming):
         floor = dict(floor)
         old = by_name.get(str(floor.get("name")))
         if old is not None:
-            floor.pop("calibration", None)
-            if isinstance(old.get("calibration"), dict):
-                floor["calibration"] = old["calibration"]
+            # Server-owned per-floor keys: the editor's copy is whatever it
+            # loaded, possibly hours ago, so the store's version always wins.
+            for owned in ("calibration", "bias_field"):
+                floor.pop(owned, None)
+                if isinstance(old.get(owned), dict):
+                    floor[owned] = old[owned]
             corrections = {str(r.get("entity_id")): r.get("correction") for r in old.get("receivers", []) if isinstance(r, dict)}
             receivers = []
             for r in floor.get("receivers", []):
@@ -219,6 +232,13 @@ def merge_editor_layout(current, incoming):
         floors.append(floor)
     merged["floor"] = floors
     return merged
+
+
+def _confine_spots(layout):
+    """Clip every spot to its one room; names of the spots that changed."""
+    from .zone_adjust import confine_spots  # noqa: PLC0415 - shapely is heavy
+
+    return [name for floor in layout.get("floor") or [] for name in confine_spots(floor)]
 
 
 @websocket_api.websocket_command({
@@ -246,6 +266,8 @@ async def ws_layout_save(hass, connection, msg):
             return _error(connection, msg, "invalid map to remove")
     async with LAYOUT_LOCK:
         layout = merge_editor_layout(get_layout(hass), layout)
+        # A spot belongs to one room: clip each to its room before it is stored.
+        confined = await hass.async_add_executor_job(_confine_spots, layout)
         await save_layout(hass, layout)
     if remove_target is not None and remove_target.exists():
         try:
@@ -256,7 +278,9 @@ async def ws_layout_save(hass, connection, msg):
         core.refresh_receivers_from_coords(hass, json.dumps(layout))
     except Exception as e:  # noqa: BLE001 - calibration bookkeeping must not fail a save
         _LOGGER.debug("refresh_receivers_from_coords: %s", e)
-    connection.send_result(msg["id"], {"version": get_layout_version(hass)})
+    connection.send_result(
+        msg["id"], {"version": get_layout_version(hass), "confined": confined}
+    )
 
 
 @websocket_api.websocket_command({
@@ -439,7 +463,7 @@ async def _evaluate_mark(hass, core, mark, weights=None, gains=None):
     if gains is not None:
         kwargs["gains"] = gains
     return await hass.async_add_executor_job(
-        lambda: truth_mod.evaluate(mark["samples"], floor, (mark["x"], mark["y"]), scale, zone_of, core._solve_floor_jobs, refs_for_gain, **kwargs)
+        lambda: truth_mod.evaluate(core._rebased_samples(layout, mark), floor, (mark["x"], mark["y"]), scale, zone_of, core._solve_floor_jobs, refs_for_gain, **kwargs)
     )
 
 
@@ -452,7 +476,7 @@ def _current_weight(core, layout, entity):
 
 
 def _refresh_mark_refs(core, store):
-    core._fingerprint_db.extra_refs = [r for r in (truth_mod.mark_reference(m) for m in store.get("marks", [])) if r]
+    core._set_truth_marks(store.get("marks", []))
 
 
 @websocket_api.websocket_command({
@@ -612,6 +636,86 @@ async def ws_history_get(hass, connection, msg):
     connection.send_result(msg["id"], data)
 
 
+@websocket_api.websocket_command({
+    vol.Required("type"): "sextant/history/timeline",
+    vol.Required("entity"): str,
+    vol.Optional("hours"): vol.All(vol.Coerce(float), vol.Range(min=0.1, max=24 * 31)),
+})
+@websocket_api.async_response
+async def ws_history_timeline(hass, connection, msg):
+    """Where one thing has been, as stays: floor, room, spot, from - to.
+
+    What the Live page's timeline and its "here for" line are drawn from.
+    Covers the last ``hours`` (default 24), capped at what history retains.
+    """
+    hist = _history(hass)
+    now = time.time()
+    span = min(float(msg.get("hours") or 24.0) * 3600.0, hist.cfg["max_age"])
+    data = hist.timeline(msg["entity"], now - span, now)
+    data.update({"now": now, "retained": hist.retained(msg["entity"])})
+    connection.send_result(msg["id"], data)
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "sextant/floor_bias_map",
+    vol.Required("floor"): str,
+    vol.Required("other"): str,
+})
+@websocket_api.async_response
+async def ws_floor_bias_map(hass, connection, msg):
+    """This floor's election prior against another's, per half-metre cell (see floor_bias_map)."""
+    core = _core()
+    layout = get_layout(hass)
+    frames = core._floor_frames(hass, layout)
+    result = await hass.async_add_executor_job(core.floor_bias_map, layout, frames, msg["floor"], msg["other"])
+    if result is None:
+        return _error(connection, msg, "both floors need a scale and this one needs rooms")
+    connection.send_result(msg["id"], result)
+
+
+@websocket_api.websocket_command({vol.Required("type"): "sextant/thing/readings", vol.Required("entity"): str})
+@websocket_api.async_response
+async def ws_thing_readings(hass, connection, msg):
+    """Per placed proxy, the reading Sextant would use for one thing, and why not.
+
+    The answer to "Bermuda hears it there, so why does Sextant not use it":
+    for every placed receiver, whether a reading was found by the proxy's
+    address or by its slug, its distance and age, and whether the stale gate
+    would drop it. Also lists every prefix Bermuda's tracked devices publish
+    that resembles this thing's, since two devices sharing a prefix would
+    overwrite each other's readings.
+    """
+    core = _core()
+    ent = msg["entity"]
+    layout = get_layout(hass) or {}
+    max_age = core._reading_max_age(layout)
+    by_address = bermuda_source.async_get_readings_by_address(hass) or {}
+    by_slug = bermuda_source.async_get_readings(hass) or {}
+    rows = []
+    for floor in layout.get("floor", []):
+        for rx in floor.get("receivers", []):
+            address = str(rx.get("address") or "").lower()
+            reading, source = by_address.get((ent, address)), "address"
+            if reading is None:
+                reading, source = by_slug.get((ent, rx.get("entity_id"))), "slug"
+            age = None if reading is None else reading.get("age")
+            rows.append({
+                "floor": floor.get("name"),
+                "receiver": rx.get("entity_id"),
+                "address": address or None,
+                "source": source if reading is not None else None,
+                "distance": None if reading is None else reading.get("distance"),
+                "age": age,
+                "stale": bool(max_age and age is not None and age > max_age),
+            })
+    stem = ent.rsplit("_", 1)[0]
+    prefixes = sorted({p for p, _a in by_address if p == ent or p.startswith(stem)})
+    connection.send_result(msg["id"], {
+        "entity": ent, "max_age": max_age, "receivers": rows, "similar_prefixes": prefixes,
+        "address_keys_for_entity": sum(1 for p, _a in by_address if p == ent),
+    })
+
+
 @websocket_api.websocket_command({vol.Required("type"): "sextant/history/clear", vol.Optional("entity"): str})
 @websocket_api.require_admin
 @websocket_api.async_response
@@ -759,6 +863,26 @@ async def ws_adjust_zones(hass, connection, msg):
         _LOGGER.error("adjust_zones (%s) failed: %s", target, e)
         return _error(connection, msg, "Zone adjustment failed")
     connection.send_result(msg["id"], result)
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "sextant/registration",
+    vol.Optional("layout"): dict,
+})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_registration(hass, connection, msg):
+    """How the floors stack, from their shared pins (registration.py).
+
+    Given a ``layout`` it grades that - the Edit page sends its unsaved draft,
+    so a pin's effect on the fit shows while it is still being dragged.
+    """
+    from . import registration  # noqa: PLC0415
+
+    layout = msg.get("layout") or get_layout(hass) or {}
+    # Off the loop: the suspect search is combinatorial in the pin count, and
+    # this is called with whatever draft the editor holds, on every drag.
+    connection.send_result(msg["id"], await hass.async_add_executor_job(registration.report, layout))
 
 
 # --- KPI --------------------------------------------------------------------------
@@ -1200,9 +1324,9 @@ async def ws_advice(hass, connection, msg):
 COMMANDS = (
     ws_advice,
     ws_layout_get, ws_layout_save, ws_tuning_set, ws_thing_tune,
-    ws_history_index, ws_history_get, ws_history_clear,
+    ws_history_index, ws_history_get, ws_history_timeline, ws_history_clear, ws_thing_readings, ws_floor_bias_map,
     ws_calibration_status, ws_calibration_action, ws_selftest, ws_scanner_linking, ws_receivers, ws_beacon_links,
-    ws_adjust_zones, ws_scanner_ignore, ws_kpi, ws_kpi_baselines, ws_kpi_baseline_save, ws_kpi_baseline_delete,
+    ws_adjust_zones, ws_registration, ws_scanner_ignore, ws_kpi, ws_kpi_baselines, ws_kpi_baseline_save, ws_kpi_baseline_delete,
     ws_truth_mark, ws_truth_list, ws_truth_delete, ws_truth_evaluate, ws_truth_apply,
     ws_bermuda_candidates, ws_bermuda_tracked, ws_bermuda_track, ws_bermuda_findmy, ws_bermuda_findmy_add,
     ws_bermuda_findmy_remove, ws_bermuda_options, ws_bermuda_options_set, ws_bermuda_scanners, ws_bermuda_tiles,

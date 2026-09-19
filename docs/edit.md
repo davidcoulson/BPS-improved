@@ -11,12 +11,41 @@ centimetres inside the room you are dragging it from, and stays on that
 side until you pull it well past the wall: a proxy in an outlet or a switch
 is part of the wall, and which side it lands on decides which room it
 counts for. Hold Alt to place one freely. Draw rooms, spots and no-go areas as polygons: vertices
-drag, edge midpoints add a vertex, right-click removes one. Set the scale
+drag, edge midpoints add a vertex, right-click removes one. An edge within
+7° of horizontal, vertical or 45° snaps exact as you draw or drag a
+corner - the preview turns orange when it does - so right angles and cut
+corners come out clean without aiming; a corner between two such edges
+lands where they cross. Hold Alt to place a corner freely; a wall at any
+other angle is never close enough to snap. **Square up** on a selected
+room or spot does the same to a shape drawn before. A selected spot also
+takes its real size: measure the furniture, type the width (across the
+plan) and depth (up the plan) in inches or centimetres, pick the corner to
+keep where it is, and **Set size** makes the spot that exact rectangle.
+**Proxies on this spot** names the proxies sitting on or against the
+furniture (a nightstand, an outlet at each end of a couch): when one hears a
+thing close by and clearly closer than every proxy not on the spot, that
+counts as the thing being on the spot, however wide the position estimate
+is. Its weight fades as the reading grows (full within
+1.2 m, none from 2 m) and as another proxy reads nearly as close, so being
+the nearest proxy from across the room says nothing; the edges are on the
+Tuning page under Spots. **Entry share** overrides the Tuning page's
+`subzone_enter_prob` for this spot alone; blank uses it.
+Pinch to zoom on a phone or tablet. Set the scale
 by measuring a known distance. Give a floor a *level* (0 ground, -1
 basement, 1 above) for ordering and an election *bias* (1.15 gives the
-ground floor a standing head start). Padlocks lock rooms, spots and
+ground floor a standing head start; where one number for the whole floor
+is too blunt, see [bias fields](positioning.md)). **Show floor bias**
+under the floor's settings colours the plan by where its election prior
+leans against a neighbouring floor's, at the same place in the house: grey
+where the two are even, green where a thing leans to the other floor, red
+where it leans to this one. The Basement and the Second Floor are compared
+with the floor nearest in level; a floor between two picks either. It
+shows the saved layout. Padlocks lock rooms, spots and
 proxies against selection so you cannot drag a wall while placing a proxy;
-rooms start locked. A selected spot can be limited to the thing classes it
+rooms start locked. A spot belongs to one room: the room under its first
+corner (or under its middle, if that corner is outside every room). Save
+trims any part that pokes through that room's walls, and a spot dragged
+wholly into another room moves to that room. A selected spot can be limited to the thing classes it
 takes — pick phone, watch and keys on a bedside table, cat on a cat bed —
 and nothing else will be placed there; pick none and it takes anything.
 Person also takes a man, a woman or a child and Pet also takes the dog or
@@ -47,3 +76,67 @@ Two other passes handle what weight cannot: `--diagonal` drops the
 heavily as a wall, and `--dashes` drops dashed lines, which mark what is
 not built on this storey. Keep the original — every plan is drawn
 differently, and this is a one-way trip.
+
+## Lining the floors up
+
+Each floor is its own drawing, at its own resolution, cropped its own way,
+so out of the box Sextant has no idea how they stack: it cannot tell
+whether a spot on the Second Floor plan is above the foyer or above the
+garage. **Pins** fix that.
+
+Pick points that run straight up through the house and that you can find on
+every plan: outside corners, a stair post, a stair opening, a chimney
+breast. Avoid interior room corners: interior walls move between storeys,
+so the corner of a room upstairs is often not above the corner of the room
+below, even when the plans make it look that way. With the **Pin**
+tool, click each one. A pin lands exactly on a room corner when one is near
+(hold Alt to place it freely), which is both easier than aiming and more
+accurate. Then switch floor and click the same points in the same order: the
+names carry over, so linking a floor is a row of clicks. A pin is green once
+its name exists on another floor, amber while it is on its own, and red if
+it disagrees with the rest.
+
+Two shared pins line a floor up. Use four to eight, spread across the plan:
+the extra ones turn into a check. The **Alignment** card says how closely
+the pins agree ("typically within 8 cm; worst is NE corner at 21 cm"), which
+pin to look at first when they do not, and what scale the pins themselves
+imply. With well-spread pins that figure is usually better than the single
+tape measurement behind the floor's scale, and one button adopts it. The fit
+deliberately does not absorb a scale error on its own: floors that lined up
+while every distance on one of them stayed 3 % wrong would be worse than
+floors that visibly disagree.
+
+A pin on the wrong corner is the usual mistake, and an easy one: the room
+upstairs runs a few metres longer than the room under it, or its wall is set
+in from the wall below, and the "same" corner is not the same point. The fit
+looks for the smallest set of pins whose removal leaves the rest agreeing,
+sets those aside and names them, rather than letting two bad pins drag every
+good one a metre off. On the plan, a grey ring marks where the *other*
+floors put each pin; a pin that disagrees is joined to its ring by a red
+line, so a wrong corner shows as a long red line rather than a number. Move
+the pin to its ring's corner, or to whatever point really is straight above
+- or delete it, which is usually the better answer: a pin does not have to
+exist on every floor, it only links the floors that carry it.
+Pins sit on corners, where proxies and walls also are, so they have their
+own padlock in the toolbar: lock them to reach a proxy underneath one.
+With fewer than five shared pins nothing can be set aside with any
+confidence, which is one more reason to place more than two.
+
+The pins' scale is only offered when at least four pins agree with each
+other, and only when it differs from the floor's by 1 % or more; below that
+the difference is smaller than the pins' own placement error. A scale read
+out of pins that disagree is noise with two decimals. After adopting it,
+re-run [calibration](calibration.md) on that floor.
+
+Pins cannot give the vertical leg. **Elevation** is how far this floor's
+finished floor sits above the ground floor's: the ceiling height below it
+plus the floor structure, usually about 30 cm (a foot). Left blank, a storey
+is taken as 3 m.
+
+Nothing uses the alignment to move a thing yet. What it does today is put
+every contending floor's fix into one frame in the per-cycle telemetry
+(`floor_cands[*].house`, metres), so it can be seen whether two floors that
+both hear a thing agree on where it is. That is the evidence the next step -
+letting a proxy on one floor testify about a position on another - will be
+built on.
+

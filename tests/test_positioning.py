@@ -8,6 +8,8 @@ import asyncio
 import types
 import math
 
+import pytest
+
 import sextant
 from sextant import calibration as cal_mod
 from conftest import make_hass
@@ -1152,6 +1154,85 @@ def test_full_cycle_floor_switches_on_proximity_when_fits_tie(monkeypatch):
         clock["t"] += 10
         seen.append(cycle(2.0, 5.0, "F")["floor"])
     assert seen[-1] == "F", seen
+
+
+def _void_election(monkeypatch, shape):
+    """A thing beside a void: once settled on F, both floors hear it with the
+    SAME distances (no slab between them), so fit and proximity tie exactly
+    and the election has nothing to go on. Returns every cycle's payload."""
+    import copy
+    from sextant import floor_field
+    _reset_thing_state()
+    hass = make_hass()
+    hass.data["sextant_sensors"] = {f"sensor.e_sextant_{k}": _Sensor() for k in ("zone", "nearest_zone", "floor", "sub_zone")}
+    layout = _square_layout({"stationary_secs": 600.0, "floor_switch_secs": 60.0})
+    up = copy.deepcopy(layout["floor"][0]); up["name"] = "U"
+    for z in up["zones"]:
+        z["entity_id"] += " Up"; z["zone_id"] += "u"
+    layout["floor"].append(up)
+    shape(layout, floor_field)
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(sextant.time, "time", lambda: clock["t"])
+    out = []
+    for n in range(16):
+        clock["t"] += 10
+        data = copy.deepcopy(layout)
+        for fl in data["floor"]:
+            for rx in fl["receivers"]:
+                if n < 3 and fl["name"] == "U":
+                    continue                 # settle on F first: upstairs does not hear it yet
+                d = math.hypot(rx["cords"]["x"] / 100.0 - 2.0, rx["cords"]["y"] / 100.0 - 5.0)
+                rx["distance"] = d
+                rx["cords"]["r"] = d * 100.0
+        run(sextant.update_trilateration_and_zone(hass, [{"entity": "e", "data": data}], "e"))
+        entry = next(i for i in sextant.apitricords if i["ent"] == "e")
+        out.append({k: copy.deepcopy(entry[k]) for k in ("floor", "floors", "floor_cands", "cords")})
+    return out
+
+
+def test_a_flat_bias_field_leaves_a_whole_election_untouched(monkeypatch):
+    """The rollout plan is "lay it flat, confirm nothing moved". Nothing must
+    move: not the winner, not the odds, not one digit of any score."""
+    bare = _void_election(monkeypatch, lambda layout, ff: None)
+
+    def lay_flat(layout, ff):
+        for fl in layout["floor"]:
+            fl["bias_field"] = ff.flat((0, 0, 1000, 1000), fl["scale"])
+    assert _void_election(monkeypatch, lay_flat) == bare
+    assert {e["floor"] for e in bare} == {"F"}          # the tie never unseats the incumbent
+    assert bare[-1]["floor_cands"]["U"]["bias"] == 1.0
+
+
+def test_a_shaped_bias_field_breaks_a_tie_the_evidence_cannot(monkeypatch):
+    """Same void, but U's field says a fix landing here is to be believed.
+    That is the only difference between the floors, and it decides it."""
+    def shape(layout, ff):
+        up = layout["floor"][1]
+        up["bias_field"] = ff.flat((0, 0, 1000, 1000), up["scale"])
+        ff.paint(up, [(0, 300), (400, 300), (400, 700), (0, 700)], 1.6)   # a landing around (2, 5) m
+    seen = _void_election(monkeypatch, shape)
+    assert seen[2]["floor"] == "F" and seen[-1]["floor"] == "U", [e["floor"] for e in seen]
+    cands = seen[-1]["floor_cands"]
+    assert cands["U"]["bias"] == 1.6 and cands["F"]["bias"] == 1.0
+    assert cands["U"]["score"] == pytest.approx(cands["U"]["prox"] * 1.6, abs=1e-3)
+    # Each contender reports its OWN fix, in its own floor's pixels.
+    assert all(abs(c["fix"][0] - 200) < 5 and abs(c["fix"][1] - 500) < 5 for c in cands.values())
+    assert all("house" not in c for c in cands.values())        # no pins: no house frame claimed
+
+
+def test_registered_floors_report_their_fixes_in_one_house_frame(monkeypatch):
+    """With pins, each contender's fix is also published in house metres - and
+    here, where both floors hear the thing equally, they must agree."""
+    def shape(layout, ff):
+        for fl, (dx, dy) in zip(layout["floor"], ((0, 0), (0, 0))):
+            fl["pins"] = [{"pin_id": n, "name": n, "cords": {"x": x + dx, "y": y + dy}}
+                          for n, (x, y) in {"NW": (0, 0), "NE": (1000, 0), "SE": (1000, 1000)}.items()]
+        layout["floor"][0]["level"], layout["floor"][1]["level"] = 0, 1
+        layout["floor"][1]["elevation"] = 3.66
+    cands = _void_election(monkeypatch, shape)[-1]["floor_cands"]
+    assert cands["F"]["house"][2] == 0.0 and cands["U"]["house"][2] == 3.66
+    assert cands["F"]["house"][:2] == pytest.approx([2.0, 5.0], abs=0.05)
+    assert cands["U"]["house"][:2] == pytest.approx(cands["F"]["house"][:2], abs=0.05)
 # ---------------------------------------------------------------------------
 # Solves run in the executor; positions are pushed over the websocket
 # ---------------------------------------------------------------------------
@@ -1579,6 +1660,38 @@ def test_a_fix_resting_on_the_unlock_margin_still_releases():
     assert seen[-1][0] == "Dining", f"the lock must release: {seen}"
 
 
+def test_a_wrong_first_guess_is_not_locked_in():
+    """
+    From a real case: after a restart a watch on a couch - a metre from three
+    room edges - had its first cycle land in the foyer. It was sitting still,
+    so the lock froze that guess 20 s later, and the fix sitting half a metre
+    into the right room could never release it (inside the 1 m margin).
+    """
+    sextant._zone_state.clear()
+    assert _elect("e", 60, 0.0)[0] == "Kitchen"        # one noisy first fit
+    seen = [_elect("e", 150, t) for t in (10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0)]   # really 0.5 m into Dining, still
+    assert ("Kitchen", True) not in seen, f"a guess the evidence contradicts must not lock: {seen}"
+    assert seen[-1][0] == "Dining"
+    # ...and once it has earned the room, it locks as before.
+    later = [_elect("e", 150, t) for t in (80.0, 90.0, 100.0, 110.0)]
+    assert later[-1] == ("Dining", True)
+
+
+def test_a_lock_yields_when_the_evidence_has_left_it_even_inside_the_margin():
+    """Parked 0.7 m into the next room - inside the 1 m unlock margin, so the
+    distance rule never fires - with the locked room holding almost none of
+    the evidence. That is a thing that moved, not a thing jittering."""
+    sextant._zone_state.clear()
+    for t in (0.0, 10.0, 20.0, 30.0):
+        zone, locked = _elect("e", 50, t)
+    assert (zone, locked) == ("Kitchen", True)
+    seen = [_elect("e", 170, 40.0 + 10 * i) for i in range(14)]   # 40 s .. 170 s
+    assert seen[0] == ("Kitchen", True)                  # held at first: could be jitter
+    # The smoothed share takes ~50 s to fall under 10 %, then 2 x zone_unlock_secs.
+    assert ("Kitchen", True) in seen[:8], "must not give way in the first minute"
+    assert seen[-1][0] == "Dining", f"the lock must yield to evidence that has left it: {seen}"
+
+
 def test_boundary_jitter_well_inside_the_margin_still_holds_the_lock():
     """The hysteresis must not cost the protection it was added around."""
     sextant._zone_state.clear()
@@ -1626,6 +1739,14 @@ def test_location_takes_a_spots_room_from_its_parent():
     assert state == "Couch" and attrs["room"] == "Great Room"
 
 
+def test_a_spot_with_no_parent_room_still_reports_the_room_the_thing_is_in():
+    """A spot drawn outside every room has no parent. The thing's room is
+    still known from the election, and "unknown" would be a worse answer."""
+    for orphan in (None, "unknown", ""):
+        state, attrs = sextant._location_state("Foyer", "Shoe Rack", orphan, "Ground Floor")
+        assert state == "Shoe Rack" and attrs["kind"] == "spot" and attrs["room"] == "Foyer"
+
+
 def test_location_is_unknown_when_nothing_is_known():
     """A thing that has gone dark reads unknown, not blank."""
     state, attrs = sextant._location_state("unknown", "unknown", "unknown", "unknown")
@@ -1637,3 +1758,177 @@ def test_location_never_publishes_an_empty_state():
     """Missing values must not reach the state machine as an empty string."""
     state, attrs = sextant._location_state(None, None, None, None)
     assert state == "unknown" and attrs["room"] == "unknown" and attrs["floor"] == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# The cycle must not hold the event loop
+# ---------------------------------------------------------------------------
+
+
+def test_a_things_working_copy_isolates_what_the_cycle_writes_and_shares_the_rest():
+    layout = _square_layout({"zone_switch_secs": 30})
+    layout["floor"][0]["bias_field"] = {"cell_m": 1.0, "x0": 0, "y0": 0, "values": [[1.0] * 10] * 10}
+    a, b = sextant._thing_layout(layout), sextant._thing_layout(layout)
+    rx = a["floor"][0]["receivers"][0]
+    rx["distance"], rx["quality"], rx["cords"]["r"] = 2.5, 0.8, 250.0     # everything a cycle writes
+    for other in (layout, b):
+        theirs = other["floor"][0]["receivers"][0]
+        assert "distance" not in theirs and "quality" not in theirs and "r" not in theirs["cords"]
+    # ...and nothing else is copied: that was the cost.
+    assert a["floor"][0]["zones"] is layout["floor"][0]["zones"]
+    assert a["floor"][0]["bias_field"] is layout["floor"][0]["bias_field"]
+    assert a["tuning"] is layout["tuning"]
+    # A receiver without coordinates (hand-edited file) must not break it.
+    odd = {"floor": [{"name": "F", "receivers": [{"entity_id": "x"}, {"entity_id": "y", "cords": None}]}]}
+    assert [r["entity_id"] for r in sextant._thing_layout(odd)["floor"][0]["receivers"]] == ["x", "y"]
+
+
+def test_the_cycle_gives_the_event_loop_a_turn_between_things(monkeypatch):
+    """Gathering every thing ran all their synchronous chunks back to back and
+    stalled Home Assistant for a quarter of a second a cycle. Something else
+    waiting on the loop must get to run between one thing and the next."""
+    order = []
+
+    async def fake_single(hass, data, eids):
+        order.append(eids["entity"])        # no await inside: the worst case, a thing with nothing to solve
+
+    monkeypatch.setattr(sextant, "process_single_entity", fake_single)
+
+    async def bystander():
+        for _ in range(3):
+            await asyncio.sleep(0)
+            order.append("loop")
+
+    async def main():
+        other = asyncio.ensure_future(bystander())
+        await sextant.process_entities(None, [{"entity": e} for e in ("a", "b", "c", "d")])
+        await other
+
+    run(main())
+    assert order[0] == "a" and "loop" in order[1:3], order   # the loop ran before thing c, not after thing d
+    assert [o for o in order if o != "loop"] == ["a", "b", "c", "d"]
+
+
+# --------------------------------------------------------------------------- #
+# Close-range fade of a stretching calibration correction
+# --------------------------------------------------------------------------- #
+def test_close_range_fade_shape():
+    f = sextant._close_range_correction
+    assert f(1.7, 0.5, {}) == 1.0            # beside the proxy: no stretch
+    assert f(1.7, 1.0, {}) == 1.0
+    assert f(1.7, 2.5, {}) == 1.7            # across the room: all of it
+    mid = f(1.7, 1.75, {})
+    assert abs(mid - 1.7 ** 0.5) < 1e-9      # halfway in, geometrically
+    assert f(0.8, 0.5, {}) == 0.8            # a shrinking correction is never faded
+    assert f(1.7, 0.5, {"tuning": {"correction_close_fade": False}}) == 1.7
+    tuned = {"tuning": {"correction_fade_near_m": 0.2, "correction_fade_far_m": 0.6}}
+    assert f(1.7, 0.5, tuned) > 1.4 and f(1.7, 0.7, tuned) == 1.7
+    # A far edge set inside the near one cannot divide by zero.
+    assert f(1.7, 1.0, {"tuning": {"correction_fade_near_m": 2.0, "correction_fade_far_m": 1.0}}) == 1.0
+
+
+def _radii_with_correction(state, correction, tuning=None):
+    class St:
+        def __init__(self):
+            self.state = state
+            self.attributes = {"unit_of_measurement": "m"}
+
+    class Hass:
+        states = type("S", (), {"get": staticmethod(lambda _eid: St())})()
+
+    rec = {"entity_id": "probe", "cords": {"x": 0, "y": 0}, "correction": correction}
+    data = {"floor": [{"name": "F", "scale": SCALE, "receivers": [rec]}]}
+    if tuning is not None:
+        data["tuning"] = tuning
+    run(sextant.update_receiver_radii(Hass(), {"entity": "watch", "data": data}))
+    return rec
+
+
+def test_a_watch_beside_a_stretched_proxy_keeps_its_short_reading():
+    # The bedside C5: calibration x1.73, the watch 30 cm away reads 0.9 m.
+    assert abs(_radii_with_correction("0.9", 1.73)["distance"] - 0.9) < 1e-9
+    assert abs(_radii_with_correction("0.9", 1.73, {"correction_close_fade": False})["distance"] - 0.9 * 1.73) < 1e-9
+    assert abs(_radii_with_correction("4.0", 1.73)["distance"] - 4.0 * 1.73) < 1e-9
+
+
+def test_mark_references_follow_a_change_of_correction():
+    import copy
+    layout = {"floor": [{"name": "F", "scale": SCALE, "receivers": [
+        {"entity_id": "p", "address": "AA", "cords": {"x": 0.0, "y": 0.0}, "correction": 2.0},
+        {"entity_id": "q", "address": "BB", "cords": {"x": 100.0, "y": 0.0}},
+    ]}]}
+    mark = {"id": 1, "entity": "watch", "floor": "F", "x": 10.0, "y": 0.0, "samples": [
+        {"t": 1.0, "gain": 1.0, "estimator": "fingerprint", "thing_vec": {"aa": 8.0, "bb": 3.0},
+         "raw_vec": {"aa": 4.0, "bb": 3.0},
+         "floors": {"F": {"weighted": [[0.0, 0.0, 320.0, 1.0, 320.0], [100.0, 0.0, 120.0, 1.0, 120.0]],
+                          "bounds": None, "min_wr": 20.0, "scale": SCALE}}}] * 3}
+    sextant._set_truth_marks([mark])
+    try:
+        assert sextant._mark_refs(layout)[0]["vector"]["aa"] == 8.0
+        recal = copy.deepcopy(layout)
+        recal["floor"][0]["receivers"][0]["correction"] = 1.25
+        assert sextant._mark_refs(recal)[0]["vector"]["aa"] == 5.0
+        # Only the reading itself carries the fade: 4 m is past it, so no change there.
+        assert sextant._mark_refs(recal)[0]["vector"]["bb"] == 3.0
+    finally:
+        sextant._set_truth_marks([])
+
+
+# --- a proxy on the spot, and a spot's own entry share ---------------------- #
+def test_spot_proxy_evidence_fades_with_distance_and_with_a_close_runner_up():
+    def lay(mine, other):
+        return {"floor": [{"name": "F", "receivers": [
+            {"entity_id": "table", "distance": mine}, {"entity_id": "wall", "distance": other}]}]}
+    ev = sextant._spot_proxy_evidence
+    assert ev(lay(1.0, 3.0), "table") == 1.0                 # close, clearly nearest
+    assert abs(ev(lay(1.6, 4.0), "table") - 0.5) < 1e-9      # halfway out of 1.2..2.0 m
+    assert ev(lay(3.0, 9.0), "table") == 0.0                 # nearest, but ten feet away
+    assert ev(lay(1.0, 1.2), "table") == 0.0                 # another proxy nearly as close
+    assert 0.0 < ev(lay(1.0, 1.6), "table") < 1.0
+    assert ev(lay(1.0, 3.0), "other") == 0.0 and ev(lay(1.0, 3.0), None) == 0.0
+
+
+def _spot_layout(mine, other, **spot):
+    return {"tuning": {"subzone_switch_secs": 20.0, "zone_prob_smoothing": 0.6},
+            "floor": [{"name": "F", "subzones": [{"entity_id": "Sofa", **spot}],
+                       "receivers": [{"entity_id": "sofa_px", "distance": mine}, {"entity_id": "wall", "distance": other}]}]}
+
+
+def test_a_proxy_on_the_spot_puts_a_thing_there_that_the_estimate_misses():
+    # The fix sits 0.2 m off the sofa: on geometry alone, never the sofa.
+    sextant._subzone_state.clear()
+    lay = _spot_layout(0.9, 3.0, proxy="sofa_px")
+    t = 1000.0
+    outs = [_sub("e", (300, 320), t + dt, layout=lay) for dt in (0, 10, 31)]
+    assert outs[-1] == ("Sofa", "Living")
+    # The same, with the sofa's proxy three metres off: nothing.
+    sextant._subzone_state.clear()
+    far = _spot_layout(3.0, 6.0, proxy="sofa_px")
+    assert all(_sub("e", (300, 320), t + dt, layout=far) == ("unknown", "Living") for dt in (0, 10, 31, 60))
+
+
+def test_a_spot_can_set_its_own_entry_share():
+    # Half the sofa proxy's evidence (1.6 m): 0.5 smoothed up to ~0.39 over three
+    # cycles - short of the default 0.5, enough for a spot that asks for 0.3.
+    sextant._subzone_state.clear()
+    t = 1000.0
+    default = _spot_layout(1.6, 5.0, proxy="sofa_px")
+    assert all(_sub("e", (300, 320), t + dt, layout=default) == ("unknown", "Living") for dt in (0, 10, 31, 60))
+    sextant._subzone_state.clear()
+    own = _spot_layout(1.6, 5.0, proxy="sofa_px", enter_prob=0.3)
+    outs = [_sub("e", (300, 320), t + dt, layout=own) for dt in (0, 10, 20, 31, 45)]
+    assert outs[-1] == ("Sofa", "Living")
+
+
+def test_two_proxies_on_one_spot_are_not_each_others_runner_up():
+    # A couch with an outlet at each end: a phone on it is close to both.
+    lay = {"floor": [{"name": "F", "receivers": [
+        {"entity_id": "left", "distance": 0.9}, {"entity_id": "right", "distance": 1.1},
+        {"entity_id": "wall", "distance": 3.0}]}]}
+    ev = sextant._spot_proxy_evidence
+    assert ev(lay, "left") == 0.0                   # alone, "right" is its close rival
+    assert ev(lay, ("left", "right")) == 1.0        # together, only "wall" is a rival
+    assert ev(lay, ["right", "left"]) == 1.0
+    assert sextant._spot_proxies({"proxy": ["a", "", 3, "b"]}) == ("a", "b")
+    assert sextant._spot_proxies({"proxy": "a"}) == ("a",) and sextant._spot_proxies({}) == ()
+

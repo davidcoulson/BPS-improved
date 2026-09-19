@@ -56,6 +56,9 @@ def test_layout_get_reports_layout_maps_and_tuning_spec(tmp_path):
     assert result["tuning_spec"]["zone_switch_secs"]["type"] == "float"
     assert result["tuning_spec"]["position_estimator"]["choices"] == ["geometric", "fingerprint", "fused"]
     assert result["entities"] == [] and result["features"] == []
+    # Installed (on disk) and running (loaded at start-up) are both reported,
+    # so the panel can tell "restart Home Assistant" from "reload the page".
+    assert result["running_version"] == ws.RUNNING_VERSION
 
 
 def test_layout_save_validates_then_persists(tmp_path):
@@ -66,6 +69,20 @@ def test_layout_save_validates_then_persists(tmp_path):
     run(ws.ws_layout_save(hass, conn, {"id": 3, "type": "sextant/layout/save", "layout": _layout()}))
     assert conn.results[-1][1]["version"] >= 1
     assert st.get_layout(hass)["floor"][0]["name"] == "F"
+
+
+def test_layout_save_clips_each_spot_to_its_one_room(tmp_path):
+    hass = _hass_with_layout(tmp_path)
+    layout = _layout()
+    square = lambda x0, x1: [{"x": x0, "y": 0}, {"x": x1, "y": 0}, {"x": x1, "y": 100}, {"x": x0, "y": 100}]  # noqa: E731
+    layout["floor"][0]["zones"] = [{"zone_id": "gr", "entity_id": "Great Room", "poly": True, "cords": square(0, 400)}]
+    layout["floor"][0]["subzones"] = [{"sub_zone_id": "c", "entity_id": "Couch", "parent": "gr", "poly": True,
+                                       "cords": square(300, 500)}]
+    conn = _Conn()
+    run(ws.ws_layout_save(hass, conn, {"id": 3, "type": "sextant/layout/save", "layout": layout}))
+    assert conn.results[-1][1]["confined"] == ["Couch"]
+    xs = {c["x"] for c in st.get_layout(hass)["floor"][0]["subzones"][0]["cords"]}
+    assert xs == {300, 400}
 
 
 def test_tuning_set_and_thing_tune_write_the_layout(tmp_path):
@@ -297,7 +314,7 @@ def test_truth_marks_are_recorded_evaluated_listed_applied_and_deleted(tmp_path,
     run(ws.ws_truth_evaluate(hass, conn, {"id": 8, "type": "sextant/truth/evaluate", "mark_id": 1}))
     assert conn.results[-1][1]["mark"]["id"] == 1 and len(conn.results[-1][1]["rows"]) >= 1
     run(ws.ws_truth_delete(hass, conn, {"id": 9, "type": "sextant/truth/delete", "mark_id": 1}))
-    assert conn.results[-1][1]["removed"] == 1 and sextant._fingerprint_db.extra_refs == []
+    assert conn.results[-1][1]["removed"] == 1 and sextant._truth_marks == []
 
 
 def test_every_websocket_handler_is_registered():
@@ -394,7 +411,7 @@ def test_every_write_and_bermuda_command_requires_admin():
             "ws_truth_apply", "ws_history_clear", "ws_calibration_action", "ws_adjust_zones",
             "ws_kpi_baseline_save", "ws_kpi_baseline_delete"} <= admin
     assert not any(name.startswith("ws_bermuda_") for name in open_)
-    assert {"ws_layout_get", "ws_history_get", "ws_calibration_status", "ws_selftest",
+    assert {"ws_layout_get", "ws_history_get", "ws_history_timeline", "ws_calibration_status", "ws_selftest",
             "ws_advice", "ws_receivers", "ws_kpi"} <= open_
 
 
@@ -498,3 +515,61 @@ def test_irk_add_rejects_an_empty_key_and_survives_a_broken_flow(tmp_path):
     run(ws.ws_irk_add(hass, conn, {"id": 2, "type": "sextant/irk/add", "irk": "aabb"}))
     assert "could not take the key" in str(conn.errors[-1])
     assert getattr(ws.ws_irk_add, "_ws_admin", False)
+
+
+def test_a_stale_editor_save_cannot_erase_a_bias_field_and_pins_go_through(tmp_path):
+    """The bias field is written by its service while the Edit page sits open
+    on an older copy. Its Save must not take the field out with it."""
+    from sextant import floor_field
+    layout = _layout()
+    hass = _hass_with_layout(tmp_path, layout)
+    stale = st.get_layout_for_edit(hass)                       # what the editor loaded
+    fresh = st.get_layout_for_edit(hass)
+    fresh["floor"][0]["bias_field"] = floor_field.flat((0, 0, 300, 200), 100.0, value=1.5)
+    run(st.save_layout(hass, fresh))                           # ... the service paints meanwhile
+    stale["floor"][0]["pins"] = [{"pin_id": "p1", "name": "NW", "cords": {"x": 10, "y": 20}}]
+    stale["floor"][0]["elevation"] = 3.66
+    conn = _Conn()
+    run(ws.ws_layout_save(hass, conn, {"id": 9, "type": "sextant/layout/save", "layout": stale}))
+    saved = st.get_layout(hass)["floor"][0]
+    assert floor_field.describe(saved)["max"] == 1.5           # the field survived
+    assert saved["pins"][0]["name"] == "NW" and saved["elevation"] == 3.66
+    # And the editor cannot smuggle a field in either: it does not own the key.
+    stale["floor"][0]["bias_field"] = {"cell_m": 1.0, "x0": 0, "y0": 0, "values": [[9.0]]}
+    run(ws.ws_layout_save(hass, conn, {"id": 10, "type": "sextant/layout/save", "layout": stale}))
+    assert floor_field.describe(st.get_layout(hass)["floor"][0])["max"] == 1.5
+
+
+def test_registration_grades_a_draft_or_the_stored_layout(tmp_path):
+    def floor(name, level, scale, dx):
+        pts = {"NW": (0, 0), "NE": (10, 0), "SE": (10, 8)}
+        return {"name": name, "level": level, "scale": scale, "receivers": [], "zones": [], "subzones": [],
+                "pins": [{"pin_id": f"{name}{k}", "name": k, "cords": {"x": x * scale + dx, "y": y * scale}} for k, (x, y) in pts.items()]}
+    hass = _hass_with_layout(tmp_path, {"floor": [floor("G", 0, 100.0, 0), floor("U", 1, 125.0, 40)]})
+    conn = _Conn()
+    run(ws.ws_registration(hass, conn, {"id": 1, "type": "sextant/registration"}))
+    stored = conn.results[-1][1]
+    assert stored["reference"] == "G" and stored["floors"]["U"]["ok"] and stored["floors"]["U"]["rms_m"] == 0.0
+    assert stored["floors"]["U"]["elevation"] == 3.0
+    draft = {"floor": [floor("G", 0, 100.0, 0), floor("U", 1, 125.0, 40)]}
+    draft["floor"][1]["pins"][1]["cords"]["x"] += 100          # drag one pin 0.8 m in the unsaved draft
+    run(ws.ws_registration(hass, conn, {"id": 2, "type": "sextant/registration", "layout": draft}))
+    graded = conn.results[-1][1]["floors"]["U"]
+    assert graded["worst"] == "NE" and graded["rms_m"] > 0.2
+
+
+def test_history_timeline_is_served_for_the_last_hours(tmp_path):
+    import time as _time
+    hass = _hass_with_layout(tmp_path, _layout())
+    h = sextant.get_position_history(hass)
+    now = _time.time()
+    for dt in range(-7200, -59, 60):                  # heard every minute for two hours
+        h.record("cat", now + dt, 1.0, 1.0, "F", 100.0, "Office", "Desk" if dt >= -3600 else None)
+    conn = _Conn()
+    run(ws.ws_history_timeline(hass, conn, {"id": 1, "type": "sextant/history/timeline", "entity": "cat", "hours": 1.5}))
+    result = conn.results[-1][1]
+    # 1.5 h back reaches into the "no spot" stretch but not to where the record starts.
+    assert [(s["room"], s["spot"]) for s in result["stays"]] == [("Office", None), ("Office", "Desk")]
+    assert result["stays"][0]["partial"] is False
+    assert result["stays"][1]["start"] == round(now - 3600, 1)
+    assert result["last_heard"] == round(now - 60, 1)

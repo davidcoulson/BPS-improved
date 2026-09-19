@@ -100,10 +100,17 @@ file in `config/sextant_maps/`) overrides the floor's plan.
 | `sextant.set_auto_calibration` | `enabled` | continuous calibration on or off |
 | `sextant.set_receiver_heights` | `heights` (slug → m), `default` | proxy mount heights |
 | `sextant.set_thing_heights` | `heights` (thing → m) | carry heights |
+| `sextant.set_floor_bias_field` | `floor`, `action` (`flat` / `paint` / `clear`), `value`, `area` or `points`, `mode`, `cell_m` | shape a floor's election bias by place; see [bias fields](positioning.md). Returns the field's shape |
 | `sextant.set_tuning` | `settings`, `reset` | any [tuning key](tuning.md#tuning-reference); an unknown key or out-of-range value is refused with the allowed range |
 
 ```yaml
 action: sextant.set_tuning
 data:
   settings: {position_estimator: fused, zone_switch_secs: 30}
+```
+
+```yaml
+# Believe an upstairs fix that lands on the catwalk; doubt one out in the void.
+action: sextant.set_floor_bias_field
+data: {floor: Second Floor, action: paint, area: Catwalk, value: 1.4}
 ```

@@ -61,14 +61,17 @@ class ReferenceDB:
 
     def __init__(self, samples=REF_SAMPLES):
         self._samples = {}  # (tx_address, rx_address) -> deque of raw metres
+        # vectors() is asked for by every thing on every cycle, but the samples
+        # only change on ingest(), which runs every FINGERPRINT_REFRESH_SECS.
+        # Recomputing a median per scanner pair each time was ~180,000 medians
+        # a minute for answers that had not changed.
+        self._vectors = None
         self._maxlen = samples
         self.stamp = None
         # Multiplies the configured reference gain (see learn()).
         self.learned_gain = 1.0
         # Per-thing multiplier on top of learned_gain (see learn(entity=...)).
         self.thing_gain = {}
-        # References from truth marks (truth.mark_reference), in probe scale.
-        self.extra_refs = []
 
     def gain_for(self, entity=None):
         """The learned gain for one thing: the shared gain times its own multiplier."""
@@ -122,15 +125,22 @@ class ReferenceDB:
                     dq = self._samples[key] = deque(maxlen=self._maxlen)
                 dq.append(float(d))
         self.stamp = ranging.get("stamp")
+        self._vectors = None
 
     def vectors(self):
-        """{tx_address: {rx_address: median metres}} for every sampled pair."""
-        out = {}
-        for (tx, rx), dq in self._samples.items():
-            if not dq:
-                continue
-            out.setdefault(tx, {})[rx] = _median(dq)
-        return out
+        """{tx_address: {rx_address: median metres}} for every sampled pair.
+
+        Cached until the next ingest. Callers get the shared dict and must
+        treat it as read-only, which build_references already does.
+        """
+        if self._vectors is None:
+            out = {}
+            for (tx, rx), dq in self._samples.items():
+                if not dq:
+                    continue
+                out.setdefault(tx, {})[rx] = _median(dq)
+            self._vectors = out
+        return self._vectors
 
     def pairs(self):
         return sum(1 for dq in self._samples.values() if dq)

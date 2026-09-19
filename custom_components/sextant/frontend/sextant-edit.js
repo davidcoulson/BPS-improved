@@ -8,8 +8,8 @@
  * view, the one thing the websocket does not carry).
  */
 import { LitElement, html, css, nothing } from "./lit.js";
-import { SextantMap, polygonCentroid } from "./sextant-map.js";
-import { sharedStyles, widgetStyles, toast, callWS, confirmDialog, fmtNum, uiField, uiSelect, uiSwitch, uiButton, proxyName, lenUnit, toDisplayLen, fromDisplayLen, fmtScale, isImperial, THING_CLASSES, CLASS_FAMILIES } from "./sextant-ui.js";
+import { SextantMap, polygonCentroid, snapToVertex, squareUp } from "./sextant-map.js";
+import { sharedStyles, widgetStyles, toast, callWS, confirmDialog, fmtNum, fmtLen, uiField, uiSelect, uiSwitch, uiButton, proxyName, lenUnit, toDisplayLen, fromDisplayLen, fmtScale, isImperial, THING_CLASSES, CLASS_FAMILIES } from "./sextant-ui.js";
 import { mapUrlFor } from "./sextant-panel.js";
 
 // [id, label under the icon, icon, tooltip]
@@ -20,6 +20,7 @@ const TOOLS = [
   ["subzone", "Spot", "mdi:vector-rectangle", "Draw a spot (a couch, a desk, a bedside table) inside a room"],
   ["nogo", "No-go", "mdi:cancel", "Draw an area things can never be in (a void, a wall)"],
   ["measure", "Scale", "mdi:ruler", "Set the map scale from a known distance"],
+  ["pin", "Pin", "mdi:crosshairs-gps", "Pin a point that lines up through the house - an outside corner, a stair post. The same name on another floor says how the floors stack. It lands on a room corner when one is near; hold Alt to place it freely"],
 ];
 // Layers that can be locked against selection and dragging, so a finished
 // room layout is not nudged while proxies are being moved (and vice versa).
@@ -27,6 +28,7 @@ const LOCKS = [
   ["zone", "Rooms", "mdi:floor-plan"],
   ["subzone", "Spots", "mdi:vector-rectangle"],
   ["receiver", "Proxies", "mdi:access-point"],
+  ["pin", "Pins", "mdi:crosshairs-gps"],
 ];
 const UNDO_DEPTH = 50;
 
@@ -46,9 +48,11 @@ class SextantEdit extends LitElement {
     _placing: { state: true },
     _measure: { state: true },
     _proposal: { state: true },
+    _biasView: { state: true },
     _busy: { state: true },
     _locks: { state: true },
     _undo: { state: true },
+    _alignment: { state: true },
   };
 
   constructor() {
@@ -64,15 +68,16 @@ class SextantEdit extends LitElement {
     this._tick = 0;
     // Rooms start locked: once a floor plan is drawn it rarely changes, and a
     // slip while moving a proxy must not move a wall.
-    this._locks = { zone: true, subzone: false, receiver: false };
+    this._locks = { zone: true, subzone: false, receiver: false, pin: false };
     this._undo = [];
+    this._alignment = null; // how the floors stack, graded by the backend against this draft
   }
 
   // --- undo ---------------------------------------------------------------------
 
   _snapshot() {
     if (!this._draft) return;
-    this._undo = [...this._undo.slice(-(UNDO_DEPTH - 1)), JSON.stringify(this._draft)];
+    this._undo = [...this._undo.slice(-(UNDO_DEPTH - 1)), JSON.stringify(this._draft, (k, v) => (k === "linked" || k === "miss" || k === "missLabel" ? undefined : v))];
   }
 
   _undoLast() {
@@ -96,7 +101,7 @@ class SextantEdit extends LitElement {
       fetch: (url) => this.hass.fetchWithAuth(url),
       onSelect: (hit) => { this._selection = hit; },
       onDragStart: () => this._snapshot(),
-      onChange: () => { this._dirty = true; this._tick++; this.requestUpdate(); },
+      onChange: (kind) => { this._dirty = true; this._tick++; if (kind === "pin") this._refreshAlignment(); this.requestUpdate(); },
       onDrawPoint: () => this.requestUpdate(),
       onDrawClose: () => this._closeDraft(),
       onContextMenu: (hit) => this._context(hit),
@@ -107,14 +112,15 @@ class SextantEdit extends LitElement {
     this._syncDraft(true);
   }
 
-  disconnectedCallback() { super.disconnectedCallback(); this._map?.destroy(); }
+  disconnectedCallback() { super.disconnectedCallback(); clearTimeout(this._alignTimer); this._map?.destroy(); }
 
   updated(changed) {
     if (!this._map) return;
     if (changed.has("data")) this._syncDraft(!this._dirty);
     if (changed.has("floor")) this._pushFloor();
+    if (changed.has("floor") || changed.has("data")) this._loadBiasView();
     if (changed.has("spots") || changed.has("floor")) this._map.setSuggestions((this.spots || []).filter((s) => s.floor === this.floor).map((s) => ({ x: s.x, y: s.y, label: `add a proxy here · ${s.room}` })));
-    if (changed.has("_tool")) { this._map.setTool(this._tool === "measure" || this._tool === "receiver" ? "select" : this._tool); }
+    if (changed.has("_tool")) { this._map.setTool(["measure", "receiver", "pin"].includes(this._tool) ? "select" : this._tool); }
   }
 
   _syncDraft(replace) {
@@ -144,7 +150,94 @@ class SextantEdit extends LitElement {
     this._map?.setOffline(this.data?.offline_receivers || []);
     this._map?.setSelection(null);
     this._selection = null;
+    // The last report already covers every floor: show THIS floor's rings now
+    // rather than leaving the previous floor's drawn until the next reply.
+    this._markPins();
+    this._refreshAlignment();
   }
+
+  // --- pins: how the floors stack ----------------------------------------------
+
+  /** Transient marks the map draws pins with; stripped again before Save. */
+  _markPins() {
+    const rep = this._alignment;
+    for (const fl of this._draft?.floor || []) {
+      const misses = rep?.floors?.[fl.name]?.misses || {};
+      for (const pin of fl.pins || []) {
+        pin.linked = (rep?.pins?.[pin.name] || []).length > 1;
+        pin.miss = misses[pin.name] ?? null;
+        pin.missLabel = pin.miss == null ? null : fmtLen(pin.miss, this.hass, 2);
+      }
+    }
+    this._map?.setPinGhosts(rep?.floors?.[this.floor]?.ghosts || []);
+  }
+
+  /** Ask the backend to grade the DRAFT, so a pin's effect on the fit shows
+   * while it is still being placed. Debounced: a drag fires per pixel. */
+  _refreshAlignment() {
+    clearTimeout(this._alignTimer);
+    // Replies can overtake each other while a pin is dragged; only the answer
+    // to the LATEST question may be shown, or the card flickers back to a
+    // grading of where the pin was half a second ago.
+    const asked = (this._alignAsked = (this._alignAsked || 0) + 1);
+    this._alignTimer = setTimeout(async () => {
+      const draft = this._draft;
+      if (!draft || !(draft.floor || []).some((fl) => (fl.pins || []).length)) { this._alignment = null; this._markPins(); return; }
+      const clean = { floor: draft.floor.map((fl) => ({ name: fl.name, scale: fl.scale, level: fl.level, elevation: fl.elevation, pins: (fl.pins || []).map((q) => ({ name: q.name, cords: q.cords })) })) };
+      let report = null;
+      try {
+        report = await this.hass.callWS({ type: "sextant/registration", layout: clean });
+      } catch (_e) {
+        report = null;   // an older backend: the pins still save, they just are not graded
+      }
+      if (asked !== this._alignAsked || !this.isConnected) return;   // superseded, or the page has gone
+      this._alignment = report;
+      this._markPins();
+    }, 250);
+  }
+
+  /** Names pinned on other floors and not yet on this one: what to offer next. */
+  _pinNamesElsewhere(f) {
+    const here = new Set((f.pins || []).map((q) => q.name));
+    const names = [];
+    for (const fl of this._draft?.floor || []) if (fl !== f) for (const q of fl.pins || []) if (q.name && !here.has(q.name) && !names.includes(q.name)) names.push(q.name);
+    return names;
+  }
+
+  _placePin(e) {
+    const f = this._floorObj();
+    if (!f || this._map.hover?.kind === "pin") return;   // a click on a pin selects it
+    let p = this._mapPoint(e);
+    if (!e.altKey) p = snapToVertex(p, f.zones, 12 / this._map.view.k) || p;
+    this._snapshot();
+    f.pins = f.pins || [];
+    // The next name another floor is waiting on, so linking a floor is a row
+    // of clicks in the same order; a fresh name only when there is none.
+    let n = f.pins.length + 1;
+    const all = new Set((this._draft.floor || []).flatMap((fl) => (fl.pins || []).map((q) => q.name)));
+    while (all.has(`Pin ${n}`)) n++;
+    const name = this._pinNamesElsewhere(f)[0] || `Pin ${n}`;
+    f.pins.push({ pin_id: uid("pin"), name, cords: { x: Math.round(p.x * 1000) / 1000, y: Math.round(p.y * 1000) / 1000 } });
+    this._dirty = true;
+    this._selection = { kind: "pin", index: f.pins.length - 1 };
+    this._map.setSelection(this._selection);
+    this._refreshAlignment();
+    this.requestUpdate();
+  }
+
+  /** The draft as it should be stored: without the marks the map draws with.
+   * Both save paths go through here - adding a floor posts the draft too, and
+   * used to send `unmatched`, `label` and the pin marks along with it. */
+  _cleanDraft() {
+    const draft = this._draft;
+    for (const f of draft.floor) {
+      for (const r of f.receivers || []) { delete r.unmatched; delete r.label; }
+      for (const q of f.pins || []) { delete q.linked; delete q.miss; delete q.missLabel; }
+    }
+    return draft;
+  }
+
+  _listFor(kind, f) { return kind === "receiver" ? f.receivers : kind === "zone" ? f.zones : kind === "pin" ? f.pins : f.subzones; }
 
   // --- tools -------------------------------------------------------------------
 
@@ -152,13 +245,15 @@ class SextantEdit extends LitElement {
     this._tool = tool;
     this._measure = null;
     if (tool !== "receiver") this._placing = null;
-    if (tool === "receiver" || tool === "measure") this._map.setTool("select");
+    if (["receiver", "measure", "pin"].includes(tool)) this._map.setTool("select");
+    if (tool === "pin" && this._locks.pin) this._setLock("pin", false);   // you are placing pins: they must be reachable
   }
 
   _onCanvasClick(e) {
     if (this._map?.lastDragMoved) return; // a pan, not a click
     if (this._tool === "receiver" && this._placing) this._placeReceiver(e);
     else if (this._tool === "measure") this._measureClick(e);
+    else if (this._tool === "pin") this._placePin(e);
   }
 
   _mapPoint(e) {
@@ -216,8 +311,11 @@ class SextantEdit extends LitElement {
       this._selection = { kind: "zone", index: f.zones.length - 1 };
     } else if (tool === "subzone") {
       f.subzones = f.subzones || [];
-      const c = polygonCentroid(pts);
-      const parent = (f.zones || []).find((z) => !z.no_go && this._inside(c, z.cords));
+      // A spot belongs to one room: the one under its first corner (the
+      // centroid's if that corner sits outside every room). Save clips the
+      // spot to that room.
+      const rooms = (f.zones || []).filter((z) => !z.no_go);
+      const parent = rooms.find((z) => this._inside(pts[0], z.cords)) || rooms.find((z) => this._inside(polygonCentroid(pts), z.cords));
       f.subzones.push({ sub_zone_id: uid("subzone"), entity_id: `Spot ${f.subzones.length + 1}`, parent: parent?.zone_id || null, poly: true,
         color: `hsl(${Math.floor(Math.random() * 360)}, 70%, 45%)`, cords: pts, type: "subzone" });
       this._selection = { kind: "subzone", index: f.subzones.length - 1 };
@@ -247,14 +345,134 @@ class SextantEdit extends LitElement {
     }
   }
 
+  /** Straighten the selected room or spot's near-straight edges (see squareUp). */
+  _squareUp() {
+    const sel = this._selection, f = this._floorObj();
+    if (!sel || !f || (sel.kind !== "zone" && sel.kind !== "subzone")) return;
+    const item = this._listFor(sel.kind, f)[sel.index];
+    const squared = squareUp(item.cords || []);
+    const moved = squared.reduce((m, q, i) => Math.max(m, Math.hypot(q.x - item.cords[i].x, q.y - item.cords[i].y)), 0);
+    if (moved < 0.01) return toast(this, "Already square");
+    this._snapshot();
+    item.cords = squared;
+    this._dirty = true;
+    this._map.invalidate();
+    this.requestUpdate();
+    const m = f.scale ? moved / f.scale : null;
+    toast(this, m != null ? `Squared up; no corner moved more than ${Math.round(m * 100)} cm. Save to keep it` : "Squared up. Save to keep it");
+  }
+
+  /** The floors this floor can be compared with, nearest level first (Basement and Second Floor both want Ground). */
+  _biasPartners(f) {
+    const lvl = (x) => (typeof x.level === "number" ? x.level : 0);
+    return (this._draft?.floor || []).filter((o) => o.name !== f.name)
+      .sort((a, b) => Math.abs(lvl(a) - lvl(f)) - Math.abs(lvl(b) - lvl(f)) || lvl(b) - lvl(a));
+  }
+
+  async _loadBiasView() {
+    const f = this._floorObj(), v = this._biasView;
+    if (!v?.on || !f) { this._map?.setBiasMap(null); return; }
+    const partners = this._biasPartners(f);
+    const other = partners.some((o) => o.name === v.other) ? v.other : partners[0]?.name;
+    if (!other) { this._map?.setBiasMap(null); return; }
+    const r = await this.hass.callWS({ type: "sextant/floor_bias_map", floor: f.name, other }).catch((e) => { toast(this, `bias map: ${e?.message || e}`); return null; });
+    if (!this._biasView?.on || this._floorObj()?.name !== f.name) return;
+    this._biasView = { ...this._biasView, other, result: r };
+    this._map?.setBiasMap(r ? { size: r.cell_px, cells: r.cells } : null);
+  }
+
+  /** Where this floor's election prior leans against a neighbour's: saved values, so Save before looking. */
+  _renderBiasView(f) {
+    const v = this._biasView || {};
+    const partners = this._biasPartners(f);
+    if (!partners.length) return nothing;
+    const r = v.on ? v.result : null;
+    const pct = (x) => `${x >= 1 ? "+" : "−"}${Math.round(Math.abs(x - 1) * 100)}%`;
+    return html`<div class="card">
+      <div class="row" style="align-items: center; gap: 8px; flex-wrap: wrap">
+        ${uiSwitch({ label: "Show floor bias", checked: !!v.on, onChange: (on) => { this._biasView = { ...v, on }; this._loadBiasView(); } })}
+        ${v.on && partners.length > 1 ? uiSelect({ label: "Against", value: v.other || partners[0].name, options: partners.map((o) => ({ value: o.name, label: o.name })), onChange: (other) => { this._biasView = { ...this._biasView, other }; this._loadBiasView(); }, style: "width: 170px" }) : nothing}
+        ${v.on && partners.length === 1 ? html`<span class="muted small">against ${partners[0].name}</span>` : nothing}
+      </div>
+      ${r ? html`<div class="muted small">Grey: ${f.name} and ${v.other} even. <span style="color:#1eaa46">Green</span>: a thing here leans to ${v.other}; <span style="color:#d72828">red</span>: to ${f.name}. Here it runs from ${pct(r.min)} to ${pct(r.max)}.${r.registered ? "" : " The floors are not lined up with pins, so places are matched by distance from each plan's corner."} Shows the saved layout.</div>` : nothing}
+    </div>`;
+  }
+
+  /** Spot size in the unit a tape measure reads: inches when imperial, cm otherwise. */
+  _sizeUnit() { return isImperial(this.hass) ? { name: "in", perM: 39.3701 } : { name: "cm", perM: 100 }; }
+
+  _spotBox(item) {
+    const xs = (item.cords || []).map((q) => q.x), ys = (item.cords || []).map((q) => q.y);
+    return { x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys) };
+  }
+
+  /** Type the real table's size: the spot becomes that exact rectangle, one corner held where it is. */
+  _renderSpotSize(item, f) {
+    if (!f.scale || (item.cords || []).length < 3) return nothing;
+    const u = this._sizeUnit(), b = this._spotBox(item);
+    const cur = { w: Math.round(((b.x1 - b.x0) / f.scale) * u.perM), d: Math.round(((b.y1 - b.y0) / f.scale) * u.perM) };
+    const s = this._size?.id === item.sub_zone_id ? this._size : { id: item.sub_zone_id, corner: "tl" };
+    const set = (k, v) => { this._size = { ...s, [k]: v }; };
+    return html`<div class="row">
+      ${uiField({ label: `Width (${u.name}, across the plan)`, type: "number", step: 1, min: 1, value: s.w ?? cur.w, onChange: (v) => set("w", Number(v)), style: "width: 150px" })}
+      ${uiField({ label: `Depth (${u.name}, up the plan)`, type: "number", step: 1, min: 1, value: s.d ?? cur.d, onChange: (v) => set("d", Number(v)), style: "width: 150px" })}
+      ${uiSelect({ label: "Keep this corner", value: s.corner, options: [{ value: "tl", label: "Top left" }, { value: "tr", label: "Top right" }, { value: "bl", label: "Bottom left" }, { value: "br", label: "Bottom right" }], onChange: (v) => set("corner", v), style: "width: 140px" })}
+      ${uiButton({ label: "Set size", icon: "mdi:ruler-square", onClick: () => this._resizeSpot(), title: "Make the spot an exact rectangle of this size, measured on the real furniture" })}
+    </div>`;
+  }
+
+  /** The proxy on the spot (its readings count as being on it) and the spot's own entry share. */
+  _renderSpotEvidence(item, f) {
+    const c = polygonCentroid(item.cords || []);
+    const linked = Array.isArray(item.proxy) ? item.proxy : item.proxy ? [item.proxy] : [];
+    const near = (f.receivers || []).filter((r) => r.cords)
+      .map((r) => ({ id: r.entity_id, name: proxyName(this.data, r.address || r.entity_id), d: Math.hypot(r.cords.x - c.x, r.cords.y - c.y) }))
+      .sort((a, b) => a.d - b.d).slice(0, 6);
+    for (const id of linked) if (!near.some((n) => n.id === id)) near.push({ id, name: proxyName(this.data, id), d: null });
+    const toggle = (id) => {
+      const next = linked.includes(id) ? linked.filter((x) => x !== id) : [...linked, id];
+      this._edit("proxy", next.length ? next : undefined);
+    };
+    const global = this.data?.layout?.tuning?.subzone_enter_prob ?? this.data?.tuning_spec?.subzone_enter_prob?.default ?? 0.5;
+    return html`<div class="field"><span class="small">Proxies on this spot</span>
+      <div class="proxypick">${near.map((n) => html`<button class="chip ${linked.includes(n.id) ? "on" : ""}" aria-pressed=${linked.includes(n.id)} @click=${() => toggle(n.id)}
+        title=${linked.includes(n.id) ? "On this spot: click to unlink" : "Click if this proxy sits on the furniture"}>${n.name}${n.d != null && f.scale ? html` <span class="muted">${fmtLen(n.d / f.scale, this.hass)}</span>` : nothing}</button>`)}</div></div>
+    <div class="row">
+      ${uiField({ label: "Entry share", type: "number", step: 0.05, min: 0.05, max: 0.95, value: item.enter_prob ?? "", placeholder: `${global} (default)`, onChange: (v) => this._edit("enter_prob", v === "" || v == null ? undefined : Number(v)), style: "width: 150px" })}
+    </div>
+    <div class="muted small">Proxies sitting on or against the furniture (a nightstand, both ends of a couch): a thing one of them hears close by, and clearly closer than any proxy not on the spot, counts as here. Entry share: how much of a thing's likely position must fall in the spot to enter it; blank uses the Tuning page's value.</div>`;
+  }
+
+  _resizeSpot() {
+    const sel = this._selection, f = this._floorObj();
+    if (!sel || sel.kind !== "subzone" || !f?.scale) return;
+    const item = f.subzones[sel.index], u = this._sizeUnit(), b = this._spotBox(item);
+    const s = this._size?.id === item.sub_zone_id ? this._size : {};
+    const w = ((s.w ?? ((b.x1 - b.x0) / f.scale) * u.perM) / u.perM) * f.scale;
+    const d = ((s.d ?? ((b.y1 - b.y0) / f.scale) * u.perM) / u.perM) * f.scale;
+    if (!(w > 0 && d > 0)) return toast(this, "Width and depth must be above zero");
+    const corner = s.corner || "tl";
+    const x0 = corner[1] === "l" ? b.x0 : b.x1 - w, y0 = corner[0] === "t" ? b.y0 : b.y1 - d;
+    const r = (v) => Math.round(v * 1000) / 1000;
+    this._snapshot();
+    item.cords = [{ x: r(x0), y: r(y0) }, { x: r(x0 + w), y: r(y0) }, { x: r(x0 + w), y: r(y0 + d) }, { x: r(x0), y: r(y0 + d) }];
+    item.poly = true;
+    this._size = null;
+    this._dirty = true;
+    this._map.invalidate();
+    this.requestUpdate();
+    toast(this, "Spot resized. Drag it into place if needed, then Save");
+  }
+
   _deleteSelection() {
     const sel = this._selection, f = this._floorObj();
     if (!sel || !f) return;
-    const list = sel.kind === "receiver" ? f.receivers : sel.kind === "zone" ? f.zones : f.subzones;
+    const list = this._listFor(sel.kind, f);
     const item = list[sel.index];
-    if (!confirmDialog(`Delete ${sel.kind === "receiver" ? "proxy" : sel.kind === "zone" ? "room" : "spot"} "${item.entity_id}"?`)) return;
+    if (!confirmDialog(`Delete ${sel.kind === "receiver" ? "proxy" : sel.kind === "zone" ? "room" : sel.kind === "pin" ? "pin" : "spot"} "${item.entity_id ?? item.name}"?`)) return;
     this._snapshot();
     list.splice(sel.index, 1);
+    if (sel.kind === "pin") this._refreshAlignment();
     if (sel.kind === "zone") for (const s of f.subzones || []) if (s.parent === item.zone_id) s.parent = null;
     this._selection = null;
     this._dirty = true;
@@ -265,14 +483,16 @@ class SextantEdit extends LitElement {
   _edit(field, value) {
     const sel = this._selection, f = this._floorObj();
     if (!sel || !f) return;
-    const list = sel.kind === "receiver" ? f.receivers : sel.kind === "zone" ? f.zones : f.subzones;
+    const list = this._listFor(sel.kind, f);
     const item = list[sel.index];
     this._snapshot();
+    if (sel.kind === "pin") this._refreshAlignment();
     if (field === "height" || field === "correction") item[field] = value === "" || value == null ? undefined : Number(value);
     else if (field === "no_go") item.no_go = !!value;
     else item[field] = value;
     if (item.height === undefined) delete item.height;
     if (item.correction === undefined) delete item.correction;
+    if (item[field] === undefined) delete item[field];
     this._dirty = true;
     this._map.invalidate();
     this.requestUpdate();
@@ -282,7 +502,7 @@ class SextantEdit extends LitElement {
 
   async _addFloor(name, file) {
     if (!name || !file) return toast(this, "A floor needs a name and a map image");
-    const draft = this._draft;
+    const draft = this._cleanDraft();
     const ext = file.name.includes(".") ? file.name.slice(file.name.lastIndexOf(".")) : ".png";
     const filename = `${name}${ext}`;
     draft.floor.push({ name, scale: null, receivers: [], zones: [], subzones: [] });
@@ -318,12 +538,16 @@ class SextantEdit extends LitElement {
   }
 
   async _save(removeMap = null) {
-    const draft = this._draft;
-    for (const f of draft.floor) for (const r of f.receivers || []) { delete r.unmatched; delete r.label; }
+    const draft = this._cleanDraft();
     this._busy = true;
     const r = await callWS(this, this.hass, { type: "sextant/layout/save", layout: draft, ...(removeMap ? { remove_map: removeMap } : {}) });
     this._busy = false;
-    if (r) { toast(this, "Floor plan saved"); this._dirty = false; this.dispatchEvent(new CustomEvent("layout-changed")); }
+    if (r) {
+      const n = r.confined?.length || 0;
+      toast(this, n ? `Floor plan saved; ${n === 1 ? `${r.confined[0]} was` : `${n} spots were`} fitted inside ${n === 1 ? "its room" : "their rooms"}` : "Floor plan saved");
+      this._dirty = false;
+      this.dispatchEvent(new CustomEvent("layout-changed"));
+    }
   }
 
   _discard() {
@@ -382,26 +606,30 @@ class SextantEdit extends LitElement {
           ${this._measure?.b ? html`${uiField({ label: `Distance between the two points (${lenUnit(this.hass)})`, type: "number", step: 0.01, min: 0.1, onChange: (v) => { this._metres = v; }, style: "width: 240px" })} ${uiButton({ label: "Set scale", kind: "primary", onClick: () => this._applyMeasure(this._metres) })}`
             : this._measure ? "Click the second point." : `Click two points a known distance apart. Current scale: ${fmtScale(f?.scale, this.hass)}`}
         </div>` : nothing}
-        ${["zone", "subzone", "nogo"].includes(this._tool) ? html`<div class="hint">Click to add corners; click the first corner or double-click to close. ${uiButton({ label: "Cancel", kind: "text", onClick: () => { this._map.cancelDraft(); } })}</div>` : nothing}
+        ${this._tool === "pin" ? html`<div class="hint">Click a point you can find on every floor: an outside corner, a stair post, a chimney. It lands on a room corner when one is near (Alt places it freely). Then switch floor and pin the same points - the names carry over in order.</div>` : nothing}
+        ${["zone", "subzone", "nogo"].includes(this._tool) ? html`<div class="hint">Click to add corners; click the first corner or double-click to close. An edge close to horizontal, vertical or 45° snaps exact (orange); hold Alt to place a corner freely. ${uiButton({ label: "Cancel", kind: "text", onClick: () => { this._map.cancelDraft(); } })}</div>` : nothing}
       </div>
       <aside class="side">
         ${f ? html`
           <div class="card">
             <h4>${f.name} <span class="muted small">${fmtScale(f.scale, this.hass)}</span></h4>
             <div class="row small muted">${(f.receivers || []).length} proxies · ${(f.zones || []).filter((z) => !z.no_go).length} rooms · ${(f.zones || []).filter((z) => z.no_go).length} no-go · ${(f.subzones || []).length} spots</div>
-            <div class="row small muted">Level: storey number, 0 = ground, -1 = basement; orders the floor picker top-down. Bias: election prior, 1.2 = a 20 % head start every cycle.</div>
+            <div class="row small muted">Level: storey number, 0 = ground, -1 = basement; orders the floor picker top-down. Elevation: this floor's finished floor above the ground floor's, so ceiling height plus the floor structure; blank assumes 3 m a storey. Bias: election prior, 1.2 = a 20 % head start every cycle.</div>
             <div class="row">
               ${/* Measuring two points gives a float with a dozen decimals; a
                     hundredth of a pixel per metre is already far finer than any
                     measurement behind it, so show and store it rounded. */ ""}
               ${uiField({ label: "Scale (px per m)", type: "number", step: 0.01, value: f.scale == null ? "" : Math.round(f.scale * 100) / 100, onChange: (v) => { this._snapshot(); f.scale = Number(v) || null; this._dirty = true; this.requestUpdate(); }, style: "width: 150px" })}
               ${uiField({ label: "Level", type: "number", step: 1, value: f.level ?? "", placeholder: "0", onChange: (v) => { if (v === "" || v == null) delete f.level; else f.level = Math.round(Number(v)); this._dirty = true; this.requestUpdate(); }, style: "width: 90px" })}
+              ${uiField({ label: `Elevation (${lenUnit(this.hass)})`, type: "number", step: 0.05, value: toDisplayLen(f.elevation, this.hass), placeholder: String(toDisplayLen((f.level || 0) * 3, this.hass)), onChange: (v) => { this._snapshot(); const m = fromDisplayLen(v, this.hass); if (m == null || isNaN(m)) delete f.elevation; else f.elevation = m; this._dirty = true; this._refreshAlignment(); this.requestUpdate(); }, style: "width: 130px" })}
               ${uiField({ label: "Election bias", type: "number", step: 0.05, min: 0.25, max: 4, value: f.bias ?? "", placeholder: "1", onChange: (v) => { if (v === "" || v == null) delete f.bias; else f.bias = Number(v); this._dirty = true; this.requestUpdate(); }, style: "width: 120px" })}
               ${uiButton({ label: "Adjust rooms", disabled: this._busy, onClick: () => this._adjust("zones"), title: "Square up rooms and snap shared walls" })}
               ${uiButton({ label: "Adjust spots", disabled: this._busy, onClick: () => this._adjust("subzones") })}
               ${uiButton({ label: "Delete floor", kind: "danger", disabled: this._busy, onClick: () => this._removeFloor() })}
             </div>
           </div>` : html`<div class="card muted">No floor yet. Add one below.</div>`}
+        ${f ? this._renderBiasView(f) : nothing}
+        ${f ? this._renderAlignment(f) : nothing}
         ${this._proposal ? html`<div class="card">
           <h4>Proposed ${this._proposal.target}</h4>
           <ul class="plain small">${(this._proposal.report || this._proposal.changes || []).slice(0, 12).map((c) => html`<li>${typeof c === "string" ? c : `${c.name || c.zone || ""}: ${c.change || c.note || JSON.stringify(c)}`}</li>`)}</ul>
@@ -420,10 +648,45 @@ class SextantEdit extends LitElement {
     `;
   }
 
+  /** How this floor stacks against the others, and what the pins say about it. */
+  _renderAlignment(f) {
+    const rep = this._alignment, pins = f.pins || [];
+    const row = rep?.floors?.[f.name];
+    const waiting = this._pinNamesElsewhere(f);
+    if (!pins.length && !waiting.length) {
+      return html`<div class="card small muted"><h4>Alignment</h4>Floors are drawn separately and nothing says how they stack. Pin two or more points that line up through the house (the Pin tool), with the same names on each floor.</div>`;
+    }
+    const useScale = (px) => { this._snapshot(); f.scale = px; this._dirty = true; this._refreshAlignment(); this.requestUpdate(); toast(this, `Scale set to ${fmtScale(px, this.hass)}. Save, then re-run calibration for this floor: its corrections were learned at the old scale`, 8000); };
+    const off = row?.implied_scale && row.scale ? Math.abs(row.implied_scale / row.scale - 1) : 0;
+    return html`<div class="card small">
+      <h4>Alignment <span class="muted small">${pins.length} pin${pins.length === 1 ? "" : "s"}</span></h4>
+      ${!row ? html`<div class="muted">Checking…</div>`
+        : row.reference ? html`<div>This is the reference floor: the others are lined up against it.</div>`
+        : row.ok ? html`${(row.suspects || []).length ? html`<div class="warn"><b>${row.suspects.join(" and ")}</b> ${row.suspects.length === 1 ? "does" : "do"} not line up with the rest (${row.suspects.map((n) => fmtLen(row.misses?.[n], this.hass, 1)).join(", ")} off) and ${row.suspects.length === 1 ? "was" : "were"} left out of the fit. Most often the corner clicked here is not above the one on the other floor: a room that is longer upstairs, a wall set in from the one below. The grey rings on the plan show where the other floors put each pin.</div>` : nothing}<div>Lined up on ${row.shared - (row.suspects || []).length} agreeing pins, typically within <b>${fmtLen(row.rms_m, this.hass, 2)}</b>${row.worst && row.max_m >= 0.05 ? html`; worst is <b>${row.worst}</b> at ${fmtLen(row.max_m, this.hass, 2)}` : nothing}${Math.abs(row.rotation_deg) >= 0.5 ? html`. This plan is turned ${fmtNum(row.rotation_deg, 1)}° against the reference` : nothing}.</div>`
+        : row.rms_m != null && row.implied_scale && row.agree_rms_m != null && row.agree_rms_m <= 0.3 ? html`<div class="warn">The pins agree with each other (within ${fmtLen(row.agree_rms_m, this.hass, 2)}) but not at this floor's scale, so the floor cannot be lined up yet. That points at the scale, not at any pin.</div>`
+        : row.rms_m != null ? html`<div class="warn">The pins disagree by ${fmtLen(row.rms_m, this.hass, 2)} - too much to use. Check <b>${row.worst}</b> first (${fmtLen(row.max_m, this.hass, 2)} off), or pins that sit very close together.</div>`
+        : html`<div class="muted">Not lined up yet: ${row.why}.</div>`}
+      ${off >= 0.01 ? html`<div class="row">The pins fit best at <b>${fmtScale(row.implied_scale, this.hass)}</b>; this floor is set to ${fmtScale(row.scale, this.hass)} (${fmtNum(off * 100, 1)} % apart). ${uiButton({ label: "Use the pins' scale", onClick: () => useScale(row.implied_scale), title: "Set this floor's scale from its pins. Four or more well-spread pins usually beat one tape measurement" })}</div>` : nothing}
+      ${waiting.length ? html`<div class="muted">Pinned on other floors, not here yet: ${waiting.join(", ")}.</div>` : nothing}
+      ${(rep?.unlinked || []).filter((n) => pins.some((q) => q.name === n)).length ? html`<div class="muted">Only on this floor so far: ${rep.unlinked.filter((n) => pins.some((q) => q.name === n)).join(", ")}.</div>` : nothing}
+    </div>`;
+  }
+
   _renderSelection(sel, f) {
-    const list = sel.kind === "receiver" ? f.receivers : sel.kind === "zone" ? f.zones : f.subzones;
+    const list = this._listFor(sel.kind, f);
     const item = list?.[sel.index];
     if (!item) return nothing;
+    if (sel.kind === "pin") {
+      const others = [...new Set((this._draft?.floor || []).filter((fl) => fl !== f).flatMap((fl) => (fl.pins || []).map((q) => q.name)))].filter(Boolean);
+      const taken = new Set((f.pins || []).filter((q) => q !== item).map((q) => q.name));
+      return html`<div class="card">
+        <h4>Pin</h4>
+        <div class="row">${uiField({ label: "Name (the same on every floor)", value: item.name || "", onChange: (v) => { const name = String(v || "").trim(); if (!name) return; if (taken.has(name)) return toast(this, `This floor already has a pin called ${name}`); this._edit("name", name); }, style: "flex: 1" })}</div>
+        ${others.filter((n) => !taken.has(n) && n !== item.name).length ? html`<div class="row small"><span class="muted">On other floors:</span>${others.filter((n) => !taken.has(n) && n !== item.name).map((n) => html`<button class="chip" @click=${() => this._edit("name", n)}>${n}</button>`)}</div>` : nothing}
+        <div class="muted small">${item.linked ? "Linked: this name is pinned on another floor too." : "Not linked yet: pin the same point on another floor and give it this name."}${item.miss != null && item.miss >= 0.05 ? ` Misses the fit by ${fmtLen(item.miss, this.hass, 2)}.` : ""} x ${fmtNum(item.cords?.x, 0)}, y ${fmtNum(item.cords?.y, 0)}</div>
+        <div class="row"><span class="grow"></span>${uiButton({ label: "Delete", kind: "danger", onClick: () => this._deleteSelection() })}</div>
+      </div>`;
+    }
     const zones = (f.zones || []).filter((z) => !z.no_go);
     return html`<div class="card">
       <h4>${sel.kind === "receiver" ? "Proxy" : sel.kind === "zone" ? (item.no_go ? "No-go area" : "Room") : "Spot"}</h4>
@@ -449,8 +712,10 @@ class SextantEdit extends LitElement {
           <div class="muted small">Takes which things? None picked means any of them. A bedside table is for a phone, a watch and keys; a cat bed is for the cat.</div>
           <div class="classpick">${this._classPicker(item)}</div>
           <div class="muted small">A ringed group goes together: pick Person or Pet and its kinds count too, shown without the grey background.</div>
-        </div>` : nothing}
-      <div class="row"><span class="muted small">${(item.cords?.length ?? 1)} point(s)</span><span class="grow"></span>${uiButton({ label: "Delete", kind: "danger", onClick: () => this._deleteSelection() })}</div>
+        </div>
+        ${this._renderSpotSize(item, f)}
+        ${this._renderSpotEvidence(item, f)}` : nothing}
+      <div class="row"><span class="muted small">${(item.cords?.length ?? 1)} point(s)</span><span class="grow"></span>${sel.kind === "zone" || sel.kind === "subzone" ? uiButton({ label: "Square up", icon: "mdi:vector-square", onClick: () => this._squareUp(), title: "Make every edge that is nearly horizontal, vertical or 45° exactly that. Other angles stay as drawn" }) : nothing}${uiButton({ label: "Delete", kind: "danger", onClick: () => this._deleteSelection() })}</div>
     </div>`;
   }
 
@@ -512,6 +777,10 @@ class SextantEdit extends LitElement {
     .picked-row { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
     .family { display: inline-flex; gap: 1px; padding: 2px; border: 1.5px solid var(--divider-color); border-radius: 11px; }
     /* Sized so both family rings sit on one line of the 320px side panel. */
+    .proxypick { display: flex; flex-wrap: wrap; gap: 4px; margin: 2px 0 4px; }
+    .proxypick .chip { border: 1px solid var(--divider-color, #ccc); border-radius: 14px; padding: 3px 9px; background: transparent; color: var(--primary-text-color); cursor: pointer; font: inherit; font-size: 12px; }
+    .proxypick .chip.on { background: var(--primary-color, #03a9f4); border-color: var(--primary-color, #03a9f4); color: var(--text-primary-color, #fff); }
+    .proxypick .chip.on .muted { color: inherit; opacity: .8; }
     .classpick .cls { padding: 3px; border: 1px solid transparent; border-radius: 7px; background: transparent; line-height: 0; cursor: pointer; color: var(--disabled-text-color, #c4c4c4); }
     .classpick .cls ha-icon { --mdc-icon-size: 20px; }
     .classpick .cls.on { color: var(--primary-text-color); background: var(--secondary-background-color); border-color: var(--divider-color); }
@@ -533,6 +802,9 @@ class SextantEdit extends LitElement {
     .sep { width: 1px; height: 24px; background: var(--divider-color); margin: 0 4px; }
     .hint { position: absolute; left: 10px; bottom: 10px; right: 10px; padding: 8px 10px; border-radius: 8px; background: var(--card-background-color); box-shadow: var(--ha-card-box-shadow, 0 1px 4px rgba(0,0,0,0.2)); font-size: 13px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
     .hint select { max-width: 100%; }
+    .chip { padding: 2px 9px; border-radius: 999px; border: 1px solid var(--divider-color); background: var(--secondary-background-color); color: var(--primary-text-color); font: inherit; font-size: 12px; cursor: pointer; }
+    .chip:hover { border-color: var(--primary-color); }
+    .warn { color: var(--warning-color, #9a5b00); }
     .side { border-left: 1px solid var(--divider-color); overflow: auto; padding: 12px; }
     ul.plain { list-style: none; padding: 0; margin: 4px 0; }
     @media (max-width: 720px) { :host { grid-template-columns: 1fr; grid-template-rows: 1fr auto; } .side { border-left: 0; border-top: 1px solid var(--divider-color); max-height: 45vh; } .toolbar { flex-wrap: wrap; max-width: calc(100% - 20px); gap: 3px; padding: 4px; } .toolbar button.tool { min-width: 52px; } }

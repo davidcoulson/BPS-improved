@@ -98,3 +98,60 @@ def test_blend_weight_decides_the_estimator_and_is_validated():
         assert db.gain_for("tile") == 1.2                                  # a learned gain is not overwritten
     finally:
         sextant._fingerprint_db = saved
+
+
+# --- rebase: marks follow the corrections in force now --------------------- #
+def _rebase_sample(raw=True):
+    # Receiver "a" at (0, 0) stretched x2 when the mark was made, "b" at (300, 0) x1.
+    s = {"t": 1.0, "gain": 1.0, "estimator": "geometric",
+         "thing_vec": {"a": 2.0, "b": 3.0},
+         "floors": {"F": {"weighted": [[0.0, 0.0, 200.0, 1.0, 200.0], [300.0, 0.0, 300.0, 1.0, 300.0]],
+                          "bounds": None, "min_wr": 50.0, "scale": 100.0}}}
+    if raw:
+        s["raw_vec"] = {"a": 1.0, "b": 3.0}
+    return s
+
+
+def _fns(corr):
+    def mult(rx, raw):
+        return corr.get(rx)
+    def rx_at(_floor, x, _y):
+        return ("a", None) if x == 0.0 else ("b", None)
+    return mult, rx_at
+
+
+def test_rebase_applies_todays_corrections_to_the_raw_readings():
+    mult, rx_at = _fns({"a": 1.5, "b": 1.0})
+    (s,) = truth.rebase([_rebase_sample()], mult, rx_at, 0.5)
+    assert s["thing_vec"] == {"a": 1.5, "b": 3.0}
+    assert s["floors"]["F"]["weighted"][0] == [0.0, 0.0, 150.0, 1.0, 150.0]
+    assert s["floors"]["F"]["weighted"][1][2] == 300.0
+    assert _rebase_sample()["thing_vec"]["a"] == 2.0  # the stored mark is not touched
+
+
+def test_rebase_recovers_raw_from_an_old_mark_with_the_correction_it_ran_with():
+    # No raw_vec: divide out the full correction (mult(rx, None)), then apply
+    # the one in force now for that raw range - here faded to nothing.
+    def mult(rx, raw):
+        full = {"a": 2.0, "b": 1.0}[rx]
+        return full if raw is None or raw > 2.5 else 1.0
+    _m, rx_at = _fns({})
+    (s,) = truth.rebase([_rebase_sample(raw=False)], mult, rx_at, 0.5)
+    assert s["thing_vec"]["a"] == 1.0
+    assert s["floors"]["F"]["weighted"][0][2] == 100.0
+
+
+def test_rebase_keeps_what_it_cannot_place():
+    (s,) = truth.rebase([_rebase_sample()], lambda rx, raw: None, lambda *a: None, 0.5)
+    assert s["thing_vec"] == {"a": 2.0, "b": 3.0}
+    assert s["floors"]["F"]["weighted"][0][2] == 200.0
+
+
+def test_rebase_takes_the_vertical_leg_off_again():
+    mult = lambda rx, raw: 1.0  # noqa: E731
+    rx_at = lambda _f, x, _y: ("a", 1.2) if x == 0.0 else ("b", None)  # noqa: E731
+    s = _rebase_sample()
+    s["raw_vec"] = {"a": 2.0, "b": 3.0}
+    (out,) = truth.rebase([s], mult, rx_at, 0.5)
+    assert abs(out["floors"]["F"]["weighted"][0][2] - 100.0 * (2.0 ** 2 - 1.2 ** 2) ** 0.5) < 1e-9
+    assert out["floors"]["F"]["weighted"][0][4] == 200.0  # the slant stays the slant

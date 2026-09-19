@@ -489,3 +489,53 @@ def _max_vertex_move(a, b):
     """Largest distance from an original vertex to the nearest new-boundary point."""
     bb = b.exterior
     return max((Point(p).distance(bb) for p in list(a.exterior.coords)[:-1]), default=0.0)
+
+
+# A spot up to this far (panel px, a couple of cm) past its room's wall is left
+# alone: clipping a hair off would trade its right angles for a slanted wall.
+CONFINE_SLACK_PX = 1.0
+
+
+def confine_spots(floor):
+    """Keep every spot of a floor inside exactly one room. Mutates ``floor``.
+
+    A spot's room is its ``parent``. A spot with no parent, or one that now sits
+    mostly in another room (it was dragged there), takes the room it overlaps
+    most. The spot is then clipped to that room. A spot that overlaps no room
+    is left as it is, parentless. Returns the names of the spots that changed.
+    """
+    rooms = {}
+    for z in floor.get("zones") or []:
+        if z.get("no_go") or not z.get("zone_id"):
+            continue
+        p = _polygon(_ring(z.get("cords") or [], z.get("poly")))
+        if p is not None:
+            rooms[z["zone_id"]] = p
+    changed = []
+    for s in floor.get("subzones") or []:
+        spot = _polygon(_ring(s.get("cords") or [], s.get("poly")))
+        if spot is None or spot.area <= 0:
+            continue
+        overlap = {zid: spot.intersection(room).area for zid, room in rooms.items()}
+        best = max(overlap, key=overlap.get, default=None)
+        parent = s.get("parent")
+        if best is not None and overlap[best] > 0 and (
+            parent not in rooms
+            or (overlap.get(parent, 0.0) < 0.5 * spot.area
+                and overlap[best] > overlap.get(parent, 0.0))
+        ):
+            parent = best
+        if parent not in rooms:
+            continue
+        room = rooms[parent]
+        touched = parent != s.get("parent")
+        if not room.buffer(CONFINE_SLACK_PX).covers(spot):
+            clipped = _largest_polygon(make_valid(spot.intersection(room)))
+            if clipped is not None and clipped.area > 1:
+                s["cords"] = _out_cords(clipped)
+                s["poly"] = True
+                touched = True
+        if touched:
+            s["parent"] = parent
+            changed.append(s.get("entity_id") or s.get("sub_zone_id"))
+    return changed

@@ -36,6 +36,10 @@ No SciPy: the solver is pure numpy, so 32-bit and constrained installs work.
 
 ## Installation
 
+This is the short version. [Getting started](getting-started.md) is the
+same thing step by step, with what to check when a thing lands in the
+wrong room.
+
 1. HACS → Integrations → ⋮ → **Custom repositories**. Add
    `davidcoulson/sextant` as an Integration, then install **Sextant** and
    restart Home Assistant.

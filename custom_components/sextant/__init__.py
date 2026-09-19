@@ -18,7 +18,7 @@ from homeassistant.util import slugify
 import numpy as np
 from .solver_numpy import least_squares_bounded_soft_l1
 import voluptuous as vol
-from homeassistant.core import ServiceCall
+from homeassistant.core import ServiceCall, ServiceResponse, SupportsResponse
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 import logging
@@ -70,6 +70,8 @@ from .const import ACCURACY_ENTITY_ID
 from . import history as history_mod
 from . import bermuda_source
 from . import fingerprint
+from . import floor_field
+from . import registration
 from . import truth as truth_mod
 from .zone_adjust import adjust_zones, adjust_subzones
 
@@ -373,6 +375,15 @@ TUNING_SPEC = {
     # how far (m) outside its polygon the fix must sit before it is left.
     "subzone_enter_prob": (0.5, float, 0.1, 0.95),
     "subzone_unlock_margin": (1.0, float, 0.0, 5.0),
+    # A spot with a proxy on it (a bedside table, a desk): the proxy hearing the
+    # thing close, and clearly closer than every other proxy, counts as the thing
+    # being in the spot - direct evidence, where the position estimate is as
+    # wide as the furniture. Full weight within spot_proxy_near_m, none from
+    # spot_proxy_far_m; full when every other proxy reads spot_proxy_ratio times
+    # farther, none when one reads within 1.25x (see _spot_proxy_evidence).
+    "spot_proxy_near_m": (1.2, float, 0.1, 5.0),
+    "spot_proxy_far_m": (2.0, float, 0.2, 10.0),
+    "spot_proxy_ratio": (2.0, float, 1.3, 10.0),
     # Floor election dwell (see _elect_floor).
     "floor_switch_secs": (FLOOR_SWITCH_SECS, float, 0.0, 3600.0),
     "floor_tenure_bonus": (0.05, float, 0.0, 0.5),      # extra margin at full tenure
@@ -392,6 +403,16 @@ TUNING_SPEC = {
     # (needs a Bermuda build with the rssi_offsets API), so Bermuda's own
     # area/distance sensors are corrected too and Sextant applies nothing twice.
     "calibration_target": ("sextant", str, ("sextant", "bermuda")),
+    # Close-range fade (see _close_range_correction). Calibration fits one
+    # stretch per receiver from proxy pairs metres apart; a receiver that hears
+    # its siblings short gets stretched, and that stretch pushes a thing lying
+    # right beside it away from it. So a stretching correction (> 1) fades out
+    # below correction_fade_far_m and is gone by correction_fade_near_m.
+    # Shrinking corrections (< 1) are always applied in full. Off = the
+    # correction everywhere, as before 3.17.6.
+    "correction_close_fade": (True, bool),
+    "correction_fade_near_m": (1.0, float, 0.0, 10.0),
+    "correction_fade_far_m": (2.5, float, 0.1, 20.0),
     # Fingerprint fusion (fingerprint.py). "geometric" is the trilateration
     # alone. "fingerprint" places the thing at the best-matching reference
     # receivers and only falls back to the fit where no reference exists.
@@ -424,6 +445,16 @@ TUNING_SPEC = {
     "anchor_ratio": (2.0, float, 1.0, 10.0),
     "anchor_secs": (20.0, float, 0.0, 600.0),
     "anchor_release_m": (1.5, float, 0.1, 10.0),
+    # How long a thing may go unheard before the Live page draws it as a
+    # ghost - translucent, with how long ago it was last heard - because the
+    # position shown is then a memory rather than a reading. Display only:
+    # nothing about positioning changes, and position_timeout still decides
+    # when the thing leaves the map altogether.
+    "stale_after_secs": (120.0, float, 15.0, 3600.0),
+    # Hours of position history kept per thing: the history scrubber, the
+    # timeline and Activity reach back this far. Applied on the next
+    # cycle; an explicit top-level history_max_age (seconds) still wins.
+    "history_hours": (6.0, float, 1.0, 168.0),
 }
 
 # Reference fingerprints: receiver-to-receiver ranges, refreshed on a slow
@@ -481,9 +512,97 @@ def _fingerprint_wanted(layout):
     return isinstance(weights, dict) and any(isinstance(w, (int, float)) and w > 0 for w in weights.values())
 
 
+# Truth marks as stored (with their samples), and the references built from
+# them under the corrections in force when they were last built.
+_truth_marks = []
+_mark_ref_cache = {"key": None, "refs": []}
+
+
+def _set_truth_marks(marks):
+    """Replace the marks the fingerprint matcher draws references from."""
+    _truth_marks[:] = list(marks or [])
+    _mark_ref_cache["key"] = None
+
+
+def _raw_vector(layout):
+    """{rx_address: metres} this cycle, before calibration and per-thing trim."""
+    out = {}
+    for floor in (layout or {}).get("floor") or []:
+        for receiver in floor.get("receivers") or []:
+            address, raw = receiver.get("address"), receiver.get("raw_distance")
+            if isinstance(address, str) and address and "distance" in receiver \
+                    and isinstance(raw, (int, float)) and not isinstance(raw, bool) and raw > 0:
+                out[address.lower()] = float(raw)
+    return out
+
+
+def _mark_rebase_fns(layout, entity):
+    """(mult, rx_at) for truth.rebase: this thing's multiplier per receiver
+    now, and the receiver placed at a point with its vertical leg."""
+    thing_h = _thing_height(layout, entity)
+    corr, placed = {}, {}
+    for floor in (layout or {}).get("floor") or []:
+        for receiver in floor.get("receivers") or []:
+            address, cords = receiver.get("address"), receiver.get("cords") or {}
+            if not isinstance(address, str) or not address:
+                continue
+            c = receiver.get("correction")
+            corr[address.lower()] = float(c) if isinstance(c, (int, float)) and not isinstance(c, bool) and c > 0 else 1.0
+            h = receiver.get("height")
+            dz = float(h) - thing_h if isinstance(h, (int, float)) and not isinstance(h, bool) and 0 <= h <= 10 else None
+            try:
+                placed.setdefault(floor.get("name"), []).append((float(cords["x"]), float(cords["y"]), address.lower(), dz))
+            except (KeyError, TypeError, ValueError):
+                continue
+    factor = _thing_distance_factor(layout, entity)
+
+    def mult(address, raw_m):
+        c = corr.get(address)
+        if c is None:
+            return None
+        # raw_m None: the multiplier a mark from before raw readings were kept
+        # was recorded with - the correction in full.
+        return (c if raw_m is None else _close_range_correction(c, raw_m, layout)) * factor
+
+    def rx_at(floor_name, x, y):
+        for rx, ry, address, dz in placed.get(floor_name, ()):
+            if abs(rx - x) <= 1.0 and abs(ry - y) <= 1.0:
+                return address, dz
+        return None
+
+    return mult, rx_at
+
+
+def _rebased_samples(layout, mark):
+    """A mark's samples with the corrections in force now (see truth.rebase)."""
+    mult, rx_at = _mark_rebase_fns(layout, mark.get("entity"))
+    return truth_mod.rebase(mark.get("samples") or [], mult, rx_at, MIN_WEIGHT_RADIUS_M)
+
+
+def _mark_basis(layout):
+    """What a mark reference depends on: corrections, heights, trims, the fade."""
+    rx = tuple(sorted(
+        (str(r.get("address")), r.get("correction"), r.get("height"))
+        for f in (layout or {}).get("floor") or [] for r in f.get("receivers") or []
+    ))
+    things = json.dumps([(layout or {}).get(k) for k in ("thing_ref_offsets", "thing_heights", "thing_height")], sort_keys=True, default=str)
+    fade = tuple(_tuning(layout, k) for k in ("correction_close_fade", "correction_fade_near_m", "correction_fade_far_m"))
+    return rx, things, fade
+
+
 def _mark_refs(layout):
     """The truth-mark references to add to the proxies', or None when switched off."""
-    return _fingerprint_db.extra_refs if _tuning(layout, "fingerprint_marks") and _fingerprint_db.extra_refs else None
+    if not _truth_marks or not _tuning(layout, "fingerprint_marks"):
+        return None
+    key = _mark_basis(layout)
+    if key != _mark_ref_cache["key"]:
+        refs = []
+        for mark in _truth_marks:
+            ref = truth_mod.mark_reference(mark, samples=_rebased_samples(layout, mark))
+            if ref:
+                refs.append(ref)
+        _mark_ref_cache.update(key=key, refs=refs)
+    return _mark_ref_cache["refs"] or None
 
 
 def _persist_fp_gains(hass, now_ts):
@@ -565,6 +684,26 @@ def _tuning(data, key):
     if not isinstance(tuning, dict) or key not in tuning:
         return default
     return _coerce_tuning(key, tuning[key], default)
+
+
+def _close_range_correction(correction, raw_m, data):
+    """The share of a receiver's calibration correction to apply at this range.
+
+    A stretching correction (> 1) is geometrically faded from nothing at
+    correction_fade_near_m to all of it at correction_fade_far_m; see the
+    tuning comment. Replayed on the truth marks this halved the error of a
+    watch on a bedside proxy (1.5 m -> 0.7 m) and left the others within a
+    few centimetres.
+    """
+    if correction <= 1.0 or not _tuning(data, "correction_close_fade"):
+        return correction
+    near = _tuning(data, "correction_fade_near_m")
+    far = max(_tuning(data, "correction_fade_far_m"), near + 0.01)
+    if raw_m >= far:
+        return correction
+    if raw_m <= near:
+        return 1.0
+    return correction ** ((raw_m - near) / (far - near))
 
 
 def _layout_for(new_global_data, entity):
@@ -1085,7 +1224,7 @@ async def update_tracked_entities(hass):
             # Use a separate copy per entity to avoid cross-entity mutation side effects.
             layout = get_layout(hass)
             _refresh_fingerprint_references(hass, layout, now_ts)
-            new_global_data = [{"entity": ent, "data": copy.deepcopy(layout)} for ent in unique_values]
+            new_global_data = [{"entity": ent, "data": _thing_layout(layout)} for ent in unique_values]
 
             await process_entities(hass, new_global_data)
             async_dispatcher_send(hass, SIGNAL_BPS_UPDATE, _push_payload(hass))
@@ -1834,7 +1973,7 @@ async def update_receiver_radii(hass, eids):
                 # per-scanner RSSI offset in Bermuda's exponential model.
                 correction = receiver.get("correction")
                 if isinstance(correction, (int, float)) and correction > 0:
-                    distance = distance * correction
+                    distance = distance * _close_range_correction(float(correction), distance, eids["data"])
                 # Per-THING ref-power trim (issue #92): a tag whose
                 # transmit power differs from Bermuda's configured
                 # ref_power reads consistently long or short from EVERY
@@ -1884,6 +2023,7 @@ async def update_receiver_radii(hass, eids):
                 # through the slab shrink its through-floor slant and
                 # steal the election from the correct floor.
                 receiver["distance"] = distance
+                receiver["raw_distance"] = distance_m  # before correction and trim, for truth marks
                 receiver["quality"] = quality
             except ValueError:
                 #_LOGGER.info(f"Invalid numerical value: {rec_value.state}")
@@ -2039,7 +2179,8 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
         })
     # Keep this cycle's inputs so a truth mark can re-solve it under other settings.
     if jobs:
-        _truth_buffer.remember(entity, jobs, thing_vec if estimator != "geometric" else fingerprint.thing_vector(layout), fp_gain, estimator)
+        _truth_buffer.remember(entity, jobs, thing_vec if estimator != "geometric" else fingerprint.thing_vector(layout), fp_gain, estimator,
+                               raw_vec=_raw_vector(layout))
 
     solved = {}  # floor name -> everything the publish pipeline needs
     if jobs:
@@ -2112,15 +2253,39 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
     # upstairs receivers around the void as by the office ones (measured
     # live at 0.54 / 0.46, incumbent never challenged). The floor whose
     # receivers are physically nearest gets the benefit of the doubt.
-    scores = _proximity_weighted_scores(
+    prox_scores = _proximity_weighted_scores(
         {f: s["conf"] for f, s in solved.items()},
         {c["name"]: c.get("near_k_m", c.get("nearest_m")) for c in candidates},
         _tuning(layout, "floor_proximity_weight"),
     )
     # The floor's own prior (layout floor["bias"], default 1): in a house the
     # ground floor is where things usually are, and a phone on the kitchen
-    # counter must not tie with the bedroom directly above it.
-    scores = {f: s * _floor_bias(layout, f) for f, s in scores.items()}
+    # counter must not tie with the bedroom directly above it. Shaped by the
+    # floor's bias field at where THIS floor's solve put the thing, so the
+    # prior can differ beside a void from what it is over a slab.
+    biases = {f: _floor_bias(layout, f, solved[f]["fix"]) for f in prox_scores}
+    scores = {f: s * biases[f] for f, s in prox_scores.items()}
+    # Every contender's own fix and how its score was built, not just the
+    # winner's. A bias field is tuned against exactly this: where did each
+    # floor's solve land, and what did the election make of it. The published
+    # odds are smoothed and the losing floors' fixes were never published, so
+    # without this a wrong election cannot be replayed under another field.
+    # Where the floors are registered against each other (registration.py)
+    # each fix is also given in the shared house frame, in metres. Two floors
+    # that both hear a thing line-of-sight should put it in the same place;
+    # how far apart they put it is evidence no single floor's fit contains.
+    frames = _floor_frames(hass, layout)
+    floor_cands = {
+        f: {
+            "fix": [round(float(solved[f]["fix"][0]), 1), round(float(solved[f]["fix"][1]), 1)],
+            **_house_position(frames.get(f), solved[f]["fix"]),
+            "conf": round(solved[f]["conf"], 4),
+            "prox": round(prox_scores[f], 4),
+            "bias": round(biases[f], 4),
+            "score": round(scores[f], 4),
+        }
+        for f in scores
+    }
     probs = _update_floor_probabilities(entity, scores, valid_floors)
     now = time.time()
     # The incumbent's required lead grows with how long it has held the floor
@@ -2236,6 +2401,10 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
                 # Smoothed floor-election probabilities, for debugging "why
                 # did it pick this floor" (issue #94).
                 "floors": {f: round(p, 3) for f, p in probs.items()},
+                # This cycle's raw contenders behind those smoothed odds: each
+                # floor's own fix, fit, proximity-weighted score, bias (scalar
+                # x field) and final score. What a bias field is tuned from.
+                "floor_cands": floor_cands,
                 # Positioning telemetry for the eval harness (tools/sextant_eval.py)
                 # and the debug tab: the pre-Kalman, pre-snap trilaterated fix
                 # next to the published (filtered + snapped) `cords`, so solver
@@ -2262,7 +2431,7 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
             try:
                 get_position_history(hass).record(
                     entity, time.time(), avg_x / scale, avg_y / scale,
-                    lowest_floor_name, scale, zone)
+                    lowest_floor_name, scale, zone, sub_zone)
             except Exception as e:  # history must never break tracking
                 _LOGGER.debug("Position history record failed for %s: %s", entity, e)
         update_sextant_sensor_state(hass, f"sensor.{entity}_sextant_room", zone)
@@ -2284,7 +2453,11 @@ def _location_state(zone, sub_zone, parent_zone, floor):
     one that matches the state being published.
     """
     known = sub_zone and sub_zone != "unknown"
-    room = (parent_zone if known else zone) or "unknown"
+    # The spot's own room first; failing that (a spot drawn outside every
+    # room has no parent) the elected room, which is still a better answer
+    # than "unknown" for a thing whose room IS known.
+    parent = parent_zone if known and parent_zone and parent_zone != "unknown" else None
+    room = parent or zone or "unknown"
     return (
         (sub_zone if known else (zone or "unknown")),
         {
@@ -2485,10 +2658,49 @@ async def process_single_entity(hass, new_global_data, eids):
     await update_receiver_radii(hass, eids)  # Wait for the receivers to update
     await update_trilateration_and_zone(hass, new_global_data, eids["entity"])  # When it is complete → perform trilateration
 
+def _thing_layout(layout):
+    """One thing's working copy of the layout: only what a cycle writes to.
+
+    Each thing gets its own copy because the cycle writes that thing's readings
+    onto the receivers (``distance``, ``quality``, ``cords.r``). That is ALL it
+    writes, so that is all that needs copying. This used to be a deepcopy of
+    the whole layout per thing per cycle - rooms, spots, pins, bias-field grids,
+    every thing's name and class - eighteen times over, in one synchronous
+    block on the event loop, and it got heavier with every feature that stored
+    something on a floor. Everything but the receivers is shared and must be
+    treated as read-only here, as it already was.
+    """
+    out = dict(layout)
+    floors = []
+    for floor in layout.get("floor", []):
+        own = dict(floor)
+        own["receivers"] = [
+            {**r, "cords": dict(r["cords"])} if isinstance(r.get("cords"), dict) else dict(r)
+            for r in floor.get("receivers") or []
+        ]
+        floors.append(own)
+    out["floor"] = floors
+    return out
+
+
 async def process_entities(hass, new_global_data):
-    """Process multiple entities in parallel, but ensure the correct order for each individual entity"""
-    tasks = [process_single_entity(hass, new_global_data, eids) for eids in new_global_data]
-    await asyncio.gather(*tasks)  # Run all entities in parallel, but maintain the correct internal order
+    """Process every thing, one at a time, letting the event loop run in between.
+
+    This used to gather all of them. Each thing's work up to its first real
+    await - reading the receivers, building the solver jobs - is synchronous,
+    and asyncio runs every ready task before it polls for I/O again, so a
+    gather of eighteen things ran eighteen of those back to back: a 200-330 ms
+    stall of the whole of Home Assistant, measured, on every cycle. Nothing
+    was gained for it either - the solves go to the executor but the rest
+    holds the GIL, so the things never really ran in parallel.
+
+    One at a time, the longest the loop waits on Sextant is a single thing's
+    chunk. The cycle takes a little longer end to end and has fifteen seconds
+    to do it in.
+    """
+    for eids in new_global_data:
+        await process_single_entity(hass, new_global_data, eids)
+        await asyncio.sleep(0)  # a thing with nothing to solve never awaits: yield for it
 
 def extract_candidate_floors(new_global_data, tmpentity):
     """Every floor hearing the thing, ranked by its nearest receiver.
@@ -2587,21 +2799,92 @@ def _score_floor_fit(fix, weighted, scale):
     return 0.5 * coverage + 0.5 * quality, rms_m, coverage
 
 
-def _floor_bias(layout, floor_name):
-    """The floor's election prior from the layout (floor["bias"]), default 1.
+def _floor_frames(hass, layout):
+    """Each floor's frame into house metres, cached per layout version."""
+    cache = _zone_poly_cache(hass)
+    version = get_layout_version(hass)
+    cached = cache.get(("registration",))
+    if cached is not None and cached[0] == version:
+        return cached[1]
+    frames = registration.solve(layout).get("floors", {})
+    cache[("registration",)] = (version, frames)
+    return frames
+
+
+def _house_position(frame, fix):
+    """``{"house": [x, y, z]}`` in metres for a registered floor, else ``{}``."""
+    at = registration.to_house(frame, float(fix[0]), float(fix[1]))
+    if at is None:
+        return {}
+    return {"house": [round(at[0], 2), round(at[1], 2), round(frame["elevation"], 2)]}
+
+
+def _floor_bias(layout, floor_name, fix=None):
+    """The floor's election prior: its scalar bias, shaped by its bias field.
 
     Multiplies the floor's score before the probabilities are updated, so a
     bias of 1.2 is a 20 % head start in every cycle, not a one-off nudge.
-    Anything not a number in (0, 10] is ignored.
+    A scalar that is not a number in (0, 10] is ignored.
+
+    ``fix`` is this floor's OWN candidate fix this cycle, in its own pixels.
+    Given one, the scalar is multiplied by the floor's bias field sampled
+    there (floor_field.py) - the scalar is one prior for the whole plan, the
+    field is where on the plan that prior is wrong. No fix, no field, or a
+    flat field all leave the scalar exactly as it was.
     """
     floors = layout.get("floor") if isinstance(layout, dict) else None
     for floor in floors or []:
         if isinstance(floor, dict) and floor.get("name") == floor_name:
             bias = floor.get("bias")
-            if isinstance(bias, (int, float)) and not isinstance(bias, bool) and 0 < bias <= 10:
-                return float(bias)
-            return 1.0
+            if not (isinstance(bias, (int, float)) and not isinstance(bias, bool) and 0 < bias <= 10):
+                bias = 1.0
+            return float(bias) * (floor_field.sample(floor, fix) if fix is not None else 1.0)
     return 1.0
+
+
+def floor_bias_map(layout, frames, floor_name, other_name, cell_m=0.5):
+    """How much this floor's election prior favours it over another floor, place by place.
+
+    For a grid of points inside this floor's rooms: this floor's bias (scalar
+    x field) there, divided by the other floor's bias at the same place in
+    the house - mapped through the floors' registration when both are
+    registered, by metres from the plan origin otherwise. Above 1, a thing
+    here leans to this floor; below 1, to the other. Returns
+    ``{cell_px, registered, cells: [[x, y, ratio]], min, max}`` in this floor's pixels.
+    """
+    floors = {f.get("name"): f for f in (layout or {}).get("floor") or [] if isinstance(f, dict)}
+    mine, other = floors.get(floor_name), floors.get(other_name)
+    if mine is None or other is None or not mine.get("scale") or not other.get("scale"):
+        return None
+    scale_a, scale_b = float(mine["scale"]), float(other["scale"])
+    rooms = [Polygon([(c["x"], c["y"]) for c in z.get("cords") or []])
+             for z in mine.get("zones") or [] if len(z.get("cords") or []) >= 3 and not z.get("no_go")]
+    rooms = [r if r.is_valid else r.buffer(0) for r in rooms]
+    if not rooms:
+        return None
+    x0 = min(r.bounds[0] for r in rooms); y0 = min(r.bounds[1] for r in rooms)
+    x1 = max(r.bounds[2] for r in rooms); y1 = max(r.bounds[3] for r in rooms)
+    step = cell_m * scale_a
+    fa, fb = frames.get(floor_name), frames.get(other_name)
+    registered = bool(fa and fa.get("ok") and fb and fb.get("ok"))
+    cells = []
+    y = y0 + step / 2
+    while y < y1:
+        x = x0 + step / 2
+        while x < x1:
+            if any(r.covers(Point(x, y)) for r in rooms):
+                if registered:
+                    hx, hy = registration.to_house(fa, x, y)
+                    there = registration.from_house(fb, hx, hy)
+                else:
+                    there = (x / scale_a * scale_b, y / scale_a * scale_b)
+                a = _floor_bias(layout, floor_name, (x, y))
+                b = _floor_bias(layout, other_name, there)
+                cells.append([round(x, 1), round(y, 1), round(a / b, 4) if b > 0 else 1.0])
+            x += step
+        y += step
+    ratios = [c[2] for c in cells] or [1.0]
+    return {"cell_px": step, "registered": registered, "cells": cells, "min": min(ratios), "max": max(ratios)}
 
 
 def _proximity_weighted_scores(scores, nearest_by_floor, weight):
@@ -2767,12 +3050,20 @@ def _elect_zone(entity, floor_name, instant_zone, point, kf_state, zone_polys, s
        its smoothed share by zone_switch_margin continuously for
        zone_switch_secs of wall clock.
     3. Stationary lock. When the filter's speed stays under stationary_speed
-       for stationary_secs, the thing is on a table and the zone locks.
-       The lock releases only when the point sits more than
-       zone_unlock_margin metres outside the locked zone for
-       zone_unlock_secs (the time already spent away then counts toward
-       the dwell, so the switch follows at once), or when the thing is
-       clearly moving again for stationary_secs.
+       for stationary_secs, the thing is on a table and the zone locks -
+       but only a zone it has EARNED: held for stationary_secs already, and
+       still the best-supported zone at that moment. Locking whatever was
+       elected first froze a guess: after a restart the first cycle's room
+       is one noisy fit, and a watch on a couch a metre from three room
+       edges was locked into the foyer that way.
+       The lock releases when the point sits more than zone_unlock_margin
+       metres outside the locked zone for zone_unlock_secs (the time
+       already spent away then counts toward the dwell, so the switch
+       follows at once), when the thing is clearly moving again for
+       stationary_secs, or when the locked zone has all but lost the
+       evidence (under ZONE_OUTVOTED_SHARE of it) for twice
+       zone_unlock_secs - a lock is there to hold through jitter, not to
+       outlast the thing being somewhere else.
 
     nearest_zone stays instantaneous for automations that want the raw
     answer, and zone_raw in the API carries the point's own zone. Turning
@@ -2789,7 +3080,7 @@ def _elect_zone(entity, floor_name, instant_zone, point, kf_state, zone_polys, s
         st = _zone_state[entity] = {
             "floor": floor_name, "zone": None, "since": now, "probs": {},
             "challenge": None, "still_since": None, "moving_since": None,
-            "away_since": None, "locked": False,
+            "away_since": None, "outvoted_since": None, "locked": False,
         }
 
     # 1. Membership, smoothed.
@@ -2836,9 +3127,16 @@ def _elect_zone(entity, floor_name, instant_zone, point, kf_state, zone_polys, s
 
     # 3b. Lock and unlock.
     stationary_secs = _tuning(layout, "stationary_secs")
-    if not st["locked"] and st["still_since"] is not None and now - st["still_since"] >= stationary_secs:
+    if (
+        not st["locked"]
+        and st["still_since"] is not None
+        and now - st["still_since"] >= stationary_secs
+        and now - st["since"] >= stationary_secs   # held long enough to mean something
+        and best == incumbent                      # and the evidence still says so
+    ):
         st["locked"] = True
         st["away_since"] = None
+        st["outvoted_since"] = None
     challenge_since = None
     if st["locked"]:
         incumbent_poly = next((p for zid, p, _b, _n in zone_polys if zid == incumbent), None)
@@ -2859,14 +3157,24 @@ def _elect_zone(entity, floor_name, instant_zone, point, kf_state, zone_polys, s
             st["away_since"] = st["away_since"] or now
         elif gap is not None and gap <= margin_px * ZONE_AWAY_RESET_FRACTION:
             st["away_since"] = None
-        left_for_long = st["away_since"] is not None and now - st["away_since"] >= _tuning(layout, "zone_unlock_secs")
+        unlock_secs = _tuning(layout, "zone_unlock_secs")
+        left_for_long = st["away_since"] is not None and now - st["away_since"] >= unlock_secs
         moving_for_long = st["moving_since"] is not None and now - st["moving_since"] >= stationary_secs
-        if not left_for_long and not moving_for_long:
+        # The evidence has all but abandoned the locked zone. Deliberately a
+        # near-zero share rather than "another zone leads": a thing resting on
+        # a boundary splits its evidence about evenly, and holding through
+        # exactly that is what the lock is for.
+        if probs.get(incumbent, 0.0) < ZONE_OUTVOTED_SHARE:
+            st["outvoted_since"] = st["outvoted_since"] or now
+        else:
+            st["outvoted_since"] = None
+        outvoted_for_long = st["outvoted_since"] is not None and now - st["outvoted_since"] >= 2 * unlock_secs
+        if not left_for_long and not moving_for_long and not outvoted_for_long:
             st["challenge"] = None
             return incumbent, True, speed
         # Unlocked. Time already spent outside counts toward the dwell below.
-        challenge_since = st["away_since"]
-        st.update(locked=False, still_since=None, away_since=None)
+        challenge_since = st["away_since"] or st["outvoted_since"]
+        st.update(locked=False, still_since=None, away_since=None, outvoted_since=None)
 
     # 2. Margin and dwell.
     margin = _tuning(layout, "zone_switch_margin")
@@ -2883,6 +3191,69 @@ def _elect_zone(entity, floor_name, instant_zone, point, kf_state, zone_polys, s
         return best, False, speed
     st["challenge"] = {"zone": best, "since": since}
     return incumbent, False, speed
+
+
+# A proxy is only "clearly nearest" above this ratio to the runner-up.
+SPOT_PROXY_MIN_RATIO = 1.25
+
+
+def _spot_proxy_evidence(layout, proxies):
+    """How strongly the proxies on a spot say the thing is on it, 0..1.
+
+    ``proxies`` is the spot's own proxy or proxies (a couch with an outlet at
+    each end). The distance term fades from 1 at spot_proxy_near_m to 0 at
+    spot_proxy_far_m, so the nearest proxy three metres away says nothing.
+    The ratio term needs every proxy NOT on the spot (any floor) to read
+    farther: 0 when one is within SPOT_PROXY_MIN_RATIO, 1 from
+    spot_proxy_ratio. The spot's proxies are not each other's rivals - two
+    outlets on one couch both hearing a thing close is the point - so the
+    evidence is the strongest of them.
+    """
+    if isinstance(proxies, str):
+        proxies = (proxies,)
+    if not proxies or not isinstance(layout, dict):
+        return 0.0
+    mine, others = [], []
+    for floor in layout.get("floor") or []:
+        for receiver in floor.get("receivers") or []:
+            d = receiver.get("distance")
+            if not isinstance(d, (int, float)) or isinstance(d, bool) or not d > 0:
+                continue
+            (mine if receiver.get("entity_id") in proxies else others).append(float(d))
+    if not mine:
+        return 0.0
+    near = _tuning(layout, "spot_proxy_near_m")
+    far = max(_tuning(layout, "spot_proxy_far_m"), near + 0.01)
+    full = max(_tuning(layout, "spot_proxy_ratio"), SPOT_PROXY_MIN_RATIO + 0.01)
+    best = 0.0
+    for d in mine:
+        by_distance = min(1.0, max(0.0, (far - d) / (far - near)))
+        by_ratio = 1.0 if not others else min(1.0, max(0.0, (min(others) / d - SPOT_PROXY_MIN_RATIO) / (full - SPOT_PROXY_MIN_RATIO)))
+        best = max(best, by_distance * by_ratio)
+    return best
+
+
+def _spot_proxies(sub):
+    """The proxies a spot names as sitting on it: ``proxy`` is one name or a list."""
+    raw = sub.get("proxy")
+    names = [raw] if isinstance(raw, str) else raw if isinstance(raw, list) else []
+    return tuple(n for n in names if isinstance(n, str) and n)
+
+
+def _spot_settings(layout, floor_name):
+    """Spot name -> {"proxies", "enter_prob"} for the spots on a floor that set either."""
+    out = {}
+    floors = layout.get("floor") if isinstance(layout, dict) else None
+    for floor in floors or []:
+        if floor.get("name") != floor_name:
+            continue
+        for sub in floor.get("subzones") or []:
+            enter = sub.get("enter_prob")
+            enter = float(enter) if isinstance(enter, (int, float)) and not isinstance(enter, bool) and 0.05 <= enter <= 0.95 else None
+            proxies = _spot_proxies(sub)
+            if enter is not None or proxies:
+                out[sub.get("entity_id")] = {"proxies": proxies, "enter_prob": enter}
+    return out
 
 
 def _subzone_membership(sub_polys, samples):
@@ -3056,13 +3427,28 @@ def _elect_subzone(entity, floor_name, zone, zone_locked, point, kf_state, sub_p
     else:
         samples = [(center[0], center[1], 1.0)]
     shares = _subzone_membership(polys, samples)
+    # A proxy on the spot is evidence of its own, as strong as it is: it lifts
+    # the spot's share to at least that, taking the rest proportionally.
+    settings = _spot_settings(layout, floor_name)
+    for sid, _parent, _poly in polys:
+        p = _spot_proxy_evidence(layout, (settings.get(sid) or {}).get("proxies"))
+        old = shares.get(sid, 0.0)
+        if p > old:
+            keep = (1.0 - p) / (1.0 - old) if old < 1.0 else 0.0
+            shares = {s: v * keep for s, v in shares.items()}
+            shares[sid] = p
     alpha = _tuning(layout, "zone_prob_smoothing")
     probs = st["probs"]
     for s in set(probs) | set(shares):
         probs[s] = alpha * probs.get(s, 0.0) + (1.0 - alpha) * shares.get(s, 0.0)
     for s in [s for s, p in probs.items() if p < 0.01]:
         del probs[s]
-    enter = _tuning(layout, "subzone_enter_prob")
+    default_enter = _tuning(layout, "subzone_enter_prob")
+
+    def enter_for(sid):
+        own = (settings.get(sid) or {}).get("enter_prob")
+        return default_enter if own is None else own
+
     current = st["value"][0]
     contenders = {s: p for s, p in probs.items() if s != "unknown"}
     best = max(contenders, key=contenders.get) if contenders else None
@@ -3079,14 +3465,17 @@ def _elect_subzone(entity, floor_name, zone, zone_locked, point, kf_state, sub_p
             pt = Point(*center)
             margin_px = _tuning(layout, "subzone_unlock_margin") * (scale if isinstance(scale, (int, float)) and scale > 0 else 0.0)
             still_near = cur_poly.distance(pt) <= margin_px
-            if best is not None and best != current and contenders[best] >= enter and contenders[best] > probs.get(current, 0.0):
+            if best is not None and best != current and contenders[best] >= enter_for(best) and contenders[best] > probs.get(current, 0.0):
                 candidate = (best, zone)
-            elif still_near or probs.get(current, 0.0) >= enter:
+            elif still_near or probs.get(current, 0.0) >= enter_for(current):
                 candidate = st["value"]
             else:
                 candidate = ("unknown", zone)
     else:
-        candidate = (best, zone) if best is not None and contenders[best] >= enter else ("unknown", zone)
+        # Each spot against its own threshold: the best one that clears it.
+        cleared = {s: p for s, p in contenders.items() if p >= enter_for(s)}
+        best = max(cleared, key=cleared.get) if cleared else None
+        candidate = (best, zone) if best is not None else ("unknown", zone)
 
     if candidate == st["value"]:
         st["pending"] = None
@@ -3131,6 +3520,9 @@ def _geometry_array(geoms):
 # clock are different thresholds and a fix resting on the margin resolves one
 # way or the other instead of stalling forever. See _elect_zone.
 ZONE_AWAY_RESET_FRACTION = 0.5
+# A locked zone holding less than this share of the smoothed membership
+# evidence has been left, whatever the distance margin says (see _elect_zone).
+ZONE_OUTVOTED_SHARE = 0.1
 
 
 def _snap_geometry(zone_polys):
@@ -3683,6 +4075,87 @@ def _register_calibration_services(hass) -> None:
             await save_layout(hass, data)
         _LOGGER.info("sextant.set_thing_heights: %d thing(s) set", len(heights))
 
+    async def _bias_field(call: ServiceCall) -> ServiceResponse:
+        """Lay, shape or remove a floor's bias field (floor_field.py).
+
+        A service for the same reason the heights are: the layout lives in
+        HA's Store and a file edit under a running HA is lost on the next
+        save. ``flat`` lays the no-op field, ``paint`` writes a value under a
+        room, a spot or a drawn polygon, ``clear`` removes the field again.
+        """
+        floor_name = call.data["floor"]
+        action = call.data["action"]
+        async with LAYOUT_LOCK:
+            data = get_layout_for_edit(hass)
+            floors = data.get("floor") if isinstance(data, dict) else None
+            floor = next((f for f in floors or [] if isinstance(f, dict) and f.get("name") == floor_name), None)
+            if floor is None:
+                known = ", ".join(str(f.get("name")) for f in floors or [] if isinstance(f, dict))
+                raise HomeAssistantError(f"No floor named {floor_name!r}. Floors: {known or 'none'}")
+            touched = None
+            try:
+                if action == "clear":
+                    floor.pop(floor_field.FIELD_KEY, None)
+                else:
+                    if action == "flat" or floor_field.parse(floor) is None:
+                        # Painting an unfielded floor lays the flat field
+                        # first, so "paint the catwalk" is one call, not two.
+                        xs, ys = [], []
+                        for receiver in floor.get("receivers") or []:
+                            cords = receiver.get("cords") or {}
+                            if "x" in cords and "y" in cords:
+                                xs.append(float(cords["x"]))
+                                ys.append(float(cords["y"]))
+                        for shape in (floor.get("zones") or []) + (floor.get("subzones") or []):
+                            for pt in shape.get("cords") or []:
+                                xs.append(float(pt["x"]))
+                                ys.append(float(pt["y"]))
+                        if not xs:
+                            raise ValueError("the floor has no extent; place proxies or draw rooms first")
+                        floor[floor_field.FIELD_KEY] = floor_field.flat(
+                            (min(xs), min(ys), max(xs), max(ys)), floor.get("scale"),
+                            call.data.get("cell_m", 1.0), call.data.get("value", 1.0) if action == "flat" else 1.0,
+                        )
+                    if action == "paint":
+                        points = call.data.get("points")
+                        area = call.data.get("area")
+                        if (points is None) == (area is None):
+                            raise ValueError('paint needs exactly one of "area" (a room or spot name) or "points"')
+                        if area is not None:
+                            shapes = (floor.get("zones") or []) + (floor.get("subzones") or [])
+                            shape = next((s for s in shapes if s.get("entity_id") == area), None)
+                            if shape is None:
+                                names = ", ".join(sorted(str(s.get("entity_id")) for s in shapes))
+                                raise ValueError(f"no room or spot named {area!r} on {floor_name}. Known: {names}")
+                            points = [(pt["x"], pt["y"]) for pt in shape.get("cords") or []]
+                        touched = floor_field.paint(floor, points, call.data.get("value", 1.0), call.data.get("mode", "set"))
+            except (KeyError, TypeError) as err:
+                raise HomeAssistantError(
+                    f"sextant.set_floor_bias_field: {floor_name} has a room, spot or proxy without usable coordinates ({err!r})"
+                ) from err
+            except ValueError as err:
+                raise HomeAssistantError(f"sextant.set_floor_bias_field: {err}") from err
+            await save_layout(hass, data)
+        summary = floor_field.describe(floor)
+        _LOGGER.info("sextant.set_floor_bias_field: %s on %s -> %s (cells painted: %s)",
+                     action, floor_name, summary, touched)
+        return {"floor": floor_name, "action": action, "cells_painted": touched, "field": summary}
+
+    hass.services.async_register(
+        DOMAIN, "set_floor_bias_field", _bias_field,
+        schema=vol.Schema({
+            vol.Required("floor"): cv.string,
+            vol.Required("action"): vol.In(["flat", "paint", "clear"]),
+            vol.Optional("cell_m", default=1.0): vol.All(
+                vol.Coerce(float), vol.Range(min=floor_field.CELL_MIN_M, max=floor_field.CELL_MAX_M)),
+            vol.Optional("value", default=1.0): vol.All(
+                vol.Coerce(float), vol.Range(min=floor_field.FIELD_MIN, max=floor_field.FIELD_MAX)),
+            vol.Optional("mode", default="set"): vol.In(["set", "multiply"]),
+            vol.Optional("area"): cv.string,
+            vol.Optional("points"): [vol.All([vol.Coerce(float)], vol.Length(min=2, max=2))],
+        }),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
     hass.services.async_register(
         DOMAIN, "set_auto_calibration", _auto,
         schema=vol.Schema({vol.Required("enabled"): cv.boolean}),
@@ -3942,7 +4415,7 @@ async def async_setup_entry(hass, entry):
     # Truth marks double as fingerprint references; load them before the first cycle.
     try:
         store = await load_truth(hass)
-        _fingerprint_db.extra_refs = [r for r in (truth_mod.mark_reference(m) for m in store.get("marks", [])) if r]
+        _set_truth_marks(store.get("marks", []))
         _restore_fp_gains(await load_fp_gains(hass))
     except Exception as e:  # noqa: BLE001
         _LOGGER.warning("Truth marks or learned gains not loaded: %s", e)

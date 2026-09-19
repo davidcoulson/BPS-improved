@@ -262,6 +262,7 @@ export const THING_CLASSES = [
   ["cat", "Cat", "mdi:cat"],
   ["phone", "Phone", "mdi:cellphone"],
   ["watch", "Watch", "mdi:watch"],
+  ["headphones", "Headphones", "mdi:headphones"],   // AirPods, earbuds and their case
   ["tablet", "Tablet", "mdi:tablet"],
   ["laptop", "Laptop", "mdi:laptop"],
   ["keys", "Keys", "mdi:key-chain-variant"],

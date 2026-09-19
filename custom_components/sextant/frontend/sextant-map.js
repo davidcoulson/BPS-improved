@@ -16,7 +16,10 @@ export const MAP_FRAME_WIDTH = 2000;
 const RECEIVER_SIZE = 10;
 const RECEIVER_SIZE_EDIT = 13;   // proxies are the things people drag: give them a target
 const VERTEX_SIZE = 6;
+const PIN_SIZE = 11;
 const HIT_SLOP = 8;
+// Closest zoom: 20 screen px per map px, enough for a bedside table to fill a phone.
+const MAX_ZOOM = 20;
 const THING_RADIUS = 12;
 const HUES = [205, 25, 140, 95, 320, 45, 260, 180, 0, 60];
 
@@ -189,6 +192,24 @@ export function snapToWall(p, rooms, scale, prev) {
   return { point: p, snap: null };
 }
 
+/**
+ * A pin marks a vertical line through the house, and the lines people can
+ * actually find on every floor's plan are corners - which are already drawn,
+ * as room vertices. Landing a pin exactly on one is both easier than aiming
+ * and more accurate than a hand can be at plan resolution.
+ * Returns the nearest room vertex within `radius` map px, or null.
+ */
+export function snapToVertex(p, rooms, radius) {
+  let best = null, bestD = radius;
+  for (const room of rooms || []) {
+    for (const q of room.cords || []) {
+      const d = Math.hypot(q.x - p.x, q.y - p.y);
+      if (d <= bestD) { bestD = d; best = { x: q.x, y: q.y }; }
+    }
+  }
+  return best;
+}
+
 const OBJECT_URLS = new Map(); // authenticated image path -> object URL, per page load
 
 async function resolveImageUrl(url, authFetch) {
@@ -200,6 +221,173 @@ async function resolveImageUrl(url, authFetch) {
   const objectUrl = URL.createObjectURL(await resp.blob());
   OBJECT_URLS.set(url, objectUrl);
   return objectUrl;
+}
+
+/** Within this many degrees of horizontal, vertical or 45°, an edge is snapped exact. */
+export const ORTHO_SNAP_DEG = 7;
+
+// Unit directions of the edges a plan is drawn with. Screen y points down,
+// so d1 (1, 1) runs down-right and d2 (1, -1) up-right.
+const R2 = Math.SQRT1_2;
+const DIRS = { h: [1, 0], v: [0, 1], d1: [R2, R2], d2: [R2, -R2] };
+
+function edgeClass(dx, dy, tolDeg) {
+  // "h", "v", "d1" or "d2" when the edge is within tolDeg of that direction, else null.
+  if (Math.hypot(dx, dy) < 1e-9) return null;
+  let a = (Math.atan2(dy, dx) * 180) / Math.PI;       // (-180, 180]
+  a = ((a % 180) + 180) % 180;                        // an edge has no direction: [0, 180)
+  for (const [target, cls] of [[0, "h"], [45, "d1"], [90, "v"], [135, "d2"], [180, "h"]]) {
+    if (Math.abs(a - target) <= tolDeg) return cls;
+  }
+  return null;
+}
+
+function nearAxis(dx, dy, tolDeg) {
+  const c = edgeClass(dx, dy, tolDeg);
+  return c === "h" || c === "v" ? c : null;
+}
+
+/** The point on the line through `o` along unit `d` nearest to `p`. */
+function project(p, o, d) {
+  const s = (p.x - o.x) * d[0] + (p.y - o.y) * d[1];
+  return { x: o.x + s * d[0], y: o.y + s * d[1] };
+}
+
+/** Where two lines (point + unit direction) cross, or null when parallel. */
+function intersect(o1, d1, o2, d2) {
+  const den = d1[0] * d2[1] - d1[1] * d2[0];
+  if (Math.abs(den) < 1e-9) return null;
+  const s = ((o2.x - o1.x) * d2[1] - (o2.y - o1.y) * d2[0]) / den;
+  return { x: o1.x + s * d1[0], y: o1.y + s * d1[1] };
+}
+
+/**
+ * Where a corner should land so its edges to `prev` and `next` come out
+ * exact. An edge within ORTHO_SNAP_DEG of horizontal, vertical or 45° is
+ * made exactly that; with both edges constrained the corner lands where the
+ * two lines cross. Anything further off - a wall at 30° - is left exactly as
+ * drawn. Either neighbour may be null (the first corner, or a draft with no
+ * closing corner yet).
+ */
+export function snapCorner(p, prev, next, tolDeg = ORTHO_SNAP_DEG) {
+  const lines = [];
+  for (const n of [prev, next]) {
+    if (!n) continue;
+    const cls = edgeClass(p.x - n.x, p.y - n.y, tolDeg);
+    if (cls) lines.push({ o: n, d: DIRS[cls] });
+  }
+  if (!lines.length) return { x: p.x, y: p.y, snapped: false };
+  const at = (lines.length === 2 && intersect(lines[0].o, lines[0].d, lines[1].o, lines[1].d)) || project(p, lines[0].o, lines[0].d);
+  return { x: at.x, y: at.y, snapped: true };
+}
+
+/**
+ * The same polygon with every nearly-straight edge made exact.
+ *
+ * First the horizontal and vertical runs: corners joined by a near-vertical
+ * edge share one x (their mean), by a near-horizontal edge one y - across
+ * whole runs, so two collinear edges in a row line up rather than stepping.
+ * Then the 45° edges: each becomes an exact diagonal through its own
+ * midpoint, and its corners move to where it crosses the edge on their
+ * other side, which keeps an edge squared in the first pass exactly square.
+ * Edges that fit none of the four directions are left alone.
+ */
+export function squareUp(points, tolDeg = ORTHO_SNAP_DEG + 3) {
+  const n = points.length;
+  if (n < 3) return points.map((q) => ({ ...q }));
+  const groups = (axis) => {
+    const parent = [...Array(n).keys()];
+    const find = (i) => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+    for (let i = 0; i < n; i++) {
+      const a = points[i], b = points[(i + 1) % n];
+      if (nearAxis(b.x - a.x, b.y - a.y, tolDeg) === axis) parent[find(i)] = find((i + 1) % n);
+    }
+    const sums = new Map();
+    for (let i = 0; i < n; i++) {
+      const r = find(i), s = sums.get(r) || { v: 0, c: 0 };
+      s.v += axis === "v" ? points[i].x : points[i].y; s.c += 1; sums.set(r, s);
+    }
+    return (i) => { const s = sums.get(find(i)); return s.c > 1 ? s.v / s.c : null; };
+  };
+  const vx = groups("v"), hy = groups("h");
+  const pts = points.map((q, i) => ({ ...q, x: vx(i) ?? q.x, y: hy(i) ?? q.y }));
+
+  // The line each edge lies on, exact where it has a class.
+  const line = (i) => {
+    const a = pts[i], b = pts[(i + 1) % n];
+    const cls = edgeClass(b.x - a.x, b.y - a.y, tolDeg);
+    if (cls === "d1" || cls === "d2") return { o: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, d: DIRS[cls], diag: true };
+    const len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+    return { o: a, d: [(b.x - a.x) / len, (b.y - a.y) / len], diag: false };
+  };
+  const lines = pts.map((_q, i) => line(i));
+  const out = pts.map((q, i) => {
+    const before = lines[(i - 1 + n) % n], after = lines[i];   // the two edges meeting at corner i
+    if (!before.diag && !after.diag) return q;
+    const hit = intersect(before.o, before.d, after.o, after.d);
+    return hit || project(q, (before.diag ? before : after).o, (before.diag ? before : after).d);
+  });
+  return out.map((q) => ({ ...q, x: Math.round(q.x * 1000) / 1000, y: Math.round(q.y * 1000) / 1000 }));
+}
+
+/** Seconds as the shortest honest phrase: "45s", "3m", "2h", "1d". */
+export function shortAge(seconds) {
+  const s = Math.max(0, Math.round(seconds));
+  return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : s < 86400 ? `${Math.floor(s / 3600)}h` : `${Math.floor(s / 86400)}d`;
+}
+
+/** How long since a thing's last fix, and whether that makes it a ghost. */
+export function staleness(thing, staleAfter, now = Date.now() / 1000) {
+  const age = typeof thing?.updated === "number" ? Math.max(0, now - thing.updated) : 0;
+  return { age, ghost: staleAfter > 0 && age > staleAfter };
+}
+
+/**
+ * Where a thing spent its time: history points binned into square cells of
+ * cellM metres per floor, each cell holding the seconds spent in it. A point
+ * holds until the next one (history keeps a point only when something
+ * changed), but never across a dropout, and no longer than maxHoldSecs, so a
+ * thing that went unheard does not pile hours onto its last spot.
+ * points: [{t, x, y, f, gap}] in metres, oldest first; `end` closes the last.
+ * Returns {floor: {cellM, total, max, cells: [{x, y, secs}]}} (x, y = cell centre, m).
+ */
+export function heatCells(points, end, cellM = 0.5, maxHoldSecs = 300) {
+  const acc = {};
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i], next = points[i + 1];
+    if (p.f == null || !isFinite(p.x) || !isFinite(p.y)) continue;
+    const until = next ? (next.gap === 2 ? p.t + Math.min(60, maxHoldSecs) : next.t) : end;
+    const secs = Math.max(0, Math.min(until - p.t, maxHoldSecs));
+    if (!secs) continue;
+    const floor = (acc[p.f] = acc[p.f] || { cellM, total: 0, max: 0, byKey: new Map() });
+    const cx = Math.floor(p.x / cellM), cy = Math.floor(p.y / cellM), key = `${cx},${cy}`;
+    const cell = floor.byKey.get(key) || { x: (cx + 0.5) * cellM, y: (cy + 0.5) * cellM, secs: 0 };
+    cell.secs += secs;
+    floor.byKey.set(key, cell);
+    floor.total += secs;
+    floor.max = Math.max(floor.max, cell.secs);
+  }
+  const out = {};
+  for (const [f, v] of Object.entries(acc)) out[f] = { cellM: v.cellM, total: v.total, max: v.max, cells: [...v.byKey.values()] };
+  return out;
+}
+
+/** Heat ramp 0..1: blue, through yellow, to red. */
+export function heatRgb(w) {
+  const stops = [[40, 110, 255], [255, 215, 0], [225, 30, 30]];
+  const u = Math.min(1, Math.max(0, w)) * 2, i = Math.min(1, Math.floor(u)), f = u - i;
+  return stops[i].map((a, k) => Math.round(a + (stops[i + 1][k] - a) * f));
+}
+
+/**
+ * A bias ratio as a colour: neutral grey at 1, green below (this floor is
+ * favoured less than the other), red above, full strength at 2x either way.
+ */
+export function biasRgba(ratio) {
+  const r = Math.max(1e-3, Number(ratio) || 1);
+  const s = Math.min(1, Math.abs(Math.log(r)) / Math.log(2));
+  const grey = [140, 140, 140], hue = r < 1 ? [30, 170, 70] : [215, 40, 40];
+  return [...grey.map((g, k) => Math.round(g + (hue[k] - g) * s)), Math.round(255 * (0.3 + 0.35 * s))];
 }
 
 export class SextantMap {
@@ -219,18 +407,23 @@ export class SextantMap {
     this.trails = new Map();
     this.offline = new Set();
     this.marks = [];   // truth marks of the focused thing on this floor: [{x, y, label}]
+    this.heat = null;  // where the focused thing has been: {size, max, cells: [{x, y, secs}]} in map px
+    this.biasMap = null;  // this floor's election prior against another's: {size, cells: [[x, y, ratio]]} in map px
     this.suggestions = [];  // advised proxy spots on this floor: [{x, y, label}]
-    this.options = { circles: false, trails: true, fingerprint: false, grid: "off", labels: true, subzones: true, image: true, focus: null };
+    // staleAfter: seconds without a fix after which a thing is drawn as a ghost (0 = never).
+    this.options = { circles: false, trails: true, fingerprint: false, grid: "off", labels: true, subzones: true, image: true, focus: null, staleAfter: 120 };
     this.authFetch = host.fetch || null; // (url) => Promise<Response>, e.g. hass.fetchWithAuth
-    this.locks = { zone: false, subzone: false, receiver: false }; // edit mode: locked kinds cannot be selected or dragged
+    this.locks = { zone: false, subzone: false, receiver: false, pin: false }; // edit mode: locked kinds cannot be selected or dragged
     this.mode = "view";
     this.tool = "select";
-    this.selection = null; // {kind:'receiver'|'zone'|'subzone'|'thing', index, vertex?}
+    this.selection = null; // {kind:'receiver'|'zone'|'subzone'|'pin'|'thing', index, vertex?}
+    this.pinGhosts = [];
     this.hover = null;
     this.draft = null; // points of a polygon being drawn
     this.view = { k: 1, tx: 0, ty: 0 };
     this._fitted = false;
     this._drag = null;
+    this._pointers = new Map();   // pointers down now, by id: two make a pinch
     this._raf = 0;
     this._bind();
     this._resize = new ResizeObserver(() => this._onResize());
@@ -271,6 +464,8 @@ export class SextantMap {
   clearTrails() { this.trails.clear(); this.invalidate(); }
   setOffline(slugs) { this.offline = new Set(slugs || []); this.invalidate(); }
   setMarks(list) { this.marks = list || []; this.invalidate(); }
+  setHeat(heat) { this.heat = heat?.cells?.length ? heat : null; this._heatImg = null; this.invalidate(); }
+  setBiasMap(m) { this.biasMap = m?.cells?.length ? m : null; this._biasImg = null; this.invalidate(); }
   setSuggestions(list) { this.suggestions = list || []; this.invalidate(); }
   setOptions(opts) { Object.assign(this.options, opts); this.invalidate(); }
   setMode(mode) { this.mode = mode; if (mode !== "edit") { this.draft = null; this.tool = "select"; } this.invalidate(); }
@@ -279,11 +474,11 @@ export class SextantMap {
   setLocks(locks) { Object.assign(this.locks, locks || {}); if (this.selection && this.locks[this.selection.kind]) this.selection = null; this.invalidate(); }
   finishDraft() {
     const pts = this.draft;
-    this.draft = null;
+    this.draft = null; this._drawHover = null;
     this.invalidate();
     return pts && pts.length >= 3 ? pts : null;
   }
-  cancelDraft() { this.draft = null; this.invalidate(); }
+  cancelDraft() { this.draft = null; this._drawHover = null; this.invalidate(); }
 
   // --- view --------------------------------------------------------------------
 
@@ -308,6 +503,19 @@ export class SextantMap {
     this.invalidate();
   }
 
+  /** Zoom so these map points fill the view, with a margin: a spot fills a phone screen. */
+  zoomTo(points, margin = 0.2) {
+    const rect = this.canvas.getBoundingClientRect();
+    if (!points?.length || !rect.width) return;
+    const xs = points.map((q) => q.x), ys = points.map((q) => q.y);
+    const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+    const w = Math.max(x1 - x0, 10), h = Math.max(y1 - y0, 10);
+    const k = Math.max(0.05, Math.min(MAX_ZOOM, Math.min(rect.width / w, rect.height / h) * (1 - margin)));
+    this.view = { k, tx: rect.width / 2 - ((x0 + x1) / 2) * k, ty: rect.height / 2 - ((y0 + y1) / 2) * k };
+    this._fitted = true;
+    this.invalidate();
+  }
+
   // The layout's coordinate frame is NOT the image's natural pixels: the
   // original editor drew every floor image onto a canvas normalised to
   // MAP_FRAME_WIDTH pixels wide (height by aspect ratio) and stored
@@ -317,7 +525,7 @@ export class SextantMap {
     // No image yet: size to the content so an image-less floor still renders.
     let maxX = 0, maxY = 0;
     const f = this.floor || {};
-    for (const r of f.receivers || []) { maxX = Math.max(maxX, r.cords?.x || 0); maxY = Math.max(maxY, r.cords?.y || 0); }
+    for (const r of [...(f.receivers || []), ...(f.pins || [])]) { maxX = Math.max(maxX, r.cords?.x || 0); maxY = Math.max(maxY, r.cords?.y || 0); }
     for (const list of [f.zones || [], f.subzones || []]) for (const z of list) for (const p of z.cords || []) { maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); }
     return { w: maxX ? maxX * 1.05 : 1000, h: maxY ? maxY * 1.05 : 700 };
   }
@@ -344,6 +552,16 @@ export class SextantMap {
   _down(e) {
     const p = this._local(e);
     this.canvas.setPointerCapture(e.pointerId);
+    // Two fingers pinch: zoom about the point between them, and pan with it.
+    this._pointers.set(e.pointerId, p);
+    if (this._pointers.size === 2) { this._startPinch(); return; }
+    if (this._pointers.size > 2) return;
+    // Placing something (a truth mark): the tap counts when the finger lifts
+    // without moving, so a pan or a pinch never places it by accident.
+    if (this.mode !== "edit" && e.button === 0 && this.host.isPlacing?.()) {
+      this._drag = { kind: "pan", start: p, view: { ...this.view }, moved: false, slop: e.pointerType === "touch" ? 10 : 3, place: this.toMap(p) };
+      return;
+    }
     const hit = this.hitTest(p);
     if (this.mode === "edit" && this.tool !== "select" && e.button === 0) {
       // Drawing: each click adds a vertex; clicking the first vertex closes.
@@ -353,7 +571,9 @@ export class SextantMap {
         if (Math.hypot(first.x - p.x, first.y - p.y) < HIT_SLOP * 1.5) { if (this.host.onDrawClose) this.host.onDrawClose(); return; }
       }
       this.draft = this.draft || [];
-      this.draft.push({ x: Math.round(m.x * 1000) / 1000, y: Math.round(m.y * 1000) / 1000 });
+      const at = e.altKey ? m : snapCorner(m, this.draft[this.draft.length - 1] || null, this.draft.length >= 2 ? this.draft[0] : null);
+      this.draft.push({ x: Math.round(at.x * 1000) / 1000, y: Math.round(at.y * 1000) / 1000 });
+      this._draftPush = performance.now();
       if (this.host.onDrawPoint) this.host.onDrawPoint(this.draft);
       this.invalidate();
       return;
@@ -367,8 +587,6 @@ export class SextantMap {
       this.invalidate();
       return;
     }
-    // A host placing a truth mark takes the click before selection does.
-    if (this.mode !== "edit" && e.button === 0 && this.host.onMapClick && this.host.onMapClick(this.toMap(p), hit)) return;
     if (hit && hit.kind === "thing" && e.button === 0 && this.mode !== "edit") {
       this.selection = hit;
       if (this.host.onSelect) this.host.onSelect(hit);
@@ -379,18 +597,61 @@ export class SextantMap {
       this.selection = null;
       if (this.host.onSelect) this.host.onSelect(null);
     }
-    this._drag = { kind: "pan", start: p, view: { ...this.view }, moved: false };
+    this._drag = { kind: "pan", start: p, view: { ...this.view }, moved: false, slop: e.pointerType === "touch" ? 10 : 3 };
+  }
+
+  /** A second finger landed: undo what the first one started, then pinch. */
+  _startPinch() {
+    const d = this._drag;
+    if (d?.kind === "item" && d.moved) {
+      const f = this.floor, hit = d.hit;
+      if (hit.kind === "receiver") f.receivers[hit.index].cords = { ...d.origin[0] };
+      else if (hit.kind === "pin") f.pins[hit.index].cords = { ...d.origin[0] };
+      else (hit.kind === "zone" ? f.zones : f.subzones)[hit.index].cords = d.origin.map((q) => ({ ...q }));
+    }
+    // The first finger of a pinch is not a corner.
+    if (this.draft?.length && this._draftPush && performance.now() - this._draftPush < 600) {
+      this.draft.pop();
+      if (!this.draft.length) this.draft = null;
+      this._draftPush = 0;
+      if (this.host.onDrawPoint) this.host.onDrawPoint(this.draft || []);
+    }
+    const [a, b] = [...this._pointers.values()];
+    const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    this._drag = { kind: "pinch", dist: Math.max(Math.hypot(a.x - b.x, a.y - b.y), 1), view: { ...this.view }, anchor: this.toMap(mid), moved: true };
+    this.invalidate();
   }
 
   _itemPoints(hit) {
     const f = this.floor;
     if (hit.kind === "receiver") { const r = f.receivers[hit.index]; return [{ x: r.cords.x, y: r.cords.y }]; }
+    if (hit.kind === "pin") { const q = f.pins[hit.index]; return [{ x: q.cords.x, y: q.cords.y }]; }
     const list = hit.kind === "zone" ? f.zones : f.subzones;
     return (list[hit.index].cords || []).map((q) => ({ x: q.x, y: q.y }));
   }
 
   _move(e) {
     const p = this._local(e);
+    if (this._pointers.has(e.pointerId)) this._pointers.set(e.pointerId, p);
+    if (this._drag?.kind === "pinch") {
+      if (this._pointers.size < 2) return;
+      const d = this._drag, [a, b] = [...this._pointers.values()];
+      const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      const k = Math.max(0.05, Math.min(MAX_ZOOM, d.view.k * Math.hypot(a.x - b.x, a.y - b.y) / d.dist));
+      this.view = { k, tx: mid.x - d.anchor.x * k, ty: mid.y - d.anchor.y * k };
+      this._fitted = true;
+      this.invalidate();
+      return;
+    }
+    if (!this._drag && this.mode === "edit" && this.tool !== "select" && this.draft && this.draft.length) {
+      // The next corner, where a click would put it: snapped, so a right
+      // angle is visible before it is committed.
+      const m = this.toMap(p);
+      this._drawHover = e.altKey ? m : snapCorner(m, this.draft[this.draft.length - 1], this.draft.length >= 2 ? this.draft[0] : null);
+      this.invalidate();
+    } else if (this._drawHover) {
+      this._drawHover = null;
+    }
     if (!this._drag) {
       const hit = this.hitTest(p);
       const key = hit ? `${hit.kind}:${hit.index}:${hit.vertex ?? ""}` : "";
@@ -405,7 +666,7 @@ export class SextantMap {
     const d = this._drag;
     if (d.kind === "pan") {
       const dx = p.x - d.start.x, dy = p.y - d.start.y;
-      if (Math.abs(dx) + Math.abs(dy) > 2) d.moved = true;
+      if (Math.abs(dx) + Math.abs(dy) > (d.slop ?? 2)) d.moved = true;
       this.view = { k: d.view.k, tx: d.view.tx + dx, ty: d.view.ty + dy };
       this.invalidate();
       return;
@@ -427,11 +688,20 @@ export class SextantMap {
         this._snap = null;
         f.receivers[hit.index].cords = raw;
       }
+    } else if (hit.kind === "pin") {
+      const raw = { x: d.origin[0].x + dx, y: d.origin[0].y + dy };
+      // Onto a room corner when one is near; Alt places it freely.
+      const corner = e.altKey ? null : snapToVertex(raw, f.zones, (HIT_SLOP * 1.5) / this.view.k);
+      f.pins[hit.index].cords = corner || raw;
+      this._pinSnap = corner;
     } else {
       const list = hit.kind === "zone" ? f.zones : f.subzones;
       const item = list[hit.index];
       if (hit.vertex != null) {
-        item.cords[hit.vertex] = { x: d.origin[hit.vertex].x + dx, y: d.origin[hit.vertex].y + dy };
+        const raw = { x: d.origin[hit.vertex].x + dx, y: d.origin[hit.vertex].y + dy };
+        const cnt = item.cords.length;
+        const at = e.altKey ? raw : snapCorner(raw, item.cords[(hit.vertex - 1 + cnt) % cnt], item.cords[(hit.vertex + 1) % cnt]);
+        item.cords[hit.vertex] = { x: at.x, y: at.y };
       } else if (hit.edge != null) {
         // Dragging an edge midpoint inserts a vertex there, then drags it.
         const at = hit.edge + 1;
@@ -448,15 +718,21 @@ export class SextantMap {
   }
 
   _up(e) {
+    this._pointers.delete(e.pointerId);
+    // Lifting one finger of a pinch ends it; the other does not start a pan.
+    if (this._drag?.kind === "pinch") { if (this._pointers.size < 2) { this._drag = null; this.lastDragMoved = true; } return; }
     const d = this._drag;
     this._drag = null;
+    if (d?.kind === "pan" && d.place && !d.moved && e.type === "pointerup" && this.host.onMapClick) this.host.onMapClick(d.place);
     this._snap = null;
+    this._pinSnap = null;
     this.lastDragMoved = !!(d && d.moved);
     if (!d) return;
     if (d.kind === "item" && d.moved) {
       const f = this.floor, hit = d.hit;
       const round = (q) => ({ x: Math.round(q.x * 1000) / 1000, y: Math.round(q.y * 1000) / 1000 });
       if (hit.kind === "receiver") f.receivers[hit.index].cords = round(f.receivers[hit.index].cords);
+      else if (hit.kind === "pin") f.pins[hit.index].cords = round(f.pins[hit.index].cords);
       else { const list = hit.kind === "zone" ? f.zones : f.subzones; list[hit.index].cords = list[hit.index].cords.map(round); }
       if (this.host.onChange) this.host.onChange(hit.kind, hit.index);
     }
@@ -467,7 +743,7 @@ export class SextantMap {
     e.preventDefault();
     const p = this._local(e);
     const factor = Math.exp(-e.deltaY * 0.0015);
-    const k = Math.max(0.05, Math.min(20, this.view.k * factor));
+    const k = Math.max(0.05, Math.min(MAX_ZOOM, this.view.k * factor));
     const m = this.toMap(p);
     this.view = { k, tx: p.x - m.x * k, ty: p.y - m.y * k };
     this._fitted = true;
@@ -494,6 +770,15 @@ export class SextantMap {
       }
     }
     const edit = this.mode === "edit";
+    if (edit && !this.locks.pin) {
+      // Pins first: they sit on corners, where walls and proxies also are,
+      // and a pin under a proxy would otherwise be unreachable. The reverse
+      // is what the Pins padlock is for: lock them and the proxy is reachable.
+      for (let i = (f.pins || []).length - 1; i >= 0; i--) {
+        const q = f.pins[i].cords;
+        if (q && Math.hypot(q.x - m.x, q.y - m.y) <= slop + PIN_SIZE / this.view.k) return { kind: "pin", index: i, id: f.pins[i].name };
+      }
+    }
     const rs = ((edit ? RECEIVER_SIZE_EDIT : RECEIVER_SIZE) + (edit ? 6 : 0)) / this.view.k;
     if (!(edit && this.locks.receiver)) {
       for (let i = (f.receivers || []).length - 1; i >= 0; i--) {
@@ -551,9 +836,12 @@ export class SextantMap {
     this._drawGrid(ctx, size);
     this._drawPolygons(ctx, f.zones || [], "zone");
     if (this.options.subzones) this._drawPolygons(ctx, f.subzones || [], "subzone");
+    if (this.biasMap) this._drawBiasMap(ctx);
+    if (this.heat && this.mode !== "edit") this._drawHeat(ctx);
     this._drawDraft(ctx);
     if (this._snap) this._drawSnap(ctx);
     this._drawReceivers(ctx, f.receivers || []);
+    if (this.mode === "edit") this._drawPins(ctx, f.pins || []);
     if (this.suggestions.length) {
       // A house plan is busy: walls, room fills, dozens of proxies. Fade all
       // of it back behind a scrim of the page's own background so the advised
@@ -699,6 +987,74 @@ export class SextantMap {
     });
   }
 
+  /** Alignment pins: a surveyor's crosshair, so it reads as a reference mark
+   * and not as one more proxy. Green when the same name exists on another
+   * floor, amber while it is still on its own, red when the fit says this
+   * pin disagrees with the others (`miss`, metres, set by the editor). */
+  /** Where the other floors say this floor's pins are, in this floor's px. */
+  setPinGhosts(ghosts) { this.pinGhosts = ghosts || []; this.invalidate(); }
+
+  _drawPins(ctx, pins) {
+    const k = this.view.k;
+    // Ghosts first, under the pins: a hollow ring where another floor puts the
+    // same pin, tied to this floor's pin by a red line when they disagree. A
+    // pin on the wrong corner is then a long red line, visible from across
+    // the plan, instead of a number in a side panel.
+    const byName = new Map(pins.filter((q) => q.cords).map((q) => [q.name, q]));
+    const loud = 0.3 * (this.floor?.scale || 100);   // 30 cm in this floor's px
+    for (const g of this.pinGhosts || []) {
+      const mine = byName.get(g.name);
+      const gap = mine ? Math.hypot(mine.cords.x - g.x, mine.cords.y - g.y) : 0;
+      ctx.save();
+      if (mine && gap > loud) {
+        ctx.strokeStyle = "#d9534f"; ctx.lineWidth = 2.5 / k; ctx.setLineDash([6 / k, 4 / k]);
+        ctx.beginPath(); ctx.moveTo(mine.cords.x, mine.cords.y); ctx.lineTo(g.x, g.y); ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 4 / k;
+      ctx.beginPath(); ctx.arc(g.x, g.y, (PIN_SIZE * 0.8) / k, 0, Math.PI * 2); ctx.stroke();
+      ctx.strokeStyle = gap > loud ? "#d9534f" : "#7a8a99"; ctx.lineWidth = 1.8 / k;
+      ctx.beginPath(); ctx.arc(g.x, g.y, (PIN_SIZE * 0.8) / k, 0, Math.PI * 2); ctx.stroke();
+      ctx.restore();
+      if (this.options.labels && (!mine || gap > loud)) this._label(ctx, `${g.name} on ${g.floor}`, g.x, g.y + (PIN_SIZE + 10) / k, 10, 0.75);
+    }
+    pins.forEach((pin, index) => {
+      if (!pin.cords) return;
+      const selected = this.selection && this.selection.kind === "pin" && this.selection.index === index;
+      const hovered = this.hover && this.hover.kind === "pin" && this.hover.index === index;
+      const r = (selected || hovered ? PIN_SIZE * 1.3 : PIN_SIZE) / k;
+      const colour = pin.miss != null && pin.miss > 0.3 ? "#d9534f" : pin.linked ? "#2e9d5b" : "#e0a54a";
+      ctx.save();
+      ctx.globalAlpha = this.locks.pin ? 0.5 : 1;
+      ctx.translate(pin.cords.x, pin.cords.y);
+      ctx.lineCap = "round";
+      for (const [stroke, width] of [["#ffffff", 5], [colour, 2.5]]) {
+        ctx.strokeStyle = selected && width < 5 ? "#ffd166" : stroke;
+        ctx.lineWidth = width / k;
+        ctx.beginPath();
+        ctx.arc(0, 0, r * 0.62, 0, Math.PI * 2);
+        ctx.moveTo(-r * 1.25, 0); ctx.lineTo(-r * 0.2, 0);
+        ctx.moveTo(r * 0.2, 0); ctx.lineTo(r * 1.25, 0);
+        ctx.moveTo(0, -r * 1.25); ctx.lineTo(0, -r * 0.2);
+        ctx.moveTo(0, r * 0.2); ctx.lineTo(0, r * 1.25);
+        ctx.stroke();
+      }
+      ctx.restore();
+      if (this.options.labels) {
+        const miss = pin.miss != null && pin.miss >= 0.05 ? ` · ${pin.missLabel || pin.miss.toFixed(2) + " m"}` : "";
+        this._label(ctx, `${pin.name || "pin"}${miss}`, pin.cords.x, pin.cords.y - (PIN_SIZE + 12) / k, 10, 0.9);
+      }
+    });
+    if (this._pinSnap) {
+      ctx.save();
+      ctx.strokeStyle = "#ff9800";
+      ctx.lineWidth = 2 / k;
+      const s = 9 / k;
+      ctx.strokeRect(this._pinSnap.x - s, this._pinSnap.y - s, s * 2, s * 2);
+      ctx.restore();
+    }
+  }
+
   _drawSnap(ctx) {
     // The wall holding the dragged proxy, and which room's side it is on.
     const { a, b, name } = this._snap;
@@ -723,6 +1079,14 @@ export class SextantMap {
     pts.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
     ctx.strokeStyle = "#ffd166"; ctx.lineWidth = 2 / k; ctx.setLineDash([6 / k, 4 / k]);
     ctx.stroke(); ctx.setLineDash([]);
+    const h = this._drawHover;
+    if (h) {
+      const last = pts[pts.length - 1];
+      ctx.beginPath(); ctx.moveTo(last.x, last.y); ctx.lineTo(h.x, h.y);
+      ctx.strokeStyle = h.snapped ? "#ff9800" : "rgba(255,209,102,0.6)"; ctx.lineWidth = 1.5 / k;
+      ctx.setLineDash([4 / k, 4 / k]); ctx.stroke(); ctx.setLineDash([]);
+      this._handle(ctx, h, VERTEX_SIZE / k, h.snapped ? "#ff9800" : "#ffd166", "#5a4400");
+    }
     pts.forEach((p, i) => this._handle(ctx, p, (i === 0 ? VERTEX_SIZE * 1.3 : VERTEX_SIZE) / k, "#ffd166", "#5a4400"));
   }
 
@@ -754,6 +1118,60 @@ export class SextantMap {
     });
   }
 
+  /**
+   * A regular grid of cells drawn smooth: one pixel per cell in a small
+   * image, scaled up with bilinear smoothing, so cell edges become gradients
+   * instead of squares. A transparent cell of padding all round lets the
+   * edges fade out. cells: [{x, y, rgba: [r, g, b, a 0..255]}], centres in map px.
+   */
+  _smoothGrid(cells, size) {
+    if (typeof document === "undefined" || !cells.length) return null;
+    const xs = cells.map((c) => c.x), ys = cells.map((c) => c.y);
+    const x0 = Math.min(...xs), y0 = Math.min(...ys);
+    const cols = Math.round((Math.max(...xs) - x0) / size) + 3, rows = Math.round((Math.max(...ys) - y0) / size) + 3;
+    const img = document.createElement("canvas");
+    img.width = cols; img.height = rows;
+    const g = img.getContext("2d"), data = g.createImageData(cols, rows);
+    for (const c of cells) {
+      const i = ((Math.round((c.y - y0) / size) + 1) * cols + Math.round((c.x - x0) / size) + 1) * 4;
+      data.data.set(c.rgba, i);
+    }
+    g.putImageData(data, 0, 0);
+    return { img, x: x0 - 1.5 * size, y: y0 - 1.5 * size, w: cols * size, h: rows * size };
+  }
+
+  _blit(ctx, grid) {
+    if (!grid) return;
+    ctx.save();
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(grid.img, grid.x, grid.y, grid.w, grid.h);
+    ctx.restore();
+  }
+
+  /** Time spent per cell: blue for a moment, through yellow, to red for the longest stay. */
+  _drawHeat(ctx) {
+    const { size, max, cells } = this.heat;
+    if (!max) return;
+    if (!this._heatImg) {
+      // Square root: an hour on the bed would otherwise wash every walk-through out to nothing.
+      this._heatImg = this._smoothGrid(cells.map((c) => {
+        const w = Math.sqrt(c.secs / max);
+        return { x: c.x, y: c.y, rgba: [...heatRgb(w), Math.round(255 * (0.25 + 0.5 * w))] };
+      }), size);
+    }
+    this._blit(ctx, this._heatImg);
+  }
+
+  /** Grey where the two floors' priors are even, green where this floor is favoured less, red more. */
+  _drawBiasMap(ctx) {
+    const { size, cells } = this.biasMap;
+    if (!this._biasImg) {
+      this._biasImg = this._smoothGrid(cells.map(([x, y, ratio]) => ({ x, y, rgba: biasRgba(ratio) })), size);
+    }
+    this._blit(ctx, this._biasImg);
+  }
+
   _drawMarks(ctx) {
     const k = this.view.k;
     for (const m of this.marks) {
@@ -776,8 +1194,13 @@ export class SextantMap {
       const color = thingColor(t.ent, custom);
       const paint = (a, dark = false) => thingRgba(t.ent, custom, a, dark);
       const focused = focus && t.ent === focus;
+      // Not heard for a while: what is drawn is where it WAS. A ghost -
+      // faint, outlined in dashes, labelled with how long ago - rather than a
+      // solid dot claiming a position nobody has confirmed.
+      const { age, ghost } = staleness(t, this.options.staleAfter);
       ctx.save();
       if (focus && !focused) ctx.globalAlpha = 0.28;   // everything but the one you clicked fades back
+      if (ghost) ctx.globalAlpha *= 0.4;
       const trail = this.options.trails ? this.trails.get(t.ent) : null;
       if (trail && trail.length > 1) {
         ctx.beginPath();
@@ -816,11 +1239,16 @@ export class SextantMap {
         ctx.strokeStyle = paint(0.9, true); ctx.lineWidth = 3 / k; ctx.setLineDash([8 / k, 5 / k]); ctx.stroke(); ctx.setLineDash([]);
       }
       // Confidence ring: the published conf in (0,1] as the ring's alpha.
-      ctx.beginPath(); ctx.arc(t.cords[0], t.cords[1], r * 1.9, 0, Math.PI * 2);
-      ctx.fillStyle = paint(0.08 + 0.22 * (t.conf ?? 0.5)); ctx.fill();
+      // A ghost has no current confidence to show.
+      if (!ghost) {
+        ctx.beginPath(); ctx.arc(t.cords[0], t.cords[1], r * 1.9, 0, Math.PI * 2);
+        ctx.fillStyle = paint(0.08 + 0.22 * (t.conf ?? 0.5)); ctx.fill();
+      }
       ctx.beginPath(); ctx.arc(t.cords[0], t.cords[1], r, 0, Math.PI * 2);
       ctx.fillStyle = color; ctx.fill();
+      if (ghost) ctx.setLineDash([4 / k, 3 / k]);
       ctx.lineWidth = (selected ? 3 : 2) / k; ctx.strokeStyle = selected ? "#ffd166" : "#ffffff"; ctx.stroke();
+      ctx.setLineDash([]);
       const glyph = t.mdi ? mdiPath(t.mdi, () => this.invalidate()) : null;
       if (t.icon && t.icon.complete && t.icon.naturalWidth) {
         ctx.save(); ctx.beginPath(); ctx.arc(t.cords[0], t.cords[1], r * 0.85, 0, Math.PI * 2); ctx.clip();
@@ -835,7 +1263,8 @@ export class SextantMap {
         ctx.textAlign = "center"; ctx.textBaseline = "middle";
         ctx.fillText((t.label || t.ent).slice(0, 2).toUpperCase(), t.cords[0], t.cords[1]);
       }
-      if (this.options.labels || focused) this._label(ctx, t.label || t.ent, t.cords[0], t.cords[1] + r + 9 / k, focused ? 13 : 11, 0.9);
+      const label = ghost ? `${t.label || t.ent} · ${shortAge(age)} ago` : (t.label || t.ent);
+      if (this.options.labels || focused || ghost) this._label(ctx, label, t.cords[0], t.cords[1] + r + 9 / k, focused ? 13 : 11, 0.9);
       ctx.restore();
     }
   }

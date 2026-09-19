@@ -53,13 +53,46 @@ distances on this floor against the best competing floor) and by the
 floor's `bias`, then smoothed; a challenger must lead for
 `floor_switch_secs`, by a margin that grows with the incumbent's tenure.
 
+**Bias fields.** A floor's `bias` is one prior for the whole plan, and a
+house is not uniform. Over a slab the floor below is attenuated and the
+election has an easy time. Beside a void — a catwalk over a foyer, a gallery
+over a great room — both floors hear the thing line-of-sight, fit it equally
+well, and nothing in the evidence separates them. So a floor can carry a
+*bias field*: a coarse grid of multipliers over its plan, sampled where
+**that floor's own solve** put the thing, and multiplied onto the scalar.
+Paint the catwalk up ("a fix that lands here is to be believed") and the
+void itself down ("there is no floor here to stand on"). Because a field is
+only ever read at its own floor's fix, it needs nothing to line one floor's
+plan up against another's. It is sampled bilinearly, so a fix jittering
+across a cell edge moves the bias smoothly instead of flickering it.
+
+**Registration.** Pins placed on the [Edit page](edit.md#lining-the-floors-up)
+- the same named point on two or more floors - give each floor a rigid
+motion into one *house frame* in metres, and an `elevation` gives it a
+height. The fit holds each floor's measured scale and reports the scale the
+pins imply rather than absorbing the difference, so a drawing error shows up
+as a number instead of hiding inside the alignment. Registered floors
+publish each candidate fix in house coordinates as well.
+
+A flat field is all ones and changes nothing, to the last digit — lay it
+first, confirm nothing moved, then shape it. Set it with
+[`sextant.set_floor_bias_field`](automation.md#services). Every cycle
+publishes each contending floor's own fix and score as `floor_cands`, and
+`tools/floor_field_replay.py` re-scores a log of those under a proposed
+field, so a stroke can be graded against what really happened before it
+ships.
+
 **Rooms.** Membership, not a point test: samples on the filter's error
 ellipse are attributed to rooms and the shares smoothed. The current room
 holds until a challenger leads by `zone_switch_margin` for
 `zone_switch_secs`. A thing slower than `stationary_speed` for
-`stationary_secs` is on a table and its room locks; it unlocks after
-`zone_unlock_secs` more than `zone_unlock_margin` outside, or when it
-clearly moves.
+`stationary_secs` is on a table and its room locks - but only a room it
+has earned, held for that long already and still the best-supported, so a
+first guess after a restart is never frozen. It unlocks after
+`zone_unlock_secs` more than `zone_unlock_margin` outside, when it clearly
+moves, or when the locked room has kept under a tenth of the evidence for
+twice `zone_unlock_secs`: the lock holds through jitter on a boundary, not
+through the thing being somewhere else.
 
 **Spots.** The same election scaled down: the share of the ellipse inside
 each spot of the elected room, entered at `subzone_enter_prob`, left at

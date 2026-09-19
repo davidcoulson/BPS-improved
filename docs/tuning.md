@@ -46,6 +46,9 @@ distances in metres.
 | `subzone_switch_secs` | 20 | dwell before a spot change |
 | `subzone_enter_prob` | 0.5 | smoothed share needed to enter a spot |
 | `subzone_unlock_margin` | 1.0 | metres outside a spot before leaving it |
+| `spot_proxy_near_m` | 1.2 | a spot's own proxy counts fully within this |
+| `spot_proxy_far_m` | 2.0 | ...and not at all from this far |
+| `spot_proxy_ratio` | 2.0 | every other proxy this many times farther for full weight (none within 1.25×) |
 | `floor_switch_secs` | 60 | a challenger floor must lead this long |
 | `floor_tenure_bonus` | 0.05 | extra margin at full tenure |
 | `floor_tenure_full_secs` | 600 | tenure counted up to this |
@@ -56,6 +59,11 @@ distances in metres.
 | `anchor_secs` | 20 | for this long |
 | `anchor_release_m` | 1.5 | release once the reading opens past this |
 | `calibration_target` | `sextant` | where Apply writes: `sextant` or `bermuda` |
+| `correction_close_fade` | on | fade a proxy's calibration stretch out at close range (see [calibration](calibration.md#close-range)) |
+| `correction_fade_near_m` | 1.0 | a reading this close gets none of the stretch |
+| `correction_fade_far_m` | 2.5 | from this far the stretch applies in full |
+| `history_hours` | 6 | hours of position history kept (scrubber, timeline, Activity), 1 to 168 |
+| `stale_after_secs` | 120 | unheard this long, a thing is drawn as a ghost on Live (display only) |
 
 Two more live at the top level of the layout: `position_timeout` (seconds
 before an unheard thing leaves the map, 300) and `thing_height` (the

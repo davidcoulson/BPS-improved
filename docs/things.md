@@ -17,11 +17,11 @@ Bluetooth address stays put:
 
 The top list is what
 is tracked: click the name or the icon to open the thing dialog and set a
-display name, a class (person, dog, cat, phone, watch, keys, tag and more,
+display name, a class (person, dog, cat, phone, watch, headphones, keys, tag and more,
 each with its icon on the map), a colour used everywhere it is drawn, a
 photo framed in a circle that replaces the icon, the height it is carried
 at, a reference-power trim, and its own position estimator. **Untrack** removes it from Bermuda and
-removes its four Sextant sensors and its device with it; a device untracked
+removes its five Sextant sensors and its device with it; a device untracked
 while Home Assistant was down is cleaned up on the next cycle.
 
 Below is everything Bermuda hears but does not track, with the kind of

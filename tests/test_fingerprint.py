@@ -279,3 +279,25 @@ def test_saved_gains_seed_a_fresh_database_but_never_a_learned_one():
         assert (db.learned_gain, db.thing_gain["tile"]) == before      # already learned this run: kept
     finally:
         sextant._fingerprint_db = saved
+
+
+def test_vectors_are_computed_once_per_ingest_not_once_per_thing(monkeypatch):
+    """Every thing asks for the vectors every cycle; the answer only changes
+    when ranging is ingested. It must be computed once per ingest - and must
+    change the moment an ingest brings a new sample."""
+    db = fp.ReferenceDB(samples=3)
+    db.ingest(_ranging())
+    calls = []
+    real = fp._median
+    monkeypatch.setattr(fp, "_median", lambda v: calls.append(1) or real(v))
+    first = db.vectors()
+    medians_per_build = len(calls)
+    for _ in range(17):                                         # the other seventeen things this cycle
+        assert db.vectors() is first
+    assert len(calls) == medians_per_build
+    r = _ranging()
+    r["scanners"][ADDR["a"]][ADDR["b"]]["distance_raw"] = 9.0
+    db.ingest(r)
+    db.ingest(r)
+    assert db.vectors()[ADDR["a"]][ADDR["b"]] == 9.0           # the new samples are seen
+    assert len(calls) == 2 * medians_per_build                 # one rebuild, not one per call
