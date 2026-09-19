@@ -2708,32 +2708,47 @@ async def process_entities(hass, new_global_data):
         _LOGGER.warning("Person locations not updated: %s", e)
 
 
-# thing -> ((floor, room, spot), when it got there): when an owned thing
-# arrived at its current place, for persons.pick.
+# thing -> {"floor", "x", "y", "since", "away"}: where an owned thing has
+# stayed (within persons.STAY_RADIUS_M) and since when, for persons.pick.
 _arrivals = {}
 
 
-def _arrived_at(hass, ent, row, now):
-    """When this thing reached the room or spot it is in now.
+def _arrived_at(hass, layout, ent, row, now):
+    """When this thing arrived within a couple of metres of where it is now.
 
-    Watched from here while it stays put; the first time a thing is seen
-    after a start, asked of the position history instead, which outlives
-    restarts - otherwise every thing would look freshly arrived after each one.
+    Kept up to date here from each cycle's fix; the first time a thing is
+    seen after a start, taken from the position history instead, which
+    outlives restarts - otherwise everything would look freshly arrived
+    after each one.
     """
-    key = (row.get("floor"), row.get("zone"), row.get("sub_zone"))
-    prev = _arrivals.get(ent)
-    if prev is not None and prev[0] == key:
-        return prev[1]
+    floor, cords = row.get("floor"), row.get("cords")
+    scale = next((f.get("scale") for f in layout.get("floor") or [] if f.get("name") == floor), None)
+    if not floor or not cords or not scale:
+        return now
+    x, y = float(cords[0]) / float(scale), float(cords[1]) / float(scale)
+    st = _arrivals.get(ent)
+    if st is not None:
+        if st["floor"] == floor and math.hypot(x - st["x"], y - st["y"]) <= persons_mod.STAY_RADIUS_M:
+            st["away_since"] = None
+            return st["since"]
+        # Elsewhere: a move only once it has lasted (a stray fix, or the
+        # minute after a restart, is not one).
+        st["away_since"] = st.get("away_since") or now
+        if now - st["away_since"] < persons_mod.MOVE_CONFIRM_SECS:
+            return st["since"]
+        _arrivals[ent] = {"floor": floor, "x": x, "y": y, "since": st["away_since"], "away_since": None}
+        return st["away_since"]
     since = now
-    if prev is None:
+    if st is None:
         try:
-            stays = [s for s in get_position_history(hass).timeline(ent, now - 86400, now, max_segments=50).get("stays", [])
-                     if not s.get("unheard")]
-            if stays and stays[-1].get("room") == row.get("zone"):
-                since = float(stays[-1]["start"])
+            q = get_position_history(hass).query(ent, now - 86400, now, 5000)
+            floors = q.get("floors") or []
+            points = [(t, floors[fi] if isinstance(fi, int) and fi < len(floors) else fi, xm, ym)
+                      for t, fi, xm, ym in zip(q.get("t", []), q.get("f", []), q.get("x_m", []), q.get("y_m", []))]
+            since = persons_mod.settled_since(points, (floor, x, y)) or now
         except Exception:  # noqa: BLE001 - no history is not an error; "just arrived" is
-            pass
-    _arrivals[ent] = (key, since)
+            since = now
+    _arrivals[ent] = {"floor": floor, "x": x, "y": y, "since": since, "away_since": None}
     return since
 
 
@@ -2759,7 +2774,7 @@ def _update_person_sensors(hass):
             candidates.append({
                 "ent": ent, "cls": classes.get(ent), "updated": row.get("updated"),
                 "moving": bool(zst) and zst.get("still_since") is None,
-                "arrived": _arrived_at(hass, ent, row, now),
+                "arrived": _arrived_at(hass, layout, ent, row, now),
                 "zone": row.get("zone"), "sub_zone": row.get("sub_zone"), "floor": row.get("floor"),
             })
         slug = person.split(".", 1)[1]

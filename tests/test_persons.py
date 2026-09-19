@@ -71,3 +71,14 @@ def test_when_nothing_moves_the_latest_to_arrive_speaks_not_the_watch_on_its_cha
     # Walking with the phone in a pocket (moving, same room) keeps it ahead too.
     assert persons.pick([watch, thing("phone", "phone")], NOW, 120)["ent"] == "phone"
 
+
+def test_settled_since_counts_metres_not_room_names_and_ignores_one_stray_fix():
+    here = ("Up", 5.0, 5.0)
+    pts = [(0, "Down", 1.0, 1.0), (200, "Up", 20.0, 5.0), (400, "Up", 20.0, 6.0),  # elsewhere for minutes
+           (600, "Up", 5.5, 5.0), (700, "Up", 5.2, 4.8),                           # arrived
+           (720, "Down", 9.0, 5.0), (760, "Down", 9.0, 5.0),                       # a minute a floor down: noise
+           (800, "Up", 5.1, 5.1)]
+    assert persons.settled_since(pts, here) == 600
+    assert persons.settled_since([], here) is None
+    assert persons.settled_since([(0, "Down", 5.0, 5.0)], here) is None
+

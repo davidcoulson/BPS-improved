@@ -24,8 +24,19 @@ Pure: the caller hands in each thing's latest published row.
 
 from __future__ import annotations
 
+import math
+
 # A thing still for longer than this is probably not being carried.
 RECENT_MOVE_SECS = 600.0
+# "Where it is" for arrival purposes: within this many metres of its place.
+# Measured in metres, not by room or spot name - a watch on a nightstand at
+# the edge of its spot flips between the spot and the room with every
+# wobble, and every flip looked like a fresh arrival.
+STAY_RADIUS_M = 2.0
+# Somewhere else for less than this is noise, not a move: a stray fix, or the
+# minute after a restart when a watch on its nightstand was placed a floor
+# down three times running.
+MOVE_CONFIRM_SECS = 120.0
 # Higher speaks for its owner first, among things equally recently moved.
 CARRY_PRIORITY = {"cat": 4, "dog": 4, "paw": 4, "watch": 3, "phone": 2, "headphones": 1}
 # Classes whose place is their owner's place, unless the thing says otherwise
@@ -56,6 +67,25 @@ def locates_owner(layout, ent, cls) -> bool:
     if isinstance(own, bool):
         return own
     return cls in LOCATES_BY_DEFAULT
+
+
+def settled_since(points, here, radius=STAY_RADIUS_M, confirm_secs=MOVE_CONFIRM_SECS):
+    """When a thing arrived within ``radius`` metres of ``here``, from its history.
+
+    ``points``: (t, floor, x_m, y_m), oldest first; ``here``: (floor, x_m, y_m).
+    Walks back from the newest point until the thing had been elsewhere
+    (another floor, or farther than ``radius``) for ``confirm_secs``; returns
+    the time of the first point of the stay that followed, or None with no
+    history here. Shorter absences are passed over as noise.
+    """
+    floor, hx, hy = here
+    since = None
+    for t, f, x, y in reversed(points):
+        if f == floor and x is not None and y is not None and math.hypot(x - hx, y - hy) <= radius:
+            since = t
+        elif since is not None and since - t >= confirm_secs:
+            break
+    return since
 
 
 def pick(things, now: float, stale_after: float):
