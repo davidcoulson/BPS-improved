@@ -18,7 +18,10 @@ Bluetooth address stays put:
 The top list is what
 is tracked: click the name or the icon to open the thing dialog and set a
 display name, a class (person, dog, cat, phone, watch, headphones, keys, tag and more,
-each with its icon on the map), a colour used everywhere it is drawn, a
+each with its icon on the map), pronouns (he, she, they or it: how the panel
+refers to it; left unset, a man is he, a woman she, a device it, and a
+person, child or pet they), who it belongs to (a Home Assistant person),
+a colour used everywhere it is drawn, a
 photo framed in a circle that replaces the icon, the height it is carried
 at, a reference-power trim, and its own position estimator. **Untrack** removes it from Bermuda and
 removes its five Sextant sensors and its device with it; a device untracked
@@ -36,3 +39,26 @@ or maker. Adverts heard only by unplaced proxies are ignored, and the
 proxies' own probe beacons are hidden. **Track…** opens the same dialog
 first, so you choose the name, class and height before Bermuda is told and
 reloads.
+
+## People
+
+Give things an owner - **Belongs to**, a Home Assistant person - and two
+things follow. On Live, everyone with two or more things gets a heading of
+their own (their picture, and where they are), which folds their things
+away with a click. And each owner gets three sensors of their own:
+`sensor.<person>_sextant_person_location` (the spot, or the room),
+`_sextant_person_room` and `_sextant_person_floor`, with `via` naming the
+thing they came from. Automations can then ask where David is rather than
+where his phone is.
+
+Which thing speaks for a person: only things that **give their owner's
+location** count - by default a watch, a phone, or a person's or pet's own
+tag, not headphones, keys, a bag or other tags, which go along only some of
+the time (the thing dialog switches it either way); of those, only ones
+heard recently and placed in a room. One moving now, or that arrived where
+it is in the last ten minutes, beats one that has sat still longer (the
+phone left on the couch is not you), and among those a pet's own tag, a
+watch, then a phone. When nothing is on the move, the one that arrived
+where it is most recently wins - the phone you carried downstairs, not the
+watch on its charger since last night.
+

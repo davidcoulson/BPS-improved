@@ -45,6 +45,15 @@ thing and starting calibration — jumps straight to the right page
 without hunting through the tabs. Editing the floor plan itself is still
 a desktop job.
 
+## Grouped by person
+
+When things have owners (**Belongs to** on the Things page), each person
+gets a heading in the list - their picture, their name, and under it where
+their own location sensor puts them - and a click on the heading folds the
+group away. One thing is enough for a section; only a pet whose one thing
+is its own tag stays a plain row. Those rows - the cats and the dog - come
+next under **Pets**, and the rest follow under **Everything else**.
+
 ## Quick actions
 
 Selecting a thing opens a row of buttons inside its row in the list:
@@ -76,6 +85,12 @@ never leaves a mark describing yesterday's corrections. Marks made before
 3.17.7 have the correction then in force divided back out, assumed to be
 the one in force now: re-mark a spot that matters if calibration has
 changed since.
+
+A mark guides the thing that made it and things of the same class - the
+cats share one another's marks, a phone's mark helps the other phones -
+and nothing else: a mark records how one device looks from one place, and
+a watch on a wrist does not look like a phone in a hand
+(`fingerprint_marks_scope`: `own`, `class` or `all`).
 
 Marks stay, with their samples, in `.storage/sextant_truth`, and do two
 more jobs. The Tuning page's **Accuracy** card re-solves every mark under

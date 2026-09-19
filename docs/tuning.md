@@ -43,6 +43,7 @@ distances in metres.
 | `stationary_secs` | 20 | still this long locks the room |
 | `zone_unlock_margin` | 1.0 | metres outside the locked room |
 | `zone_unlock_secs` | 30 | for this long to unlock |
+| `zone_lock_warmup_secs` | 120 | no stationary lock until a thing has been tracked this long since a start or floor change |
 | `subzone_switch_secs` | 20 | dwell before a spot change |
 | `subzone_enter_prob` | 0.5 | smoothed share needed to enter a spot |
 | `subzone_unlock_margin` | 1.0 | metres outside a spot before leaving it |
@@ -62,7 +63,9 @@ distances in metres.
 | `correction_close_fade` | on | fade a proxy's calibration stretch out at close range (see [calibration](calibration.md#close-range)) |
 | `correction_fade_near_m` | 1.0 | a reading this close gets none of the stretch |
 | `correction_fade_far_m` | 2.5 | from this far the stretch applies in full |
+| `fingerprint_marks_scope` | `class` | whose truth marks place a thing: `own`, `class` (also things of its class) or `all` |
 | `history_hours` | 6 | hours of position history kept (scrubber, timeline, Activity), 1 to 168 |
+| `history_admin_only` | off | only administrators may read where things have been (scrubber, timeline, Activity) |
 | `stale_after_secs` | 120 | unheard this long, a thing is drawn as a ghost on Live (display only) |
 
 Two more live at the top level of the layout: `position_timeout` (seconds

@@ -68,7 +68,7 @@ def test_setup_creates_sensors_and_the_accuracy_diagnostic(tmp_path, monkeypatch
     assert ids == sorted([ACCURACY_ENTITY_ID] + [f"sensor.{t}_{k}" for t in ("cat", "watch") for k, _ in sn.SENSOR_KINDS])
     cat_room = hass.data["sextant_sensors"]["sensor.cat_sextant_room"]
     assert cat_room.name == "cat Sextant Room" and cat_room.unique_id == "sextant_room_cat"
-    assert cat_room.state == "unknown" and cat_room.extra_state_attributes == {}
+    assert cat_room.state == "unknown" and cat_room.extra_state_attributes == {"area_id": None}
     assert cat_room._attr_device_info["identifiers"] == {("sextant", "cat")}
     acc = hass.data["sextant_sensors"][ACCURACY_ENTITY_ID]
     assert acc.native_value is None and acc.extra_state_attributes == {}
@@ -204,7 +204,8 @@ def test_a_never_seen_thing_still_has_usable_location_attributes():
                                   "sensor.tag_sextant_location", "tag",
                                   attrs=sn.INITIAL_ATTRS["sextant_location"])
     assert loc.state == "unknown"
-    assert loc.extra_state_attributes == {"kind": "room", "room": "unknown", "spot": None, "floor": "unknown"}
+    assert loc.extra_state_attributes == {"kind": "room", "room": "unknown", "spot": None, "floor": "unknown",
+                                          "area_id": None, "floor_id": None}
 
     # And the seeded dict must not be shared between sensors.
     other = sn.CustomDistanceSensor("x", "sextant_location_x", "sensor.x_sextant_location", "x",

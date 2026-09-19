@@ -80,11 +80,33 @@ def _manifest_version() -> str | None:
         return None
 
 
-# The version this Home Assistant process loaded. HACS replaces the files on
-# disk but the running code (and the panel URL, which carries the version)
-# stays the old one until Home Assistant restarts; comparing the two tells the
-# panel whether a reload is enough or a restart is needed.
-RUNNING_VERSION = _manifest_version()
+# The version this Home Assistant process loaded, set at setup from the
+# integration Home Assistant loaded (reading the manifest here, at import,
+# would block the event loop). HACS replaces the files on disk but the running
+# code (and the panel URL, which carries the version) stays the old one until
+# Home Assistant restarts; comparing the two tells the panel whether a reload
+# is enough or a restart is needed.
+RUNNING_VERSION = None
+# A digest of the integration's Python sources as loaded (set at setup). The
+# frontend is served from disk and needs only a page reload after an update;
+# only when this differs from the files on disk does Home Assistant have to
+# restart, and the panel says so.
+RUNNING_CODE = None
+
+
+def code_signature() -> str | None:
+    """sha256 over the package's .py files, in name order (blocking: call in the executor)."""
+    import hashlib  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+
+    try:
+        digest = hashlib.sha256()
+        for path in sorted(Path(__file__).parent.glob("*.py")):
+            digest.update(path.name.encode())
+            digest.update(path.read_bytes())
+        return digest.hexdigest()
+    except OSError:
+        return None
 
 
 def _thing_names(hass, entities, layout=None) -> dict:
@@ -176,6 +198,7 @@ async def ws_layout_get(hass, connection, msg):
         # newer than the page only needs a reload.
         "app_version": await hass.async_add_executor_job(_manifest_version),
         "running_version": RUNNING_VERSION,
+        "restart_needed": RUNNING_CODE is not None and await hass.async_add_executor_job(code_signature) != RUNNING_CODE,
         "scanners": {
             addr: {"slug": info.get("slug"), "name": info.get("name"), "area": info.get("area_name"),
                    "is_remote": info.get("is_remote")}
@@ -307,6 +330,14 @@ async def ws_tuning_set(hass, connection, msg):
     vol.Optional("icon"): vol.Any(None, str),
     vol.Optional("name"): vol.Any(None, str),
     vol.Optional("thing_class"): vol.Any(None, str),
+    # How the panel refers to the thing: he, she, they or it. None or "" falls
+    # back to its class (a man is he, a phone is it, a pet or person they).
+    vol.Optional("pronouns"): vol.Any(None, "", "he", "she", "they", "it"),
+    # Whose it is: a Home Assistant person (person.david). Groups the Live
+    # list, and is what a per-person location will be built from.
+    vol.Optional("owner"): vol.Any(None, str),
+    # Whether this thing's place may stand for its owner's (None: its class decides).
+    vol.Optional("locates_owner"): vol.Any(None, bool),
     vol.Optional("estimator"): vol.Any(None, "", "geometric", "fingerprint", "fused"),
     vol.Optional("fp_weight"): vol.Any(None, vol.Coerce(float)),
     vol.Optional("color"): vol.Any(None, str),
@@ -322,6 +353,9 @@ async def ws_thing_tune(hass, connection, msg):
     core = _core()
     entity = msg["entity"]
     changes = {}
+    owner = msg.get("owner")
+    if owner and not re.fullmatch(r"person\.[a-z0-9_]+", owner):
+        return _error(connection, msg, "owner must be a Home Assistant person, like person.david")
     async with LAYOUT_LOCK:
         data = get_layout_for_edit(hass)
         if not isinstance(data, dict):
@@ -401,7 +435,8 @@ async def ws_thing_tune(hass, connection, msg):
                 estimators.pop(entity, None)
             data["thing_estimators"] = estimators
             changes["estimator"] = msg["estimator"] or None
-        for key, store in (("name", "thing_names"), ("thing_class", "thing_classes")):
+        for key, store in (("name", "thing_names"), ("thing_class", "thing_classes"), ("pronouns", "thing_pronouns"),
+                           ("owner", "thing_owners")):
             if key in msg:
                 values = data.get(store)
                 if not isinstance(values, dict):
@@ -413,6 +448,16 @@ async def ws_thing_tune(hass, connection, msg):
                     values.pop(entity, None)
                 data[store] = values
                 changes[key] = value or None
+        if "locates_owner" in msg:
+            values = data.get("thing_locates_owner")
+            if not isinstance(values, dict):
+                values = {}
+            if isinstance(msg["locates_owner"], bool):
+                values[entity] = msg["locates_owner"]
+            else:
+                values.pop(entity, None)
+            data["thing_locates_owner"] = values
+            changes["locates_owner"] = msg["locates_owner"]
         await save_layout(hass, data)
     connection.send_result(msg["id"], {"entity": entity, **changes})
 
@@ -449,7 +494,7 @@ async def _evaluate_mark(hass, core, mark, weights=None, gains=None):
     if core._tuning(layout, "fingerprint_auto_gain"):
         base_gain *= core._fingerprint_db.gain_for(mark["entity"])
     vectors = core._fingerprint_db.vectors()
-    extra = core._mark_refs(layout)
+    extra = core._mark_refs(layout, mark["entity"])
     # A mark must not match its own reference, or the score would be circular.
     own = f"mark:{mark['id']}"
     extra = [r for r in extra if r.get("slug") != own] if extra else None
@@ -592,6 +637,16 @@ async def ws_truth_apply(hass, connection, msg):
 # --- history -----------------------------------------------------------------
 
 
+def _history_denied(hass, connection, msg) -> bool:
+    """True (and an error sent) when history is for admins only and the caller is not one."""
+    if not _core()._tuning(get_layout(hass), "history_admin_only"):
+        return False
+    if getattr(getattr(connection, "user", None), "is_admin", False):
+        return False
+    _error(connection, msg, "Location history is for administrators on this install")
+    return True
+
+
 def _history(hass):
     core = _core()
     hist = core.get_position_history(hass)
@@ -603,6 +658,8 @@ def _history(hass):
 @websocket_api.websocket_command({vol.Required("type"): "sextant/history/index"})
 @websocket_api.async_response
 async def ws_history_index(hass, connection, msg):
+    if _history_denied(hass, connection, msg):
+        return
     core = _core()
     hist = _history(hass)
     files, size = await hass.async_add_executor_job(history_mod.disk_usage, core.history_dir(hass))
@@ -623,6 +680,8 @@ async def ws_history_index(hass, connection, msg):
 })
 @websocket_api.async_response
 async def ws_history_get(hass, connection, msg):
+    if _history_denied(hass, connection, msg):
+        return
     core = _core()
     hist = _history(hass)
     now = time.time()
@@ -648,6 +707,8 @@ async def ws_history_timeline(hass, connection, msg):
     What the Live page's timeline and its "here for" line are drawn from.
     Covers the last ``hours`` (default 24), capped at what history retains.
     """
+    if _history_denied(hass, connection, msg):
+        return
     hist = _history(hass)
     now = time.time()
     span = min(float(msg.get("hours") or 24.0) * 3600.0, hist.cfg["max_age"])

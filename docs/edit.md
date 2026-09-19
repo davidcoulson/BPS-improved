@@ -4,6 +4,20 @@
 
 ![The Edit page: rooms, spots and proxies on the plan, with padlocks per layer and undo](../img/screenshots/sextant-edit.png)
 
+A room can be linked to a **Home Assistant area** (and a floor to a Home
+Assistant floor): pick it on the selected room, or press **Link rooms to
+areas** to link every unlinked room on the floor to the area of the same
+name. A room is a shape on a plan and an area a grouping of devices, so
+they stay separate things, but linked, the room's label and the Live list
+show the area's icon, and the sensors of a thing in that room carry
+`area_id` (and `floor_id`), so an automation can act on the area itself:
+
+```yaml
+action: light.turn_on
+target:
+  area_id: "{{ state_attr('sensor.david_sextant_person_location', 'area_id') }}"
+```
+
 The same map as an editor. Place proxies from a searchable list of the
 scanners Bermuda knows (a proxy belongs to one floor), drag them, give them
 a mount height. A dragged proxy snaps onto a wall within about 25 cm, a few

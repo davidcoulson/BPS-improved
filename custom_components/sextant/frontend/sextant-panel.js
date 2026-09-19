@@ -13,18 +13,11 @@
  */
 import { LitElement, html, css, nothing } from "./lit.js";
 import { SextantMap, thingColor, thingHue, staleness, shortAge, heatCells } from "./sextant-map.js";
-import { sharedStyles, widgetStyles, fmtAge, fmtNum, toast, confirmDialog, ensureHaComponents, uiSwitch, uiSelect, uiButton, callWS, sortFloors, thingName, proxyName, fmtLen, fmtSpeed, classIcon } from "./sextant-ui.js";
+import { sharedStyles, widgetStyles, fmtAge, fmtNum, toast, confirmDialog, ensureHaComponents, uiSwitch, uiSelect, uiButton, callWS, sortFloors, thingName, proxyName, fmtLen, fmtSpeed, classIcon, pronounsFor } from "./sextant-ui.js";
 
-// The backend registers the panel at /sextant/v/<version>/sextant-panel.js
-// (older releases used ?v=<version>), so a page loaded before an update carries
-// the old version here while layout/get reports the new one; the version comes
-// from our own URL, never from a constant that has to be bumped per release.
-const PANEL_VERSION = (() => {
-  try {
-    const u = new URL(import.meta.url);
-    return u.pathname.match(/\/sextant\/v\/([^/]+)\//)?.[1] ?? u.searchParams.get("v");
-  } catch { return null; }
-})();
+// What this page is running: the version of the files it was loaded from
+// (sextant-version.js), not the one in its URL - see that file.
+import { VERSION as PANEL_VERSION } from "./sextant-version.js";
 import "./sextant-devices.js";
 import "./sextant-health.js";
 import "./sextant-edit.js";
@@ -179,20 +172,19 @@ class SextantPanel extends LitElement {
   }
 
   /**
-   * After an update: HACS swaps the files, but Home Assistant keeps running
-   * (and serving the panel of) the old version until it restarts, so a reload
-   * alone cannot help then. Only once it runs the new version does a reload
-   * fetch the new page.
+   * After an update HACS has swapped the files on disk. The frontend is
+   * served from disk, so a reload is all a page needs; Home Assistant only
+   * has to restart when the Python code changed too (restart_needed compares
+   * the code on disk with what was loaded).
    */
   _renderVersionBanner() {
-    const installed = this._data?.app_version, running = this._data?.running_version || installed;
-    if (!installed || !PANEL_VERSION) return nothing;
-    if (installed !== running) {
-      return html`<div class="banner update">Sextant ${installed} is installed; Home Assistant is still running ${running}. Restart Home Assistant to finish the update.
+    const installed = this._data?.app_version;
+    if (this._data?.restart_needed) {
+      return html`<div class="banner update">Sextant ${installed || ""} is installed, and its backend changed. Restart Home Assistant to finish the update.
         ${this.hass?.user?.is_admin ? html`<button @click=${() => this._restartHa()}>Restart</button>` : nothing}</div>`;
     }
-    if (running !== PANEL_VERSION) {
-      return html`<div class="banner update">Sextant ${running} is running; this page is still ${PANEL_VERSION}. <button @click=${() => window.location.reload()}>Reload</button></div>`;
+    if (installed && PANEL_VERSION && installed !== PANEL_VERSION) {
+      return html`<div class="banner update">Sextant ${installed} is installed; this page is still ${PANEL_VERSION}. <button @click=${() => window.location.reload()}>Reload</button></div>`;
     }
     return nothing;
   }
@@ -312,6 +304,7 @@ class SextantLive extends LitElement {
     _links: { state: true },
     _marking: { state: true },
     _heat: { state: true },
+    _folded: { state: true },
     _truth: { state: true },
     _marks: { state: true },
     _blend: { state: true },
@@ -326,7 +319,8 @@ class SextantLive extends LitElement {
     this._selected = null;
     this._links = null;
     this._marking = false;  // waiting for the click that says where the thing really is
-    this._heatHours = 0;    // "where it's been" window picked for the selected thing (0 = off)
+    this._heatHours = 0;    // Activity window picked for the selected thing (0 = off)
+    try { this._folded = new Set(JSON.parse(localStorage.getItem("sextant.live.folded") || "[]")); } catch { this._folded = new Set(); }
     this._heat = null;      // {ent, hours, byFloor} from heatCells
     this._truth = null;     // the last mark's evaluation {mark, rows, current_weight}
     this._marks = [];       // the selected thing's marks
@@ -375,10 +369,10 @@ class SextantLive extends LitElement {
     this._selected = ent;
     if (ent) {
       this._mapOpen = true; // a phone: the map opens under this thing's details
-      // On a phone the list (13+ rows) is taller than the space it is given
-      // and scrolls on its own; without this the detail card lands below
-      // the fold of that scroller and the tap looks like it did nothing.
-      this.updateComplete.then(() => this.renderRoot.querySelector(".card.detail")?.scrollIntoView({ block: "start", behavior: "smooth" }));
+      // The quick actions open inside the selected row, so keep that row in
+      // view - no further: tapping a visible row moves nothing, picking a
+      // thing on the map brings its row into the list's view.
+      this.updateComplete.then(() => this.renderRoot.querySelector(".list li.selected")?.scrollIntoView({ block: "nearest", behavior: "smooth" }));
     }
     this._map?.setOptions({ focus: ent });
     if (ent) { this._loadLinks(); this._loadMarks(ent); this._loadTimeline(ent); if (this._heatHours) this._loadHeat(ent, this._heatHours); } else { this._links = null; this._marks = []; this._map?.setMarks([]); this._timeline = null; }
@@ -412,14 +406,14 @@ class SextantLive extends LitElement {
    * been, scrub its history, edit it.
    */
   _renderQuick(sel) {
-    const ent = sel.ent, h = this._history;
+    const ent = sel.ent, h = this._history, name = this._label(ent), pn = this._pn(ent);
     const heatOn = this._heat?.ent === ent && this._heatHours > 0;
     const btn = (icon, label, title, on, onClick) => html`<button class="qa ${on ? "on" : ""}" title=${title} aria-label=${title} aria-pressed=${on} @click=${onClick}>
       <ha-icon icon=${icon}></ha-icon><span>${label}</span></button>`;
     return html`<div class="quick">
-      ${btn("mdi:map-marker-check", "It's here", "It's actually here: tap where it really is", this._marking, () => { this._marking = !this._marking; })}
-      ${btn("mdi:fire", "Activity", "Activity: where it has spent its time", heatOn, () => this._loadHeat(ent, heatOn ? 0 : (this._lastHeatHours || 6)))}
-      ${btn("mdi:history", "History", "Scrub its history", h?.ent === ent, () => this._loadHistory(h?.ent === ent ? null : ent))}
+      ${btn("mdi:map-marker-check", "Here", `Tap where ${name} really is`, this._marking, () => { this._marking = !this._marking; })}
+      ${btn("mdi:fire", "Activity", `Where ${name} ${pn.has} spent ${pn.poss} time`, heatOn, () => this._loadHeat(ent, heatOn ? 0 : (this._lastHeatHours || 6)))}
+      ${btn("mdi:history", "History", `Scrub ${name}'s history`, h?.ent === ent, () => this._loadHistory(h?.ent === ent ? null : ent))}
       ${this._isAdmin() ? btn("mdi:pencil-outline", "Edit", "Edit this thing", false, () => this._goto({ mode: "things", thing: ent })) : nothing}
     </div>
     ${this._marking ? this._renderMarkingPrompt(ent) : nothing}`;
@@ -526,6 +520,7 @@ class SextantLive extends LitElement {
     if (!this._map) return;
     if (changed.has("data") || changed.has("floor")) this._pushFloor();
     if (changed.has("positions") || changed.has("floor") || changed.has("data") || changed.has("_scrub") || changed.has("_history")) this._pushThings();
+    if (changed.has("hass")) this._map.setAreas(this.hass?.areas);
     if (changed.has("floor") || changed.has("_marks")) this._pushMarks();
     if (changed.has("floor") || changed.has("_heat") || changed.has("data")) this._pushHeat();
     if (changed.has("_options")) this._map.setOptions(this._options);
@@ -577,6 +572,75 @@ class SextantLive extends LitElement {
   }
 
   _label(ent) { return thingName(this.data, ent); }
+
+  /**
+   * The list, grouped by whose things they are: each Home Assistant person
+   * gets a header (their picture, their name, and under it where their own
+   * location sensor puts them) that folds the group away; the rest follow.
+   * One thing is enough for a section - a person is tracked as a person -
+   * except a pet whose one thing is its own tag (Meg over Meg says nothing).
+   */
+  _renderGroupedRows(rows) {
+    const owners = this.data?.layout?.thing_owners || {};
+    const byOwner = new Map();
+    for (const p of rows) {
+      const o = owners[p.ent];
+      if (o) byOwner.set(o, [...(byOwner.get(o) || []), p]);
+    }
+    const same = (a, b) => String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
+    const groups = [...byOwner]
+      .map(([person, list]) => ({ person, list, name: this.hass?.states?.[person]?.attributes?.friendly_name || person.slice(7) }))
+      .filter((g) => g.list.length >= 2 || !same(this._label(g.list[0].ent), g.name))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    if (!groups.length && !rows.some((p) => ["cat", "dog", "paw"].includes((this.data?.layout?.thing_classes || {})[p.ent]))) return rows.map((p) => this._renderRow(p));
+    const grouped = new Set(groups.flatMap((g) => g.list.map((p) => p.ent)));
+    // Then the pets (by class), then whatever is left.
+    const classes = this.data?.layout?.thing_classes || {};
+    const isPet = (p) => ["cat", "dog", "paw"].includes(classes[p.ent]);
+    const pets = rows.filter((p) => !grouped.has(p.ent) && isPet(p));
+    const rest = rows.filter((p) => !grouped.has(p.ent) && !isPet(p));
+    const folded = this._folded || new Set();
+    const fold = (key) => {
+      const next = new Set(folded);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      this._folded = next;
+      try { localStorage.setItem("sextant.live.folded", JSON.stringify([...next])); } catch { /* ignore */ }
+    };
+    const header = (key, title, extra) => html`<li class="group" @click=${() => fold(key)} role="button" aria-expanded=${!folded.has(key)}>
+      <ha-icon class="chev" icon=${folded.has(key) ? "mdi:chevron-right" : "mdi:chevron-down"}></ha-icon>${extra.avatar || nothing}
+      <span class="gtext"><span class="gname">${title}</span>${extra.where ? html`<span class="gwhere small">${extra.where}</span>` : nothing}</span></li>`;
+    return html`${groups.map((g) => {
+      const st = this.hass?.states?.[g.person], pic = st?.attributes?.entity_picture;
+      const where = this.hass?.states?.[`sensor.${g.person.slice(7)}_sextant_person_location`]?.state;
+      const avatar = html`<span class="gavatar">${pic ? html`<img src=${pic} alt="">` : g.name.slice(0, 2).toUpperCase()}</span>`;
+      return html`${header(g.person, g.name, { avatar, where: where && where !== "unknown" ? where : "" })}
+        ${folded.has(g.person) ? nothing : g.list.map((p) => this._renderRow(p))}`;
+    })}
+    ${pets.length ? html`${header("_pets", "Pets", { avatar: html`<span class="gavatar"><ha-icon icon="mdi:paw"></ha-icon></span>` })}${folded.has("_pets") ? nothing : pets.map((p) => this._renderRow(p))}` : nothing}
+    ${rest.length ? html`${header("_rest", "Everything else", {})}${folded.has("_rest") ? nothing : rest.map((p) => this._renderRow(p))}` : nothing}`;
+  }
+
+  _renderRow(p) {
+    const st = staleness(p, this._staleAfter());
+    return html`
+            <li class="${p.ent === this._selected ? "selected" : ""} ${st.ghost ? "ghost" : ""}" title=${st.ghost ? `Not heard for ${fmtAge(st.age)}: this is where ${this._label(p.ent)} ${this._pn(p.ent).was} last placed` : ""} @click=${() => { this._select(p.ent === this._selected ? null : p.ent); if (p.floor && p.floor !== this.floor) this.dispatchEvent(new CustomEvent("floor-changed", { detail: p.floor })); }}>
+              ${this._avatar(p.ent)}
+              <span class="name">${this._label(p.ent)}</span>
+              <span class="where">${this._roomIcon(p.floor, p.zone) ? html`<ha-icon class="roomicon" icon=${this._roomIcon(p.floor, p.zone)}></ha-icon>` : nothing}${p.zone}${p.sub_zone && p.sub_zone !== "unknown" ? ` · ${p.sub_zone}` : ""}</span>
+              <span class="muted small">${st.ghost ? html`<ha-icon class="ghosticon" icon="mdi:ghost-outline"></ha-icon>seen ${shortAge(st.age)} ago · ` : nothing}${p.floor}</span>
+              ${p.ent === this._selected ? html`<div class="quickin" @click=${(e) => e.stopPropagation()}>${this._renderQuick(p)}</div>` : nothing}
+            </li>`;
+  }
+
+  /** The icon of the Home Assistant area a room is linked to, or null. */
+  _roomIcon(floorName, roomName) {
+    const f = (this.data?.layout?.floor || []).find((x) => x.name === floorName);
+    const areaId = (f?.zones || []).find((z) => z.entity_id === roomName)?.area_id;
+    return (areaId && this.hass?.areas?.[areaId]?.icon) || null;
+  }
+
+  /** He, she, they or it for a thing (its setting, else its class; people and pets are never "it"). */
+  _pn(ent) { return pronounsFor(this.data?.layout, ent); }
 
   /** The same disc the map draws: the thing's hue, with its custom icon, its class icon, or initials. */
   _avatar(ent) {
@@ -679,14 +743,7 @@ class SextantLive extends LitElement {
           })}</span>
         </h3>
         <ul class="list">
-          ${rows.map((p) => { const st = staleness(p, this._staleAfter()); return html`
-            <li class="${p.ent === this._selected ? "selected" : ""} ${st.ghost ? "ghost" : ""}" title=${st.ghost ? `Not heard for ${fmtAge(st.age)}: this is where it was last placed` : ""} @click=${() => { this._select(p.ent === this._selected ? null : p.ent); if (p.floor && p.floor !== this.floor) this.dispatchEvent(new CustomEvent("floor-changed", { detail: p.floor })); }}>
-              ${this._avatar(p.ent)}
-              <span class="name">${this._label(p.ent)}</span>
-              <span class="where">${p.zone}${p.sub_zone && p.sub_zone !== "unknown" ? ` · ${p.sub_zone}` : ""}</span>
-              <span class="muted small">${st.ghost ? html`<ha-icon class="ghosticon" icon="mdi:ghost-outline"></ha-icon>seen ${shortAge(st.age)} ago · ` : nothing}${p.floor}</span>
-              ${p.ent === this._selected ? html`<div class="quickin" @click=${(e) => e.stopPropagation()}>${this._renderQuick(p)}</div>` : nothing}
-            </li>`; })}
+          ${this._renderGroupedRows(rows)}
           ${rows.length ? nothing : html`<li class="muted">No positions yet.</li>`}
         </ul>
         ${sel ? html`
@@ -696,13 +753,13 @@ class SextantLive extends LitElement {
               <dt>Room</dt><dd>${sel.zone} ${sel.zone_locked ? html`<ha-icon icon="mdi:lock" title="stationary lock: still for a while, so the room holds"></ha-icon>` : nothing}</dd>
               <dt>Spot</dt><dd>${sel.sub_zone && sel.sub_zone !== "unknown" ? sel.sub_zone : "—"}</dd>
               <dt>Floor</dt><dd>${sel.floor}</dd>
-              <dt>Proxies</dt><dd>${sel.radii?.length ?? 0} in the solve${sel.anchor ? html`<br><span class="pill ok" title="one proxy reads it within arm's reach and no other comes close: placed on that proxy">anchored to ${proxyName(this.data, sel.anchor)}</span>` : nothing}</dd>
+              <dt>Proxies</dt><dd>${sel.radii?.length ?? 0} in the solve${sel.anchor ? html`<br><span class="pill ok" title=${`one proxy reads ${this._label(sel.ent)} within arm's reach and no other comes close: placed on that proxy`}>anchored to ${proxyName(this.data, sel.anchor)}</span>` : nothing}</dd>
               ${this._renderHere(sel)}
-              <dt>Updated</dt><dd>${fmtAge(Date.now() / 1000 - sel.updated)} ago${staleness(sel, this._staleAfter()).ghost ? html` <span class="pill warn" title="Nothing has heard it since; the position is where it was last placed">not heard</span>` : nothing}</dd>
+              <dt>Updated</dt><dd>${fmtAge(Date.now() / 1000 - sel.updated)} ago${staleness(sel, this._staleAfter()).ghost ? html` <span class="pill warn" title=${`Nothing has heard ${this._label(sel.ent)} since; this is where ${this._pn(sel.ent).subj} ${this._pn(sel.ent).was} last placed`}>not heard</span>` : nothing}</dd>
             </dl>
             ${this._renderTimeline(sel)}
             <details class="telemetry">
-              <summary>Details <span class="muted small">how sure it is, and why</span></summary>
+              <summary>Details <span class="muted small">how sure Sextant is, and why</span></summary>
               <dl>
                 <dt>Floor odds</dt><dd>${sel.floors ? Object.entries(sel.floors).sort((a, b) => b[1] - a[1]).map(([f, p]) => `${f} ${(p * 100).toFixed(0)}%`).join(" · ") : "—"}</dd>
                 <dt>Spot shares</dt><dd>${sel.sub_zones ? Object.entries(sel.sub_zones).sort((a, b) => b[1] - a[1]).map(([s, p]) => `${s === "unknown" ? "none" : s} ${(p * 100).toFixed(0)}%`).join(" · ") : "—"}</dd>
@@ -772,7 +829,7 @@ class SextantLive extends LitElement {
     return html`
       <details class="timeline" open>
         <summary>Timeline <span class="muted small">last ${fmtAge(span)}${stays[0].partial ? " (all that is kept)" : ""}</span></summary>
-        <div class="band" role="img" aria-label="Where it has been, oldest on the left">
+        <div class="band" role="img" aria-label=${`Where ${this._label(sel.ent)} has been, oldest on the left`}>
           ${stays.map((s) => html`<span class="seg ${s.unheard ? "unheard" : ""}" style="flex-grow: ${Math.max(0.002, (s.end - s.start) / span)}; background: ${colour(s)}" title="${at(s.start)}–${at(s.end)} · ${place(s)} · ${fmtAge(s.end - s.start)}"></span>`)}
         </div>
         <div class="band-ends muted small"><span>${at(from)}</span><span>${to >= now - 5 ? "now" : at(to)}</span></div>
@@ -810,7 +867,7 @@ class SextantLive extends LitElement {
     const rows = (t?.rows || []).slice(0, 6);
     return html`<div class="truth">
       ${this._marking ? nothing
-        : html`<div class="row">${uiButton({ label: "It's actually here…", icon: "mdi:map-marker-check", onClick: () => { this._marking = true; }, title: "Tell Sextant where this thing really is; it re-solves the last few minutes under every setting and shows which fits best" })}
+        : html`<div class="row">${uiButton({ label: `${this._label(ent)} is actually here…`, icon: "mdi:map-marker-check", onClick: () => { this._marking = true; }, title: `Tell Sextant where ${this._label(ent)} really is; Sextant re-solves the last few minutes under every setting and shows which fits best` })}
             ${this._marks.length ? html`<span class="muted small">${this._marks.length} mark${this._marks.length === 1 ? "" : "s"}</span>` : nothing}</div>`}
       ${t ? html`<div class="card inner">
         <h4>Mark ${t.mark.id} <span class="muted small">${t.mark.samples} cycles re-solved · now ${Math.round((t.current_weight ?? 0) * 100)}% fingerprint</span></h4>
@@ -818,7 +875,7 @@ class SextantLive extends LitElement {
           ${rows.map((r) => html`<tr><td>${r.estimator}${r.estimator === "fused" ? ` ${Math.round(r.weight * 100)}%` : ""}</td><td class="num">×${fmtNum(r.gain, 1)}</td><td class="num">${fmtLen(r.mean_m, this.hass)}</td><td class="num">${Math.round(r.room_ok * 100)}%</td>
             <td>${uiButton({ label: "Apply", kind: "text", onClick: () => this._applyRow(ent, r) })}</td></tr>`)}
         </table>
-        <p class="muted small">Error is the mean distance from the mark; Room is how often the fix landed in the mark's room. One mark can overfit: mark it in another room too.</p>` : html`<p class="muted small">Nothing could be re-solved for this mark.</p>`}
+        <p class="muted small">Error is the mean distance from the mark; Room is how often the fix landed in the mark's room. One mark can overfit: mark ${this._pn(ent).obj} in another room too.</p>` : html`<p class="muted small">Nothing could be re-solved for this mark.</p>`}
         <div class="row">${uiButton({ label: "Close", kind: "text", onClick: () => { this._truth = null; } })}${uiButton({ label: "Forget mark", kind: "text", onClick: () => this._deleteMark(t.mark.id) })}</div>
       </div>` : nothing}
       ${!t && this._marks.length ? html`<details class="marks"><summary>Marks</summary><ul class="plain">${this._marks.map((m) => html`<li>mark ${m.id} · ${m.floor} · ${m.samples} cycles · ${new Date(m.t * 1000).toLocaleString()} ${uiButton({ label: "Forget", kind: "text", onClick: () => this._deleteMark(m.id) })}</li>`)}</ul></details>` : nothing}
@@ -895,7 +952,19 @@ class SextantLive extends LitElement {
     .blend input { flex: 1; min-width: 90px; }
     .truth { margin-top: 6px; }
     .heat { align-items: center; gap: 8px; flex-wrap: wrap; }
+    .roomicon { --mdc-icon-size: 16px; margin-right: 3px; vertical-align: -3px; color: var(--secondary-text-color); }
     .list li .quickin { grid-column: 1 / -1; cursor: default; padding-top: 6px; }
+    .list li.group { display: flex; align-items: center; gap: 6px; padding: 8px 4px 4px; margin-top: 4px; border-top: 1px solid var(--divider-color, #e0e0e0); border-radius: 0; font-weight: 500; }
+    .list li.group:first-child { border-top: none; margin-top: 0; }
+    .list li.group .chev { --mdc-icon-size: 18px; color: var(--secondary-text-color); }
+    /* The same disc as a thing's avatar: 30 px, white ring, hairline shadow. */
+    .list li.group .gavatar { width: 30px; height: 30px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,0.15); overflow: hidden; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; background: var(--secondary-background-color, #eee); }
+    .list li.group .gavatar img { width: 100%; height: 100%; object-fit: cover; }
+    .list li.group .gavatar ha-icon { --mdc-icon-size: 18px; color: var(--secondary-text-color); }
+    .list li.group .gavatar { flex: none; }
+    .list li.group .gtext { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+    .list li.group .gname, .list li.group .gwhere { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .list li.group .gwhere { font-weight: 400; color: var(--secondary-text-color); }
     .quick { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 6px; margin: 2px 0 4px; }
     .quick .qa { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; padding: 6px 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border: 1px solid var(--divider-color, #ddd); border-radius: 10px; background: var(--ha-card-background, var(--card-background-color, #fff)); color: var(--primary-text-color); font: inherit; font-size: 11px; cursor: pointer; }
     .quick .qa:hover { filter: brightness(0.97); }

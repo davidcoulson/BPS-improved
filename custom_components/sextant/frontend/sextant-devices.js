@@ -10,7 +10,10 @@
  */
 import { LitElement, html, css, nothing } from "./lit.js";
 import { pointInPolygon, thingColor } from "./sextant-map.js";
-import { sharedStyles, widgetStyles, fmtAge, fmtNum, toast, callWS, confirmDialog, uiField, uiSelect, uiSwitch, uiButton, thingName, fmtLen, lenUnit, toDisplayLen, fromDisplayLen, THING_CLASSES, classIcon } from "./sextant-ui.js";
+
+// Mirrors persons.LOCATES_BY_DEFAULT: classes whose place is their owner's place.
+const LOCATES_BY_DEFAULT = new Set(["watch", "phone", "person", "man", "woman", "child", "cat", "dog", "paw"]);
+import { sharedStyles, widgetStyles, fmtAge, fmtNum, toast, callWS, confirmDialog, uiField, uiSelect, uiSwitch, uiButton, thingName, fmtLen, lenUnit, toDisplayLen, fromDisplayLen, THING_CLASSES, classIcon, pronounKey } from "./sextant-ui.js";
 
 const KIND_FILTERS = [["all", "Everything"], ["tile", "Tiles"], ["ibeacon", "iBeacons"], ["device", "Other devices"]];
 const RECENT_SECS = 60;
@@ -230,6 +233,9 @@ class SextantDevices extends LitElement {
       name: layout.thing_names?.[slug] || "",
       placeholder: thingName({ ...this.data, names: { ...(this.data?.names || {}), [slug]: undefined } }, slug),
       thing_class: layout.thing_classes?.[slug] || "",
+      pronouns: layout.thing_pronouns?.[slug] || "",
+      owner: layout.thing_owners?.[slug] || "",
+      locates: typeof layout.thing_locates_owner?.[slug] === "boolean" ? (layout.thing_locates_owner[slug] ? "yes" : "no") : "",
       height: toDisplayLen(layout.thing_heights?.[slug], this.hass),
       ref: layout.thing_ref_offsets?.[slug] ?? "",
       icon: layout.thing_icons?.[slug] || "",
@@ -329,6 +335,9 @@ class SextantDevices extends LitElement {
     const settings = {
       name: w.name.trim() || null,
       thing_class: w.thing_class || null,
+      pronouns: w.pronouns || null,
+      owner: w.owner || null,
+      locates_owner: w.locates === "yes" ? true : w.locates === "no" ? false : null,
       height: w.height === "" || w.height == null ? null : fromDisplayLen(w.height, this.hass),
       ref_offset_db: w.ref === "" || w.ref == null ? null : Number(w.ref),
       icon: w.icon || null,
@@ -362,11 +371,34 @@ class SextantDevices extends LitElement {
           ${uiField({ label: "Name", value: w.name, placeholder: w.placeholder, onChange: (v) => { w.name = v; this.requestUpdate(); }, style: "flex: 1; min-width: 220px" })}
         </div>
         <p class="small muted">Blank keeps the device name from Bermuda / Home Assistant.</p>
-        <h4>What is it?</h4>
+        <h4>What is this?</h4>
         <div class="classes">
           ${THING_CLASSES.map(([key, label, icon]) => html`<button class="cls ${w.thing_class === key ? "on" : ""}" title=${label} @click=${() => { w.thing_class = key; this.requestUpdate(); }}>
             ${icon ? html`<ha-icon icon=${icon}></ha-icon>` : html`<span class="initials">Ab</span>`}<span>${label}</span></button>`)}
         </div>
+        <div class="row">
+          ${uiSelect({ label: "Pronouns", value: w.pronouns || "", options: [
+            { value: "", label: `From its class (${pronounKey({ thing_classes: { [w.slug]: w.thing_class || undefined } }, w.slug)})` },
+            { value: "he", label: "He / him" }, { value: "she", label: "She / her" },
+            { value: "they", label: "They / them" }, { value: "it", label: "It" },
+          ], onChange: (v) => { w.pronouns = v; this.requestUpdate(); }, style: "width: 220px" })}
+          <span class="small muted">How Sextant refers to this thing. A person or pet with no pronouns set is "they".</span>
+        </div>
+        <div class="row">
+          ${uiSelect({ label: "Belongs to", value: w.owner || "", options: [{ value: "", label: "Nobody" },
+            ...Object.values(this.hass?.states || {}).filter((s) => s.entity_id.startsWith("person."))
+              .map((s) => ({ value: s.entity_id, label: s.attributes.friendly_name || s.entity_id }))
+              .sort((a, b) => a.label.localeCompare(b.label))],
+            onChange: (v) => { w.owner = v; this.requestUpdate(); }, style: "width: 220px" })}
+          <span class="small muted">A Home Assistant person. Their things are grouped together on Live, and the one they are carrying gives them a location sensor of their own.</span>
+        </div>
+        ${w.owner ? html`<div class="row">
+          ${uiSelect({ label: "Gives the owner's location", value: w.locates || "", options: [
+            { value: "", label: `From its class (${LOCATES_BY_DEFAULT.has(w.thing_class) ? "yes" : "no"})` },
+            { value: "yes", label: "Yes" }, { value: "no", label: "No" },
+          ], onChange: (v) => { w.locates = v; this.requestUpdate(); }, style: "width: 220px" })}
+          <span class="small muted">Watches, phones and a pet's own tag say where their owner is. Headphones, keys or a bag go along only some of the time, so by default they don't.</span>
+        </div>` : nothing}
         <div class="row colour">
           <span class="avatar-preview" style="background: ${thingColor(w.slug, w.color || null)}" title="how this thing will look">${w.preview || w.icon ? html`<img src=${w.preview || w.icon} alt="">` : classIcon(w.thing_class) ? html`<ha-icon icon=${classIcon(w.thing_class)}></ha-icon>` : html`<span class="initials">${(w.name || w.placeholder || "?").slice(0, 2).toUpperCase()}</span>`}</span>
           <span class="small">Colour</span>
@@ -379,11 +411,11 @@ class SextantDevices extends LitElement {
           ${uiField({ label: `Height (${unit})`, type: "number", step: 0.05, min: 0, max: unit === "ft" ? 16 : 5, value: w.height, placeholder: String(toDisplayLen(this._defaultHeight(), this.hass)), onChange: (v) => { w.height = v; this.requestUpdate(); }, style: "width: 150px" })}
           ${uiField({ label: "Ref trim (dB)", type: "number", step: 0.5, min: -20, max: 20, value: w.ref, placeholder: "0", onChange: (v) => { w.ref = v; this.requestUpdate(); }, style: "width: 150px" })}
         </div>
-        <p class="small muted">Height: how high it is usually carried or placed (a phone in a pocket about 1 m, a dog's collar 0.3 m). Ref trim: a few dB either way if this thing always reads too near or too far.</p>
+        <p class="small muted">Height: how high this is usually carried or placed (a phone in a pocket about 1 m, a dog's collar 0.3 m). Ref trim: a few dB either way if this thing always reads too near or too far.</p>
         <div class="row">
           ${uiSelect({ label: "Positioning", value: w.estimator || "default", options: [{ value: "default", label: `Default (${this.data?.layout?.tuning?.position_estimator || "geometric"})` }, { value: "geometric", label: "Geometric only, no fingerprint" }, { value: "fused", label: "Fused" }, { value: "fingerprint", label: "Fingerprint only" }], onChange: (v) => { w.estimator = v === "default" ? "" : v; this.requestUpdate(); }, style: "min-width: 280px" })}
         </div>
-        <p class="small muted">Positioning: the estimator for this thing alone. If the fingerprint makes it worse (a Tile or a tag whose radio reads unlike the phones), pick geometric only.</p>
+        <p class="small muted">Positioning: the estimator for this thing alone. If the fingerprint makes placement worse (a Tile or a tag whose radio reads unlike the phones), pick geometric only.</p>
         <h4>Photo or custom icon <span class="muted small">optional, drawn instead of the class icon</span></h4>
         ${w.crop ? html`<div class="cropper">
           <canvas class="cropper" width=${CROP_SIZE} height=${CROP_SIZE}

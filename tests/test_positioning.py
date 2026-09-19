@@ -925,6 +925,9 @@ def _kf(x, y, vx=0.0, vy=0.0, sigma_px=10.0, floor="F"):
 
 def _elect(entity, x, t, vx=0.0, layout=None, sigma=10.0):
     layout = layout if layout is not None else {}
+    # These tests start the clock at 0; the warm-up has its own test below.
+    tuning = {"zone_lock_warmup_secs": 0.0, **(layout.get("tuning") or {})}
+    layout = {**layout, "tuning": tuning}
     zone, locked, _speed = sextant._elect_zone(
         entity, "F", "Kitchen" if x < 100 else "Dining", Point(x, 50.0),
         _kf(x, 50.0, vx=vx, sigma_px=sigma), _two_rooms(), 100.0, layout, now=t,
@@ -1718,6 +1721,8 @@ def test_location_publishes_the_spot_when_there_is_one():
         "room": "Master Bedroom",
         "spot": "David Bedside Table",
         "floor": "Second Floor",
+        "area_id": None,
+        "floor_id": None,
     }
 
 
@@ -1751,7 +1756,7 @@ def test_location_is_unknown_when_nothing_is_known():
     """A thing that has gone dark reads unknown, not blank."""
     state, attrs = sextant._location_state("unknown", "unknown", "unknown", "unknown")
     assert state == "unknown"
-    assert attrs == {"kind": "room", "room": "unknown", "spot": None, "floor": "unknown"}
+    assert attrs == {"kind": "room", "room": "unknown", "spot": None, "floor": "unknown", "area_id": None, "floor_id": None}
 
 
 def test_location_never_publishes_an_empty_state():
@@ -1931,4 +1936,56 @@ def test_two_proxies_on_one_spot_are_not_each_others_runner_up():
     assert ev(lay, ["right", "left"]) == 1.0
     assert sextant._spot_proxies({"proxy": ["a", "", 3, "b"]}) == ("a", "b")
     assert sextant._spot_proxies({"proxy": "a"}) == ("a",) and sextant._spot_proxies({}) == ()
+
+
+def test_no_lock_in_the_first_minutes_after_a_start():
+    # A phone on a kitchen counter against the foyer wall was locked into the
+    # foyer by the wandering first fixes after a restart.
+    sextant._zone_state.clear()
+    warm = {"tuning": {"zone_lock_warmup_secs": 120.0}}
+    for t in (0.0, 10.0, 20.0, 30.0, 60.0, 110.0):
+        assert _elect("e", 90, t, layout=warm) == ("Kitchen", False)
+    assert _elect("e", 90, 130.0, layout=warm) == ("Kitchen", True)
+
+
+
+def test_marks_guide_their_own_thing_and_its_class_not_everything():
+    # Michelle's phone marked on the couch must not drag David's watch there.
+    layout = {"thing_classes": {"m_phone": "phone", "d_phone": "phone", "d_watch": "watch", "meg": "cat", "socks": "cat"},
+              "floor": [{"name": "F", "scale": SCALE, "receivers": []}]}
+    sample = {"t": 1.0, "gain": 1.0, "estimator": "fingerprint", "thing_vec": {"aa": 2.0, "bb": 3.0},
+              "raw_vec": {"aa": 2.0, "bb": 3.0}, "floors": {}}
+    sextant._set_truth_marks([
+        {"id": 1, "entity": "m_phone", "floor": "F", "x": 10.0, "y": 0.0, "samples": [sample] * 3},
+        {"id": 2, "entity": "meg", "floor": "F", "x": 50.0, "y": 0.0, "samples": [sample] * 3},
+    ])
+    try:
+        slugs = lambda ent, lay=layout: sorted(r["slug"] for r in (sextant._mark_refs(lay, ent) or []))  # noqa: E731
+        assert slugs("m_phone") == ["mark:1"]          # its own
+        assert slugs("d_phone") == ["mark:1"]          # same class
+        assert slugs("d_watch") == []                  # a different kind of device
+        assert slugs("socks") == ["mark:2"]            # the cats share Meg's
+        assert slugs("unclassified") == []
+        own = {**layout, "tuning": {"fingerprint_marks_scope": "own"}}
+        assert slugs("d_phone", own) == [] and slugs("m_phone", own) == ["mark:1"]
+        everyone = {**layout, "tuning": {"fingerprint_marks_scope": "all"}}
+        assert slugs("d_watch", everyone) == ["mark:1", "mark:2"]
+    finally:
+        sextant._set_truth_marks([])
+
+
+def test_a_room_linked_to_an_area_publishes_its_area_and_floor_ids():
+    layout = {"floor": [{"name": "Ground Floor", "floor_id": "ground", "zones": [
+        {"entity_id": "Kitchen", "area_id": "kitchen"},
+        {"entity_id": "Hall"},
+        {"entity_id": "Void", "no_go": True, "area_id": "nope"},
+    ]}]}
+    assert sextant.room_area(layout, "Ground Floor", "Kitchen") == ("kitchen", "ground")
+    assert sextant.room_area(layout, "Ground Floor", "Hall") == (None, "ground")      # unlinked room
+    assert sextant.room_area(layout, "Ground Floor", "Void") == (None, "ground")      # a no-go area is nowhere
+    assert sextant.room_area(layout, "Attic", "Kitchen") == (None, None)
+    assert sextant.room_area(None, "Ground Floor", "Kitchen") == (None, None)
+    # On a spot, the area is the spot's room's.
+    _state, attrs = sextant._location_state("Hall", "Peninsula", "Kitchen", "Ground Floor", layout)
+    assert attrs["room"] == "Kitchen" and attrs["area_id"] == "kitchen" and attrs["floor_id"] == "ground"
 

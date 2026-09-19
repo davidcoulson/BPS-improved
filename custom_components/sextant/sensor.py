@@ -32,7 +32,9 @@ SENSOR_KINDS = [
 # will get later rather than None - "unknown" is an answer, a missing attribute
 # is a bug in whatever reads it.
 INITIAL_ATTRS = {
-    "sextant_location": {"kind": "room", "room": "unknown", "spot": None, "floor": "unknown"},
+    "sextant_location": {"kind": "room", "room": "unknown", "spot": None, "floor": "unknown",
+                         "area_id": None, "floor_id": None},
+    "sextant_room": {"area_id": None},
     "sextant_spot": {"room": "unknown"},
 }
 
@@ -371,6 +373,66 @@ def ensure_sensors_for_things(hass, things):
         _LOGGER.info("Creating Sextant sensors for %d thing(s) added since setup", len(new_sensors) // len(SENSOR_KINDS) or 1)
         add_entities(new_sensors, update_before_add=True)
         normalize_sextant_registry_entity_ids_from_cache(hass)
+
+
+@callback
+def ensure_person_sensors(hass, people):
+    """Create the location sensors of any owner (a person.* entity) that has none yet.
+
+    sensor.<person>_sextant_person_location / _room / _floor, grouped under a
+    Sextant device for the person. "_person_" keeps them apart from a thing
+    that shares the person's name (Meg the cat is person.meg and her tag meg).
+    """
+    from .persons import PERSON_SENSOR_KINDS  # noqa: PLC0415
+
+    sensors_cache = hass.data.get("sextant_sensors")
+    add_entities = hass.data.get("sextant_add_entities")
+    if sensors_cache is None or add_entities is None:
+        return
+    new_sensors = []
+    for person in people:
+        slug = person.split(".", 1)[1]
+        for suffix, label in PERSON_SENSOR_KINDS:
+            entity_id = f"sensor.{slug}_{suffix}"
+            if entity_id in sensors_cache:
+                continue
+            name = (hass.states.get(person).attributes.get("friendly_name") if hass.states.get(person) else None) or slug
+            sensor = CustomDistanceSensor(f"{name} {label}", f"{suffix}_{slug}", entity_id, f"person_{slug}",
+                                          attrs={"via": None})
+            sensors_cache[entity_id] = sensor
+            new_sensors.append(sensor)
+    if new_sensors:
+        _LOGGER.info("Creating Sextant location sensors for %d person(s)", len(new_sensors) // 3 or 1)
+        add_entities(new_sensors, update_before_add=True)
+
+
+@callback
+def prune_person_sensors(hass, people):
+    """Remove the location sensors of anyone who no longer owns a thing.
+
+    ``people`` are the person.* entity ids that still own something. Cache
+    object, registry entry, state and the person's Sextant device all go,
+    the same way a thing's do in remove_sensors_for_things.
+    """
+    from .persons import PERSON_SENSOR_KINDS  # noqa: PLC0415
+
+    keep = {p.split(".", 1)[1] for p in people}
+    sensors_cache = hass.data.get("sextant_sensors") or {}
+    ent_reg = er.async_get(hass)
+    gone = set()
+    for entry in list(ent_reg.entities.values()):
+        if entry.platform != "sextant" or not isinstance(entry.unique_id, str):
+            continue
+        for suffix, _label in PERSON_SENSOR_KINDS:
+            if entry.unique_id.startswith(suffix + "_") and entry.unique_id[len(suffix) + 1:] not in keep:
+                gone.add(entry.unique_id[len(suffix) + 1:])
+                sensors_cache.pop(entry.entity_id, None)
+                ent_reg.async_remove(entry.entity_id)
+    for slug in gone:
+        _remove_sextant_device(hass, f"person_{slug}")
+    if gone:
+        _LOGGER.info("Removed the Sextant location sensors of %d person(s) who own nothing now", len(gone))
+    return len(gone)
 
 
 def cleanup_legacy_sextant_entities(hass):

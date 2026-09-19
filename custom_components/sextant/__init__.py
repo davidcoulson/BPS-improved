@@ -73,6 +73,7 @@ from . import fingerprint
 from . import floor_field
 from . import registration
 from . import truth as truth_mod
+from . import persons as persons_mod
 from .zone_adjust import adjust_zones, adjust_subzones
 
 _LOGGER = logging.getLogger(__name__)
@@ -369,6 +370,10 @@ TUNING_SPEC = {
     "stationary_secs": (20.0, float, 0.0, 600.0),       # still this long -> zone locked
     "zone_unlock_margin": (1.0, float, 0.0, 20.0),      # m outside the locked zone...
     "zone_unlock_secs": (30.0, float, 0.0, 600.0),      # ...for this long -> unlocked
+    # No lock until a thing has been tracked this long since Sextant started
+    # (or since it changed floor): the first fixes after a restart wander, and
+    # a phone on a kitchen counter was locked into the foyer next door that way.
+    "zone_lock_warmup_secs": (120.0, float, 0.0, 3600.0),
     "subzone_switch_secs": (20.0, float, 0.0, 600.0),
     # Sub-zone election (see _elect_subzone): the smoothed share of the fix's
     # uncertainty that must fall inside a sub-zone before it is entered, and
@@ -435,6 +440,13 @@ TUNING_SPEC = {
     # Truth marks ("it is actually here", Live page) double as fingerprint references at
     # the marked point, in the marking thing's own scale: off to use only the proxies.
     "fingerprint_marks": (True, bool),
+    # Whose marks guide a thing. A mark records how ONE device looks from one
+    # place; a phone held in a hand and a watch on a wrist do not look alike.
+    # With every mark used for everything, a watch at the kitchen counter
+    # matched two marks of someone else's phone on the couch and was averaged
+    # half way there. "class": a thing's own marks and those of things of its
+    # class (the cats share Meg's); "own": its own only; "all": as before 3.17.35.
+    "fingerprint_marks_scope": ("class", str, ("own", "class", "all")),
     # Near-field anchor (see _elect_anchor): a thing one proxy reads at
     # under anchor_max_m, with every other proxy at least anchor_ratio times
     # farther, for anchor_secs, is placed AT that proxy - a watch on the
@@ -455,6 +467,10 @@ TUNING_SPEC = {
     # timeline and Activity reach back this far. Applied on the next
     # cycle; an explicit top-level history_max_age (seconds) still wins.
     "history_hours": (6.0, float, 1.0, 168.0),
+    # Who may read where things have been (the scrubber, timeline and Activity):
+    # everyone signed in, or admins only. Live positions and the sensors stay
+    # visible to every user either way, as all Home Assistant entities are.
+    "history_admin_only": (False, bool),
 }
 
 # Reference fingerprints: receiver-to-receiver ranges, refreshed on a slow
@@ -590,8 +606,25 @@ def _mark_basis(layout):
     return rx, things, fade
 
 
-def _mark_refs(layout):
-    """The truth-mark references to add to the proxies', or None when switched off."""
+def _mark_refs(layout, entity=None):
+    """The truth-mark references that may guide ``entity`` (every one when it
+    is None), or None when there are none or they are switched off."""
+    refs = _all_mark_refs(layout)
+    scope = _tuning(layout, "fingerprint_marks_scope")
+    if not refs or entity is None or scope == "all":
+        return refs
+    classes = layout.get("thing_classes") if isinstance(layout, dict) else None
+    mine = (classes or {}).get(entity)
+
+    def guides(ref):
+        if ref.get("entity") == entity:
+            return True
+        return scope == "class" and mine is not None and (classes or {}).get(ref.get("entity")) == mine
+
+    return [r for r in refs if guides(r)] or None
+
+
+def _all_mark_refs(layout):
     if not _truth_marks or not _tuning(layout, "fingerprint_marks"):
         return None
     key = _mark_basis(layout)
@@ -600,6 +633,7 @@ def _mark_refs(layout):
         for mark in _truth_marks:
             ref = truth_mod.mark_reference(mark, samples=_rebased_samples(layout, mark))
             if ref:
+                ref["entity"] = mark.get("entity")   # whose mark it is: see fingerprint_marks_scope
                 refs.append(ref)
         _mark_ref_cache.update(key=key, refs=refs)
     return _mark_ref_cache["refs"] or None
@@ -2087,7 +2121,7 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
         fp_gain = _tuning(layout, "fingerprint_ref_gain")
         if _tuning(layout, "fingerprint_auto_gain"):
             fp_gain *= _fingerprint_db.gain_for(entity)
-        refs_by_floor = fingerprint.build_references(layout, _fingerprint_db.vectors(), fp_gain, extra=_mark_refs(layout))
+        refs_by_floor = fingerprint.build_references(layout, _fingerprint_db.vectors(), fp_gain, extra=_mark_refs(layout, entity))
         thing_vec = fingerprint.thing_vector(layout)
     # A floor with references can compete on its fingerprint with a single
     # receiver hearing the thing; trilateration alone needs three.
@@ -2434,13 +2468,34 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
                     lowest_floor_name, scale, zone, sub_zone)
             except Exception as e:  # history must never break tracking
                 _LOGGER.debug("Position history record failed for %s: %s", entity, e)
-        update_sextant_sensor_state(hass, f"sensor.{entity}_sextant_room", zone)
+        update_sextant_sensor_state(hass, f"sensor.{entity}_sextant_room", zone,
+                                    {"area_id": room_area(layout, lowest_floor_name, zone)[0]})
         update_sextant_sensor_state(hass, f"sensor.{entity}_sextant_nearest_room", nearest_zone)
         update_sextant_sensor_state(hass, f"sensor.{entity}_sextant_floor", lowest_floor_name)
         update_sextant_sensor_state(hass, f"sensor.{entity}_sextant_spot", sub_zone, {"room": parent_zone})
-        update_sextant_sensor_state(hass, f"sensor.{entity}_sextant_location", *_location_state(zone, sub_zone, parent_zone, lowest_floor_name))
+        update_sextant_sensor_state(hass, f"sensor.{entity}_sextant_location", *_location_state(zone, sub_zone, parent_zone, lowest_floor_name, layout))
 
-def _location_state(zone, sub_zone, parent_zone, floor):
+def room_area(layout, floor_name, room_name):
+    """(area_id, floor_id): the Home Assistant area a room is linked to, and
+    the Home Assistant floor its Sextant floor is linked to. None where unlinked.
+
+    A room is a shape on a plan and an area is a grouping of devices; linked,
+    an automation can act on the area a thing is in ("the lights where David
+    is") without a lookup table of its own.
+    """
+    floors = layout.get("floor") if isinstance(layout, dict) else None
+    for floor in floors or []:
+        if isinstance(floor, dict) and floor.get("name") == floor_name:
+            floor_id = floor.get("floor_id") if isinstance(floor.get("floor_id"), str) else None
+            for zone in floor.get("zones") or []:
+                if zone.get("entity_id") == room_name and not zone.get("no_go"):
+                    area = zone.get("area_id")
+                    return (area if isinstance(area, str) and area else None), floor_id
+            return None, floor_id
+    return None, None
+
+
+def _location_state(zone, sub_zone, parent_zone, floor, layout=None):
     """(state, attributes) for the fused location sensor: the finest place known.
 
     The state is the spot when the thing is in one and the room when it is
@@ -2458,6 +2513,7 @@ def _location_state(zone, sub_zone, parent_zone, floor):
     # than "unknown" for a thing whose room IS known.
     parent = parent_zone if known and parent_zone and parent_zone != "unknown" else None
     room = parent or zone or "unknown"
+    area_id, floor_id = room_area(layout, floor, room)
     return (
         (sub_zone if known else (zone or "unknown")),
         {
@@ -2465,6 +2521,9 @@ def _location_state(zone, sub_zone, parent_zone, floor):
             "room": room,
             "spot": sub_zone if known else None,
             "floor": floor or "unknown",
+            # The linked Home Assistant area and floor (None where unlinked).
+            "area_id": area_id,
+            "floor_id": floor_id,
         },
     )
 
@@ -2606,8 +2665,9 @@ async def prune_stale_positions(hass):
         _floor_since.pop(ent, None)
         getattr(update_trilateration_and_zone, "last_floor", {}).pop(ent, None)
         getattr(update_trilateration_and_zone, "last_r_values", {}).pop(ent, None)
+        _arrivals.pop(ent, None)
         _LOGGER.info("Thing %s not seen for %ss; clearing its position", ent, timeout)
-        update_sextant_sensor_state(hass, f"sensor.{ent}_sextant_room", "unknown")
+        update_sextant_sensor_state(hass, f"sensor.{ent}_sextant_room", "unknown", {"area_id": None})
         update_sextant_sensor_state(hass, f"sensor.{ent}_sextant_floor", "unknown")
         update_sextant_sensor_state(hass, f"sensor.{ent}_sextant_nearest_room", "unknown")
         update_sextant_sensor_state(hass, f"sensor.{ent}_sextant_spot", "unknown", {"room": "unknown"})
@@ -2701,6 +2761,107 @@ async def process_entities(hass, new_global_data):
     for eids in new_global_data:
         await process_single_entity(hass, new_global_data, eids)
         await asyncio.sleep(0)  # a thing with nothing to solve never awaits: yield for it
+    try:
+        _update_person_sensors(hass)
+    except Exception as e:  # noqa: BLE001 - a person's sensor must never stop the things'
+        _LOGGER.warning("Person locations not updated: %s", e)
+
+
+# thing -> {"floor", "x", "y", "since", "away"}: where an owned thing has
+# stayed (within persons.STAY_RADIUS_M) and since when, for persons.pick.
+_arrivals = {}
+
+
+def _history_arrival(hass, ent, floor, x, y, now):
+    """When the position history says this thing came to stay within a couple
+    of metres of (x, y), or None when it has nothing to say (yet)."""
+    try:
+        q = get_position_history(hass).query(ent, now - 86400, now, 5000)
+        floors = q.get("floors") or []
+        points = [(t, floors[fi] if isinstance(fi, int) and fi < len(floors) else fi, xm, ym)
+                  for t, fi, xm, ym in zip(q.get("t", []), q.get("f", []), q.get("x_m", []), q.get("y_m", []))]
+        return persons_mod.settled_since(points, (floor, x, y))
+    except Exception:  # noqa: BLE001 - no history is not an error
+        return None
+
+
+# How long after first seeing a thing the history is asked again when it had
+# no answer: it is loaded from disk a little after the first cycle of a start.
+ARRIVAL_RETRY_SECS = 600.0
+
+
+def _arrived_at(hass, layout, ent, row, now):
+    """When this thing arrived within a couple of metres of where it is now.
+
+    The position history decides, whenever a thing is first seen or has
+    moved: it outlives restarts and passes over short absences, so neither a
+    restart nor the wrong-floor fix that often follows one makes a thing that
+    has sat on a nightstand all night look freshly arrived. Between moves the
+    answer is kept. A history with nothing to say yet (it loads a little
+    after the first cycle) is asked again rather than taken as "just now".
+    """
+    floor, cords = row.get("floor"), row.get("cords")
+    scale = next((f.get("scale") for f in layout.get("floor") or [] if f.get("name") == floor), None)
+    if not floor or not cords or not scale:
+        return now
+    x, y = float(cords[0]) / float(scale), float(cords[1]) / float(scale)
+    st = _arrivals.get(ent)
+    if st is not None and st["floor"] == floor and math.hypot(x - st["x"], y - st["y"]) <= persons_mod.STAY_RADIUS_M:
+        st["away_since"] = None
+        if st["provisional"] and now - st["first_seen"] <= ARRIVAL_RETRY_SECS:
+            found = _history_arrival(hass, ent, floor, x, y, now)
+            if found is not None and found < st["since"]:
+                st["since"], st["provisional"] = found, False
+        return st["since"]
+    fallback = now
+    if st is not None:
+        # Elsewhere: a move only once it has lasted (a stray fix is not one).
+        st["away_since"] = st.get("away_since") or now
+        if now - st["away_since"] < persons_mod.MOVE_CONFIRM_SECS:
+            return st["since"]
+        fallback = st["away_since"]
+    found = _history_arrival(hass, ent, floor, x, y, now)
+    _arrivals[ent] = {"floor": floor, "x": x, "y": y, "since": found if found is not None else fallback,
+                      "provisional": found is None, "first_seen": now, "away_since": None}
+    return _arrivals[ent]["since"]
+
+
+def _update_person_sensors(hass):
+    """Each owner's location from the thing that speaks for them (persons.py)."""
+    layout = get_layout(hass)
+    by_person = persons_mod.owners(layout)
+    from . import sensor as sensor_mod  # noqa: PLC0415 - the platform imports this module
+
+    # Someone who no longer owns anything loses their sensors; only looked at
+    # when the set of owners changes, so steady state costs a comparison.
+    owning = frozenset(by_person)
+    if hass.data.get("sextant_person_owners") != owning:
+        sensor_mod.prune_person_sensors(hass, owning)
+        hass.data["sextant_person_owners"] = owning
+    for ent in [e for e in _arrivals if not any(e in things for things in by_person.values())]:
+        del _arrivals[ent]
+    if not by_person:
+        return
+    sensor_mod.ensure_person_sensors(hass, list(by_person))
+    rows = {r.get("ent"): r for r in (hass.data.get(DOMAIN, {}).get("apitricords") or []) if isinstance(r, dict)}
+    classes = layout.get("thing_classes") or {}
+    now, stale = time.time(), _tuning(layout, "stale_after_secs")
+    for person, things in by_person.items():
+        candidates = []
+        for ent in things:
+            row = rows.get(ent)
+            if not row or not persons_mod.locates_owner(layout, ent, classes.get(ent)):
+                continue
+            candidates.append({
+                "ent": ent, "cls": classes.get(ent), "updated": row.get("updated"),
+                "arrived": _arrived_at(hass, layout, ent, row, now),
+                "zone": row.get("zone"), "sub_zone": row.get("sub_zone"), "floor": row.get("floor"),
+                "area": room_area(layout, row.get("floor"), row.get("zone")),
+            })
+        slug = person.split(".", 1)[1]
+        why = persons_mod.considered(candidates, now)
+        for suffix, (state, attrs) in persons_mod.states(persons_mod.pick(candidates, now, stale), why).items():
+            update_sextant_sensor_state(hass, f"sensor.{slug}_{suffix}", state, attrs)
 
 def extract_candidate_floors(new_global_data, tmpentity):
     """Every floor hearing the thing, ranked by its nearest receiver.
@@ -3080,7 +3241,7 @@ def _elect_zone(entity, floor_name, instant_zone, point, kf_state, zone_polys, s
         st = _zone_state[entity] = {
             "floor": floor_name, "zone": None, "since": now, "probs": {},
             "challenge": None, "still_since": None, "moving_since": None,
-            "away_since": None, "outvoted_since": None, "locked": False,
+            "away_since": None, "outvoted_since": None, "locked": False, "born": now,
         }
 
     # 1. Membership, smoothed.
@@ -3133,6 +3294,7 @@ def _elect_zone(entity, floor_name, instant_zone, point, kf_state, zone_polys, s
         and now - st["still_since"] >= stationary_secs
         and now - st["since"] >= stationary_secs   # held long enough to mean something
         and best == incumbent                      # and the evidence still says so
+        and now - st.get("born", now) >= _tuning(layout, "zone_lock_warmup_secs")  # not in the settling first minutes
     ):
         st["locked"] = True
         st["away_since"] = None
@@ -4268,6 +4430,10 @@ async def async_setup(hass, config):
                 from homeassistant.loader import async_get_integration  # noqa: PLC0415  (the test stubs have no loader)
 
                 integration = await async_get_integration(hass, DOMAIN)
+                from . import ws as ws_mod  # noqa: PLC0415
+
+                ws_mod.RUNNING_VERSION = str(integration.version) if integration.version else None
+                ws_mod.RUNNING_CODE = await hass.async_add_executor_job(ws_mod.code_signature)
                 await panel_custom.async_register_panel(
                     hass,
                     frontend_url_path="sextant",
@@ -4354,17 +4520,11 @@ async def async_unload_entry(hass: HomeAssistant, entry):
 
     cleanup_legacy_sextant_registry_and_states(hass)
 
-    entity_registry = er.async_get(hass)
-
-    # Find and remove all entities that belong to "sextant"
-    entities_to_remove = [
-        entity.entity_id for entity in entity_registry.entities.values()
-        if entity.platform == "sextant"
-    ]
-
-    for entity_id in entities_to_remove:
-        _LOGGER.info(f"Removes sensor: {entity_id}")
-        entity_registry.async_remove(entity_id)
+    # The registry entries stay. Unloading the platform below takes the
+    # entities out of the state machine, and Home Assistant itself clears a
+    # config entry's registry entries when the entry is REMOVED. Deleting them
+    # here ran on every reload and options change: it threw away per-entity
+    # settings (area, name, disabled) and rewrote the whole registry twice.
 
     try: # Attempt to unload platforms
         unload_ok = await hass.config_entries.async_unload_platforms(entry, ["sensor"])
@@ -4449,6 +4609,13 @@ class SextantFrontendView(HomeAssistantView):
 
         _LOGGER.debug("Serving file: %s", frontend_path)
 
+        # This view needs no login, so it must never leave its folder. Home
+        # Assistant's request filter already rejects an encoded "../", but
+        # that is its defence, not ours: only a plain file name, directly
+        # inside the frontend folder, is served.
+        if Path(file_name).name != file_name or frontend_path.parent != FRONTEND_PATH:
+            return web.Response(status=404, text="File not found")
+
         if not frontend_path.is_file():
             _LOGGER.error(f"Requested file not found: {frontend_path}")
             return web.Response(status=404, text="File not found")
@@ -4488,6 +4655,11 @@ class SextantMapImageView(HomeAssistantView):
             return web.Response(status=404, text="No such map")
         response = web.FileResponse(path=str(target))
         response.headers["Cache-Control"] = "private, no-cache"
+        # An .svg can carry script, and this is Home Assistant's own origin:
+        # sandboxed, it renders as an image and runs nothing even when opened
+        # in a tab of its own.
+        response.headers["Content-Security-Policy"] = "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:"
+        response.headers["X-Content-Type-Options"] = "nosniff"
         return response
 
 

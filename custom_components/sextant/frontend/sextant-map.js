@@ -408,6 +408,7 @@ export class SextantMap {
     this.offline = new Set();
     this.marks = [];   // truth marks of the focused thing on this floor: [{x, y, label}]
     this.heat = null;  // where the focused thing has been: {size, max, cells: [{x, y, secs}]} in map px
+    this.areaIcons = {};  // Home Assistant area id -> its mdi icon, for rooms linked to an area
     this.biasMap = null;  // this floor's election prior against another's: {size, cells: [[x, y, ratio]]} in map px
     this.suggestions = [];  // advised proxy spots on this floor: [{x, y, label}]
     // staleAfter: seconds without a fix after which a thing is drawn as a ghost (0 = never).
@@ -465,6 +466,12 @@ export class SextantMap {
   setOffline(slugs) { this.offline = new Set(slugs || []); this.invalidate(); }
   setMarks(list) { this.marks = list || []; this.invalidate(); }
   setHeat(heat) { this.heat = heat?.cells?.length ? heat : null; this._heatImg = null; this.invalidate(); }
+  /** hass.areas ({area_id: {icon}}): a room linked to an area shows that area's icon in its label. */
+  setAreas(areas) {
+    const next = {};
+    for (const [id, a] of Object.entries(areas || {})) if (a?.icon) next[id] = a.icon;
+    if (JSON.stringify(next) !== JSON.stringify(this.areaIcons)) { this.areaIcons = next; this.invalidate(); }
+  }
   setBiasMap(m) { this.biasMap = m?.cells?.length ? m : null; this._biasImg = null; this.invalidate(); }
   setSuggestions(list) { this.suggestions = list || []; this.invalidate(); }
   setOptions(opts) { Object.assign(this.options, opts); this.invalidate(); }
@@ -911,7 +918,9 @@ export class SextantMap {
       if (noGo) this._hatch(ctx, pts);
       if (this.options.labels && item.entity_id) {
         const c = polygonCentroid(pts);
-        this._label(ctx, item.entity_id, c.x, c.y, kind === "subzone" ? 11 : 13, kind === "subzone" ? 0.75 : 0.9);
+        const icon = kind === "zone" ? this.areaIcons[item.area_id] : null;
+        this._label(ctx, item.entity_id, c.x, c.y, kind === "subzone" ? 11 : 13, kind === "subzone" ? 0.75 : 0.9,
+          icon ? mdiPath(icon, () => this.invalidate()) : null);
       }
       if (this.mode === "edit" && selected) {
         for (let v = 0; v < pts.length; v++) this._handle(ctx, pts[v], VERTEX_SIZE / k, "#ffffff", ctx.strokeStyle);
@@ -947,17 +956,27 @@ export class SextantMap {
     ctx.lineWidth = 1.5 / this.view.k; ctx.strokeStyle = stroke; ctx.stroke();
   }
 
-  _label(ctx, text, x, y, px, alpha = 0.9) {
+  /** A label on its white plate; `glyph` (a 24-unit MDI Path2D) sits before the text. */
+  _label(ctx, text, x, y, px, alpha = 0.9, glyph = null) {
     const k = this.view.k;
     const size = px / k;
     ctx.font = `600 ${size}px system-ui, sans-serif`;
     ctx.textAlign = "center"; ctx.textBaseline = "middle";
     const w = ctx.measureText(text).width;
+    const gs = glyph ? size * 1.15 : 0, gap = glyph ? size * 0.3 : 0;   // glyph size and its gap
+    const total = w + gs + gap;
     ctx.fillStyle = `rgba(255,255,255,${alpha * 0.85})`;
     const pad = 4 / k;
-    ctx.fillRect(x - w / 2 - pad, y - size / 2 - pad / 2, w + pad * 2, size + pad);
+    ctx.fillRect(x - total / 2 - pad, y - size / 2 - pad / 2, total + pad * 2, size + pad);
     ctx.fillStyle = `rgba(20,24,32,${alpha})`;
-    ctx.fillText(text, x, y);
+    if (glyph) {
+      ctx.save();
+      ctx.translate(x - total / 2, y - gs / 2);
+      ctx.scale(gs / 24, gs / 24);
+      ctx.fill(glyph);
+      ctx.restore();
+    }
+    ctx.fillText(text, x + (gs + gap) / 2, y);
   }
 
   _drawReceivers(ctx, receivers) {

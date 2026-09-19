@@ -274,6 +274,8 @@ export const THING_CLASSES = [
 ];
 export function classIcon(cls) { return (THING_CLASSES.find(([k]) => k === cls) || [])[2] || null; }
 
+export { PRONOUNS, pronounKey, pronounsFor } from "./sextant-pronouns.js";
+
 /** Classes that stand for a family rather than one kind of thing: a spot that
  * takes a Person takes a man, a woman or a child too (see CLASS_FAMILIES in
  * __init__.py, which decides it). */

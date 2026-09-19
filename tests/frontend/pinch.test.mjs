@@ -115,3 +115,12 @@ test("bias colours: grey when even, green when this floor is favoured less, red 
   assert.deepEqual(heatRgb(0), [40, 110, 255]);
   assert.deepEqual(heatRgb(1), [225, 30, 30]);
 });
+
+test("a room linked to an area gets that area's icon; others do not", () => {
+  const map = new SextantMap(fakeCanvas(), {});
+  map.invalidate = () => {};
+  map.setAreas({ kitchen: { icon: "mdi:silverware-fork-knife" }, hall: { icon: null }, den: {} });
+  assert.deepEqual(map.areaIcons, { kitchen: "mdi:silverware-fork-knife" });
+  map.setAreas(null);
+  assert.deepEqual(map.areaIcons, {});
+});
