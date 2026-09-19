@@ -4301,6 +4301,9 @@ async def async_setup(hass, config):
                 from homeassistant.loader import async_get_integration  # noqa: PLC0415  (the test stubs have no loader)
 
                 integration = await async_get_integration(hass, DOMAIN)
+                from . import ws as ws_mod  # noqa: PLC0415
+
+                ws_mod.RUNNING_VERSION = str(integration.version) if integration.version else None
                 await panel_custom.async_register_panel(
                     hass,
                     frontend_url_path="sextant",

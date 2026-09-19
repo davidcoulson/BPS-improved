@@ -80,11 +80,13 @@ def _manifest_version() -> str | None:
         return None
 
 
-# The version this Home Assistant process loaded. HACS replaces the files on
-# disk but the running code (and the panel URL, which carries the version)
-# stays the old one until Home Assistant restarts; comparing the two tells the
-# panel whether a reload is enough or a restart is needed.
-RUNNING_VERSION = _manifest_version()
+# The version this Home Assistant process loaded, set at setup from the
+# integration Home Assistant loaded (reading the manifest here, at import,
+# would block the event loop). HACS replaces the files on disk but the running
+# code (and the panel URL, which carries the version) stays the old one until
+# Home Assistant restarts; comparing the two tells the panel whether a reload
+# is enough or a restart is needed.
+RUNNING_VERSION = None
 
 
 def _thing_names(hass, entities, layout=None) -> dict:
