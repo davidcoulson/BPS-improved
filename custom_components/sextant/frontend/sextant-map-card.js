@@ -77,6 +77,7 @@ class SextantMapCard extends LitElement {
     const floor = (layout?.floor || []).find((f) => f.name === this._floor) || null;
     const url = this._config?.image || this._config?.map_file ? (this._config.image || `/api/sextant/map/${encodeURIComponent(this._config.map_file)}`) : mapUrlFor(this._floor, this._data?.maps);
     this._map.setFloor(floor, url);
+    this._map.setAreas(this._hass?.areas || this.hass?.areas);
     const stale = layout?.tuning?.stale_after_secs ?? this._data?.tuning_spec?.stale_after_secs?.default ?? 120;
     this._map.setOptions({ circles: !!this._config.circles, trails: !!this._config.trails, labels: this._config.labels !== false, subzones: this._config.subzones !== false, fingerprint: false, staleAfter: stale });
     this._map.setOffline(this._positions?.offline_receivers || []);

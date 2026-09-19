@@ -140,7 +140,9 @@ Add each floor the same way. Then two things matter that did not with one:
 
 Every tracked thing gets a set of sensors. The one to read is
 `sensor.<thing>_sextant_location`: the spot when the thing is in one, the
-room when it is not, with `kind`, `room`, `spot` and `floor` as attributes.
+room when it is not, with `kind`, `room`, `spot` and `floor` as attributes,
+plus `area_id` and `floor_id` when the room is linked to a Home Assistant
+area ([Edit](edit.md)).
 One entity per thing, whatever resolution you want:
 
 ```yaml

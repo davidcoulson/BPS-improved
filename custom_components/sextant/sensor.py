@@ -32,7 +32,9 @@ SENSOR_KINDS = [
 # will get later rather than None - "unknown" is an answer, a missing attribute
 # is a bug in whatever reads it.
 INITIAL_ATTRS = {
-    "sextant_location": {"kind": "room", "room": "unknown", "spot": None, "floor": "unknown"},
+    "sextant_location": {"kind": "room", "room": "unknown", "spot": None, "floor": "unknown",
+                         "area_id": None, "floor_id": None},
+    "sextant_room": {"area_id": None},
     "sextant_spot": {"room": "unknown"},
 }
 

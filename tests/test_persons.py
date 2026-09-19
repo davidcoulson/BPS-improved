@@ -43,9 +43,14 @@ def test_unheard_or_unplaced_things_do_not_count():
 
 def test_states_give_the_spot_or_the_room_and_say_which_thing():
     s = persons.states(thing("phone", "phone", spot="Couch"))
-    assert s["sextant_person_location"] == ("Couch", {"kind": "spot", "room": "Great Room", "spot": "Couch", "floor": "Ground Floor", "via": "phone", "considered": []})
+    assert s["sextant_person_location"] == ("Couch", {"kind": "spot", "room": "Great Room", "spot": "Couch", "floor": "Ground Floor",
+                                                       "area_id": None, "floor_id": None, "via": "phone", "considered": []})
+    linked = persons.states({**thing("phone", "phone", spot="Couch"), "area": ("great_room", "ground")})
+    assert linked["sextant_person_location"][1]["area_id"] == "great_room"
+    assert linked["sextant_person_location"][1]["floor_id"] == "ground"
+    assert linked["sextant_person_room"] == ("Great Room", {"area_id": "great_room", "via": "phone"})
     assert persons.considered([thing("phone", "phone", still_for=600, spot="Couch")], NOW) == [{"thing": "phone", "where": "Couch", "here_for_min": 10}]
-    assert s["sextant_person_room"] == ("Great Room", {"via": "phone"})
+    assert s["sextant_person_room"] == ("Great Room", {"area_id": None, "via": "phone"})
     assert persons.states(None)["sextant_person_location"][0] == "unknown"
 
 

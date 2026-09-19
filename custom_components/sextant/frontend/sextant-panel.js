@@ -520,6 +520,7 @@ class SextantLive extends LitElement {
     if (!this._map) return;
     if (changed.has("data") || changed.has("floor")) this._pushFloor();
     if (changed.has("positions") || changed.has("floor") || changed.has("data") || changed.has("_scrub") || changed.has("_history")) this._pushThings();
+    if (changed.has("hass")) this._map.setAreas(this.hass?.areas);
     if (changed.has("floor") || changed.has("_marks")) this._pushMarks();
     if (changed.has("floor") || changed.has("_heat") || changed.has("data")) this._pushHeat();
     if (changed.has("_options")) this._map.setOptions(this._options);
@@ -625,10 +626,17 @@ class SextantLive extends LitElement {
             <li class="${p.ent === this._selected ? "selected" : ""} ${st.ghost ? "ghost" : ""}" title=${st.ghost ? `Not heard for ${fmtAge(st.age)}: this is where ${this._label(p.ent)} ${this._pn(p.ent).was} last placed` : ""} @click=${() => { this._select(p.ent === this._selected ? null : p.ent); if (p.floor && p.floor !== this.floor) this.dispatchEvent(new CustomEvent("floor-changed", { detail: p.floor })); }}>
               ${this._avatar(p.ent)}
               <span class="name">${this._label(p.ent)}</span>
-              <span class="where">${p.zone}${p.sub_zone && p.sub_zone !== "unknown" ? ` · ${p.sub_zone}` : ""}</span>
+              <span class="where">${this._roomIcon(p.floor, p.zone) ? html`<ha-icon class="roomicon" icon=${this._roomIcon(p.floor, p.zone)}></ha-icon>` : nothing}${p.zone}${p.sub_zone && p.sub_zone !== "unknown" ? ` · ${p.sub_zone}` : ""}</span>
               <span class="muted small">${st.ghost ? html`<ha-icon class="ghosticon" icon="mdi:ghost-outline"></ha-icon>seen ${shortAge(st.age)} ago · ` : nothing}${p.floor}</span>
               ${p.ent === this._selected ? html`<div class="quickin" @click=${(e) => e.stopPropagation()}>${this._renderQuick(p)}</div>` : nothing}
             </li>`;
+  }
+
+  /** The icon of the Home Assistant area a room is linked to, or null. */
+  _roomIcon(floorName, roomName) {
+    const f = (this.data?.layout?.floor || []).find((x) => x.name === floorName);
+    const areaId = (f?.zones || []).find((z) => z.entity_id === roomName)?.area_id;
+    return (areaId && this.hass?.areas?.[areaId]?.icon) || null;
   }
 
   /** He, she, they or it for a thing (its setting, else its class; people and pets are never "it"). */
@@ -944,6 +952,7 @@ class SextantLive extends LitElement {
     .blend input { flex: 1; min-width: 90px; }
     .truth { margin-top: 6px; }
     .heat { align-items: center; gap: 8px; flex-wrap: wrap; }
+    .roomicon { --mdc-icon-size: 16px; margin-right: 3px; vertical-align: -3px; color: var(--secondary-text-color); }
     .list li .quickin { grid-column: 1 / -1; cursor: default; padding-top: 6px; }
     .list li.group { display: flex; align-items: center; gap: 6px; padding: 8px 4px 4px; margin-top: 4px; border-top: 1px solid var(--divider-color, #e0e0e0); border-radius: 0; font-weight: 500; }
     .list li.group:first-child { border-top: none; margin-top: 0; }

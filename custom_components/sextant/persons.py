@@ -128,19 +128,21 @@ def considered(things, now):
 def states(best, why=None):
     """(suffix -> (state, attributes)) for a person's sensors from the chosen thing."""
     if best is None:
-        blank = {"room": "unknown", "spot": None, "floor": "unknown", "via": None}
+        blank = {"room": "unknown", "spot": None, "floor": "unknown", "area_id": None, "floor_id": None, "via": None}
         return {
             "sextant_person_location": ("unknown", {"kind": "room", **blank}),
-            "sextant_person_room": ("unknown", {"via": None}),
+            "sextant_person_room": ("unknown", {"area_id": None, "via": None}),
             "sextant_person_floor": ("unknown", {"via": None}),
         }
     spot = best.get("sub_zone")
     spot = spot if spot not in (None, "", "unknown") else None
     room, floor = best.get("zone"), best.get("floor") or "unknown"
+    area_id, floor_id = best.get("area") or (None, None)
     via = {"via": best["ent"]}
     return {
         "sextant_person_location": (spot or room, {"kind": "spot" if spot else "room", "room": room, "spot": spot,
-                                                   "floor": floor, **via, "considered": why or []}),
-        "sextant_person_room": (room, via),
+                                                   "floor": floor, "area_id": area_id, "floor_id": floor_id,
+                                                   **via, "considered": why or []}),
+        "sextant_person_room": (room, {"area_id": area_id, **via}),
         "sextant_person_floor": (floor, via),
     }

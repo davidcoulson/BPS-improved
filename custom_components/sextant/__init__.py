@@ -2468,13 +2468,34 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
                     lowest_floor_name, scale, zone, sub_zone)
             except Exception as e:  # history must never break tracking
                 _LOGGER.debug("Position history record failed for %s: %s", entity, e)
-        update_sextant_sensor_state(hass, f"sensor.{entity}_sextant_room", zone)
+        update_sextant_sensor_state(hass, f"sensor.{entity}_sextant_room", zone,
+                                    {"area_id": room_area(layout, lowest_floor_name, zone)[0]})
         update_sextant_sensor_state(hass, f"sensor.{entity}_sextant_nearest_room", nearest_zone)
         update_sextant_sensor_state(hass, f"sensor.{entity}_sextant_floor", lowest_floor_name)
         update_sextant_sensor_state(hass, f"sensor.{entity}_sextant_spot", sub_zone, {"room": parent_zone})
-        update_sextant_sensor_state(hass, f"sensor.{entity}_sextant_location", *_location_state(zone, sub_zone, parent_zone, lowest_floor_name))
+        update_sextant_sensor_state(hass, f"sensor.{entity}_sextant_location", *_location_state(zone, sub_zone, parent_zone, lowest_floor_name, layout))
 
-def _location_state(zone, sub_zone, parent_zone, floor):
+def room_area(layout, floor_name, room_name):
+    """(area_id, floor_id): the Home Assistant area a room is linked to, and
+    the Home Assistant floor its Sextant floor is linked to. None where unlinked.
+
+    A room is a shape on a plan and an area is a grouping of devices; linked,
+    an automation can act on the area a thing is in ("the lights where David
+    is") without a lookup table of its own.
+    """
+    floors = layout.get("floor") if isinstance(layout, dict) else None
+    for floor in floors or []:
+        if isinstance(floor, dict) and floor.get("name") == floor_name:
+            floor_id = floor.get("floor_id") if isinstance(floor.get("floor_id"), str) else None
+            for zone in floor.get("zones") or []:
+                if zone.get("entity_id") == room_name and not zone.get("no_go"):
+                    area = zone.get("area_id")
+                    return (area if isinstance(area, str) and area else None), floor_id
+            return None, floor_id
+    return None, None
+
+
+def _location_state(zone, sub_zone, parent_zone, floor, layout=None):
     """(state, attributes) for the fused location sensor: the finest place known.
 
     The state is the spot when the thing is in one and the room when it is
@@ -2492,6 +2513,7 @@ def _location_state(zone, sub_zone, parent_zone, floor):
     # than "unknown" for a thing whose room IS known.
     parent = parent_zone if known and parent_zone and parent_zone != "unknown" else None
     room = parent or zone or "unknown"
+    area_id, floor_id = room_area(layout, floor, room)
     return (
         (sub_zone if known else (zone or "unknown")),
         {
@@ -2499,6 +2521,9 @@ def _location_state(zone, sub_zone, parent_zone, floor):
             "room": room,
             "spot": sub_zone if known else None,
             "floor": floor or "unknown",
+            # The linked Home Assistant area and floor (None where unlinked).
+            "area_id": area_id,
+            "floor_id": floor_id,
         },
     )
 
@@ -2642,7 +2667,7 @@ async def prune_stale_positions(hass):
         getattr(update_trilateration_and_zone, "last_r_values", {}).pop(ent, None)
         _arrivals.pop(ent, None)
         _LOGGER.info("Thing %s not seen for %ss; clearing its position", ent, timeout)
-        update_sextant_sensor_state(hass, f"sensor.{ent}_sextant_room", "unknown")
+        update_sextant_sensor_state(hass, f"sensor.{ent}_sextant_room", "unknown", {"area_id": None})
         update_sextant_sensor_state(hass, f"sensor.{ent}_sextant_floor", "unknown")
         update_sextant_sensor_state(hass, f"sensor.{ent}_sextant_nearest_room", "unknown")
         update_sextant_sensor_state(hass, f"sensor.{ent}_sextant_spot", "unknown", {"room": "unknown"})
@@ -2831,6 +2856,7 @@ def _update_person_sensors(hass):
                 "ent": ent, "cls": classes.get(ent), "updated": row.get("updated"),
                 "arrived": _arrived_at(hass, layout, ent, row, now),
                 "zone": row.get("zone"), "sub_zone": row.get("sub_zone"), "floor": row.get("floor"),
+                "area": room_area(layout, row.get("floor"), row.get("zone")),
             })
         slug = person.split(".", 1)[1]
         why = persons_mod.considered(candidates, now)

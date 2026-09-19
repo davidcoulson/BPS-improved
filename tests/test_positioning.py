@@ -1721,6 +1721,8 @@ def test_location_publishes_the_spot_when_there_is_one():
         "room": "Master Bedroom",
         "spot": "David Bedside Table",
         "floor": "Second Floor",
+        "area_id": None,
+        "floor_id": None,
     }
 
 
@@ -1754,7 +1756,7 @@ def test_location_is_unknown_when_nothing_is_known():
     """A thing that has gone dark reads unknown, not blank."""
     state, attrs = sextant._location_state("unknown", "unknown", "unknown", "unknown")
     assert state == "unknown"
-    assert attrs == {"kind": "room", "room": "unknown", "spot": None, "floor": "unknown"}
+    assert attrs == {"kind": "room", "room": "unknown", "spot": None, "floor": "unknown", "area_id": None, "floor_id": None}
 
 
 def test_location_never_publishes_an_empty_state():
@@ -1970,3 +1972,20 @@ def test_marks_guide_their_own_thing_and_its_class_not_everything():
         assert slugs("d_watch", everyone) == ["mark:1", "mark:2"]
     finally:
         sextant._set_truth_marks([])
+
+
+def test_a_room_linked_to_an_area_publishes_its_area_and_floor_ids():
+    layout = {"floor": [{"name": "Ground Floor", "floor_id": "ground", "zones": [
+        {"entity_id": "Kitchen", "area_id": "kitchen"},
+        {"entity_id": "Hall"},
+        {"entity_id": "Void", "no_go": True, "area_id": "nope"},
+    ]}]}
+    assert sextant.room_area(layout, "Ground Floor", "Kitchen") == ("kitchen", "ground")
+    assert sextant.room_area(layout, "Ground Floor", "Hall") == (None, "ground")      # unlinked room
+    assert sextant.room_area(layout, "Ground Floor", "Void") == (None, "ground")      # a no-go area is nowhere
+    assert sextant.room_area(layout, "Attic", "Kitchen") == (None, None)
+    assert sextant.room_area(None, "Ground Floor", "Kitchen") == (None, None)
+    # On a spot, the area is the spot's room's.
+    _state, attrs = sextant._location_state("Hall", "Peninsula", "Kitchen", "Ground Floor", layout)
+    assert attrs["room"] == "Kitchen" and attrs["area_id"] == "kitchen" and attrs["floor_id"] == "ground"
+

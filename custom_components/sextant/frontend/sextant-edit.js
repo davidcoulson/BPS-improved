@@ -118,6 +118,7 @@ class SextantEdit extends LitElement {
     if (!this._map) return;
     if (changed.has("data")) this._syncDraft(!this._dirty);
     if (changed.has("floor")) this._pushFloor();
+    if (changed.has("hass")) this._map.setAreas(this.hass?.areas);
     if (changed.has("floor") || changed.has("data")) this._loadBiasView();
     if (changed.has("spots") || changed.has("floor")) this._map.setSuggestions((this.spots || []).filter((s) => s.floor === this.floor).map((s) => ({ x: s.x, y: s.y, label: `add a proxy here · ${s.room}` })));
     if (changed.has("_tool")) { this._map.setTool(["measure", "receiver", "pin"].includes(this._tool) ? "select" : this._tool); }
@@ -360,6 +361,39 @@ class SextantEdit extends LitElement {
     this.requestUpdate();
     const m = f.scale ? moved / f.scale : null;
     toast(this, m != null ? `Squared up; no corner moved more than ${Math.round(m * 100)} cm. Save to keep it` : "Squared up. Save to keep it");
+  }
+
+  /** Home Assistant's areas, by name. */
+  _areas() { return Object.values(this.hass?.areas || {}).sort((a, b) => String(a.name).localeCompare(String(b.name))); }
+
+  /** Link a room to a Home Assistant area: its sensors then carry the area's id, and its label the area's icon. */
+  _renderAreaLink(item) {
+    const areas = this._areas();
+    if (!areas.length) return nothing;
+    const floors = this.hass?.floors || {};
+    const area = this.hass?.areas?.[item.area_id];
+    return html`<div class="row" style="align-items: center">
+      ${uiSelect({ label: "Home Assistant area", value: item.area_id || "", options: [{ value: "", label: "not linked" },
+        ...areas.map((a) => ({ value: a.area_id, label: a.floor_id && floors[a.floor_id] ? `${a.name} (${floors[a.floor_id].name})` : a.name }))],
+        onChange: (v) => { this._edit("area_id", v || undefined); this._map.invalidate(); }, style: "flex: 1" })}
+      ${area?.icon ? html`<ha-icon icon=${area.icon} title="The area's icon, shown in this room's label"></ha-icon>` : nothing}
+    </div>
+    <div class="muted small">A thing in this room reports the area's id (<code>area_id</code> on its room and location sensors), so an automation can act on the area itself.</div>`;
+  }
+
+  /** Rooms named exactly like an area (whatever the case) are linked to it; linked rooms are left alone. */
+  _linkAreasByName() {
+    const f = this._floorObj();
+    if (!f) return;
+    const byName = new Map(this._areas().map((a) => [String(a.name).trim().toLowerCase(), a.area_id]));
+    const todo = (f.zones || []).filter((z) => !z.no_go && !z.area_id && byName.has(String(z.entity_id).trim().toLowerCase()));
+    if (!todo.length) return toast(this, "No unlinked room on this floor is named like an area");
+    this._snapshot();
+    for (const z of todo) z.area_id = byName.get(String(z.entity_id).trim().toLowerCase());
+    this._dirty = true;
+    this._map.invalidate();
+    this.requestUpdate();
+    toast(this, `Linked ${todo.length} room${todo.length === 1 ? "" : "s"} to the area of the same name. Save to keep it`);
   }
 
   /** The floors this floor can be compared with, nearest level first (Basement and Second Floor both want Ground). */
@@ -623,6 +657,8 @@ class SextantEdit extends LitElement {
               ${uiField({ label: "Level", type: "number", step: 1, value: f.level ?? "", placeholder: "0", onChange: (v) => { if (v === "" || v == null) delete f.level; else f.level = Math.round(Number(v)); this._dirty = true; this.requestUpdate(); }, style: "width: 90px" })}
               ${uiField({ label: `Elevation (${lenUnit(this.hass)})`, type: "number", step: 0.05, value: toDisplayLen(f.elevation, this.hass), placeholder: String(toDisplayLen((f.level || 0) * 3, this.hass)), onChange: (v) => { this._snapshot(); const m = fromDisplayLen(v, this.hass); if (m == null || isNaN(m)) delete f.elevation; else f.elevation = m; this._dirty = true; this._refreshAlignment(); this.requestUpdate(); }, style: "width: 130px" })}
               ${uiField({ label: "Election bias", type: "number", step: 0.05, min: 0.25, max: 4, value: f.bias ?? "", placeholder: "1", onChange: (v) => { if (v === "" || v == null) delete f.bias; else f.bias = Number(v); this._dirty = true; this.requestUpdate(); }, style: "width: 120px" })}
+              ${Object.keys(this.hass?.floors || {}).length ? uiSelect({ label: "Home Assistant floor", value: f.floor_id || "", options: [{ value: "", label: "not linked" }, ...Object.values(this.hass.floors).map((x) => ({ value: x.floor_id, label: x.name }))], onChange: (v) => { this._snapshot(); if (v) f.floor_id = v; else delete f.floor_id; this._dirty = true; this.requestUpdate(); }, style: "width: 170px" }) : nothing}
+              ${uiButton({ label: "Link rooms to areas", disabled: this._busy, onClick: () => this._linkAreasByName(), title: "Link every unlinked room on this floor to the Home Assistant area of the same name" })}
               ${uiButton({ label: "Adjust rooms", disabled: this._busy, onClick: () => this._adjust("zones"), title: "Square up rooms and snap shared walls" })}
               ${uiButton({ label: "Adjust spots", disabled: this._busy, onClick: () => this._adjust("subzones") })}
               ${uiButton({ label: "Delete floor", kind: "danger", disabled: this._busy, onClick: () => this._removeFloor() })}
@@ -703,6 +739,7 @@ class SextantEdit extends LitElement {
         </div>
         <div class="muted small">${item.unmatched ? "Bermuda does not report this proxy right now." : "Linked."} x ${fmtNum(item.cords?.x, 0)}, y ${fmtNum(item.cords?.y, 0)}</div>` : nothing}
       ${sel.kind === "zone" ? uiSwitch({ label: "No-go area (things can never be here)", checked: !!item.no_go, onChange: (v) => this._edit("no_go", v) }) : nothing}
+      ${sel.kind === "zone" && !item.no_go ? this._renderAreaLink(item) : nothing}
       ${sel.kind === "subzone" ? html`
         <div class="row">
           ${uiSelect({ label: "Parent room", value: item.parent || "", options: [{ value: "", label: "none" }, ...zones.map((z) => ({ value: z.zone_id, label: z.entity_id }))], onChange: (v) => this._edit("parent", v || null), style: "flex: 1" })}
