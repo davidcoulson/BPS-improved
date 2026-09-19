@@ -113,8 +113,8 @@ def history_config(layout):
 class _Track:
     """One thing's columnar ring buffer."""
 
-    __slots__ = ("t", "x", "y", "f", "gap", "z", "floors", "scales", "zones",
-                 "last_kept", "force_gap")
+    __slots__ = ("t", "x", "y", "f", "gap", "z", "sp", "floors", "scales", "zones",
+                 "spots", "last_kept", "force_gap")
 
     def __init__(self):
         self.t = array("d")
@@ -123,13 +123,15 @@ class _Track:
         self.f = array("B")       # index into self.floors
         self.gap = array("B")     # 1 = this point STARTS a new polyline
         self.z = array("B")       # index into self.zones
+        self.sp = array("B")      # index into self.spots
         self.floors = []          # append-only: index -> floor name
         self.scales = []          # px/m in effect when that floor was first seen
         # Index 0 is ALWAYS "" (not known). Unlike the floor table, an overflow
         # here must not fall back to index 0 meaning "the first zone we saw" -
         # saying "no idea" is honest, naming the wrong room is not.
         self.zones = [""]
-        self.last_kept = None     # (t, x, y, floor_index, zone_index)
+        self.spots = [""]         # same convention: 0 = in no spot / not known
+        self.last_kept = None     # (t, x, y, floor_index, zone_index, spot_index)
         self.force_gap = False
 
     def zone_index(self, zone):
@@ -144,6 +146,19 @@ class _Track:
                 return 0
             self.zones.append(name)
             return len(self.zones) - 1
+
+    def spot_index(self, spot):
+        """Intern a spot name. 0 = in no spot, and 0 is what overflow gets too."""
+        name = "" if spot is None else str(spot)
+        if not name or name == "unknown":
+            return 0
+        try:
+            return self.spots.index(name)
+        except ValueError:
+            if len(self.spots) >= 255:   # sp is a byte column
+                return 0
+            self.spots.append(name)
+            return len(self.spots) - 1
 
     def floor_index(self, floor, scale):
         name = "" if floor is None else str(floor)
@@ -171,9 +186,10 @@ class _Track:
         del self.f[:]
         del self.gap[:]
         del self.z[:]
+        del self.sp[:]
         self.last_kept = None
 
-    def append(self, ts, x, y, fi, gap, zi=0):
+    def append(self, ts, x, y, fi, gap, zi=0, si=0):
         """`gap` is 0, GAP_FRAME or GAP_DROPOUT (both of the latter break the line)."""
         self.t.append(float(ts))
         self.x.append(float(x))
@@ -181,7 +197,8 @@ class _Track:
         self.f.append(fi)
         self.gap.append(int(gap) if gap else 0)
         self.z.append(zi)
-        self.last_kept = (float(ts), float(x), float(y), fi, zi)
+        self.sp.append(si)
+        self.last_kept = (float(ts), float(x), float(y), fi, zi, si)
 
     def evict(self, max_age, max_points, now):
         """Drop expired/excess points in BLOCKS (one memmove, not one per point)."""
@@ -214,6 +231,7 @@ class _Track:
         del self.f[:drop]
         del self.gap[:drop]
         del self.z[:drop]
+        del self.sp[:drop]
         if self.gap:
             # The retained head starts a polyline, but what preceded it was
             # dropped for age, not missing from the record: not a dropout.
@@ -235,14 +253,14 @@ class PositionHistory:
         self.cfg = cfg
 
     # --- recording ---------------------------------------------------------
-    def record(self, ent, ts, x_m, y_m, floor, scale, zone=None):
+    def record(self, ent, ts, x_m, y_m, floor, scale, zone=None, spot=None):
         """Keep this fix if it clears the gate. Returns True when kept.
 
         Kept when the floor changed (always - the two points live in different
-        frames), when the ZONE changed (so the room band's edges land on the
-        actual crossing rather than up to a heartbeat late), or enough time AND
-        movement has passed, or the heartbeat is due so a stationary device
-        still has something to scrub to.
+        frames), when the ZONE or SPOT changed (so the room band's and the
+        timeline's edges land on the actual crossing rather than up to a
+        heartbeat late), or enough time AND movement has passed, or the
+        heartbeat is due so a stationary device still has something to scrub to.
         """
         if not self.cfg.get("enabled", True):
             return False
@@ -256,13 +274,14 @@ class PositionHistory:
             track = self.tracks[ent] = _Track()
         fi = track.floor_index(floor, scale)
         zi = track.zone_index(zone)
+        si = track.spot_index(spot)
 
         gap = 0
         last = track.last_kept
         if last is None:
             gap = GAP_FRAME
         else:
-            lt, lx, ly, lf, lz = last
+            lt, lx, ly, lf, lz, ls = last
             if ts < lt:
                 # The clock stepped backwards (NTP correction, a VM resume, a
                 # host with no RTC catching up). Appending here would leave
@@ -271,6 +290,7 @@ class PositionHistory:
                 track.reset()
                 fi = track.floor_index(floor, scale)
                 zi = track.zone_index(zone)
+                si = track.spot_index(spot)
                 gap = GAP_FRAME
             elif fi != lf:
                 gap = GAP_FRAME             # different pixel frame: break the line
@@ -287,7 +307,7 @@ class PositionHistory:
                 # 2 cm). Bounded this way the edge is at most min_interval late.
                 if not (dt >= self.cfg["heartbeat"]
                         or (dt >= self.cfg["min_interval"]
-                            and (moved >= self.cfg["min_move_m"] or zi != lz))):
+                            and (moved >= self.cfg["min_move_m"] or zi != lz or si != ls))):
                     return False
                 # Heard again after a silence: the device was not standing
                 # still, it was not being heard, so break the line instead of
@@ -305,9 +325,9 @@ class PositionHistory:
             gap = GAP_DROPOUT
             track.force_gap = False
 
-        track.append(ts, x_m, y_m, fi, gap, zi)
+        track.append(ts, x_m, y_m, fi, gap, zi, si)
         self._queue(ent, ts, x_m, y_m, track.floors[fi], track.scales[fi], gap,
-                    track.zones[zi])
+                    track.zones[zi], track.spots[si])
         track.evict(self.cfg["max_age"], self.cfg["max_points"], ts)
         return True
 
@@ -354,7 +374,7 @@ class PositionHistory:
             track.force_gap = True
 
     # --- disk hand-off (the caller performs the actual I/O) ----------------
-    def _queue(self, ent, ts, x, y, floor, scale, gap, zone=""):
+    def _queue(self, ent, ts, x, y, floor, scale, gap, zone="", spot=""):
         if len(self._pending) >= self.MAX_PENDING:
             self.dropped_pending += 1
             return
@@ -366,6 +386,8 @@ class PositionHistory:
             row["g"] = int(gap)
         if zone:
             row["z"] = zone
+        if spot:
+            row["sp"] = spot
         # Tagged with its UTC day so the flush can group by segment file, and
         # with the entity so forget() can drop just that thing's queued rows
         # without having to pattern-match the serialised JSON.
@@ -446,11 +468,12 @@ class PositionHistory:
                 track = self.tracks[ent] = _Track()
             fi = track.floor_index(row.get("f"), _finite(row.get("s")) or 0.0)
             zi = track.zone_index(row.get("z"))
+            si = track.spot_index(row.get("sp"))   # absent in rows written before spots were
             # _finite, not int(): int(float("inf")) raises OverflowError, and
             # one junk row would take the entire restore down with it - for
             # good, since the row stays on disk.
             g = _finite(row.get("g")) or 0
-            track.append(ts, x, y, fi, GAP_FRAME if g == 1 else (GAP_DROPOUT if g else 0), zi)
+            track.append(ts, x, y, fi, GAP_FRAME if g == 1 else (GAP_DROPOUT if g else 0), zi, si)
             restored += 1
         for track in self.tracks.values():
             track.evict(self.cfg["max_age"], self.cfg["max_points"], now)
@@ -475,8 +498,8 @@ class PositionHistory:
         and always keeps the first and last point, every gap and every floor
         change - dropping those would silently join unrelated stretches.
         """
-        empty = {"ent": ent, "floors": [], "scales": [], "zones": [""],
-                 "t": [], "x_m": [], "y_m": [], "f": [], "gap": [], "z": [],
+        empty = {"ent": ent, "floors": [], "scales": [], "zones": [""], "spots": [""],
+                 "t": [], "x_m": [], "y_m": [], "f": [], "gap": [], "z": [], "sp": [],
                  "count": 0, "total": 0, "stride": 1}
         track = self.tracks.get(ent)
         if track is None or not track.t:
@@ -494,6 +517,7 @@ class PositionHistory:
             if (i == lo or i == hi - 1 or track.gap[i]
                     or (i > lo and track.f[i] != track.f[i - 1])
                     or (i > lo and track.z[i] != track.z[i - 1])
+                    or (i > lo and track.sp[i] != track.sp[i - 1])
                     or (i - lo) % stride == 0):
                 keep.append(i)
         # Breaks and floor changes are force-kept above, so data that flaps
@@ -534,16 +558,76 @@ class PositionHistory:
             "floors": list(track.floors),
             "scales": list(track.scales),
             "zones": list(track.zones),
+            "spots": list(track.spots),
             "t": [round(track.t[i], 2) for i in keep],
             "x_m": [round(track.x[i], 3) for i in keep],
             "y_m": [round(track.y[i], 3) for i in keep],
             "f": [track.f[i] for i in keep],
             "gap": [gap_out.get(i, track.gap[i]) for i in keep],
             "z": [track.z[i] for i in keep],
+            "sp": [track.sp[i] for i in keep],
             "count": len(keep),
             "total": total,
             "stride": stride,
         }
+
+
+    def timeline(self, ent, frm, to, max_segments=200):
+        """Where a thing has been over [frm, to], as stays rather than points.
+
+        Consecutive points on the same floor, in the same room and spot are
+        one stay. A stay ends where the next one starts - the recorder keeps a
+        point on every room and spot change, so that is the crossing - except
+        across a dropout, where the thing went unheard: the stay ends at the
+        last point heard and an ``unheard`` stay covers the silence, so the
+        timeline never claims a thing was somewhere nobody could hear it.
+
+        Reads the full-resolution record, not the decimated trail: a short
+        stay is exactly what decimation would drop. ``partial`` marks the
+        first stay when it begins at the start of what is retained, so "here
+        for 6 h" can be told apart from "here for at least 6 h".
+        """
+        track = self.tracks.get(ent)
+        out = {"ent": ent, "from": frm, "to": to, "stays": [], "last_heard": None}
+        if track is None or not track.t:
+            return out
+        lo = bisect.bisect_left(track.t, frm)
+        hi = bisect.bisect_right(track.t, to)
+        if hi <= lo:
+            return out
+        stays = []
+        for i in range(lo, hi):
+            ts = track.t[i]
+            key = (track.f[i], track.z[i], track.sp[i])
+            dropout = track.gap[i] == GAP_DROPOUT and stays
+            if dropout:
+                last = stays[-1]
+                stays.append({"key": None, "start": last["end"], "end": ts})
+            if not stays or dropout or key != stays[-1]["key"]:
+                if stays and not dropout:
+                    stays[-1]["end"] = ts
+                stays.append({"key": key, "start": ts, "end": ts})
+            else:
+                stays[-1]["end"] = ts
+        rows = []
+        for s in stays:
+            if s["key"] is None:
+                if s["end"] > s["start"]:
+                    rows.append({"start": round(s["start"], 1), "end": round(s["end"], 1), "unheard": True})
+                continue
+            fi, zi, si = s["key"]
+            rows.append({
+                "start": round(s["start"], 1),
+                "end": round(s["end"], 1),
+                "floor": track.floors[fi] if fi < len(track.floors) else "",
+                "room": track.zones[zi] or None,
+                "spot": track.spots[si] or None,
+            })
+        if rows:
+            rows[0]["partial"] = lo == 0
+        out["stays"] = rows[-max_segments:]
+        out["last_heard"] = round(track.t[hi - 1], 1)
+        return out
 
 
 def day_key(ts):

@@ -56,6 +56,7 @@ distances in metres.
 | `anchor_secs` | 20 | for this long |
 | `anchor_release_m` | 1.5 | release once the reading opens past this |
 | `calibration_target` | `sextant` | where Apply writes: `sextant` or `bermuda` |
+| `stale_after_secs` | 120 | unheard this long, a thing is drawn as a ghost on Live (display only) |
 
 Two more live at the top level of the layout: `position_timeout` (seconds
 before an unheard thing leaves the map, 300) and `thing_height` (the

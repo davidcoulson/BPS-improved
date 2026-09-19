@@ -12,7 +12,7 @@
  *   tuning       stability KPI, live tuning, history retention
  */
 import { LitElement, html, css, nothing } from "./lit.js";
-import { SextantMap, thingColor } from "./sextant-map.js";
+import { SextantMap, thingColor, thingHue, staleness, shortAge } from "./sextant-map.js";
 import { sharedStyles, widgetStyles, fmtAge, fmtNum, toast, confirmDialog, ensureHaComponents, uiSwitch, uiSelect, uiButton, callWS, sortFloors, thingName, proxyName, fmtLen, fmtSpeed, classIcon } from "./sextant-ui.js";
 
 // The backend registers the panel at /sextant/v/<version>/sextant-panel.js
@@ -285,6 +285,8 @@ class SextantLive extends LitElement {
     _blend: { state: true },
     _optionsOpen: { state: true },
     _mapOpen: { state: true },
+    _timeline: { state: true },
+    _timelineAll: { state: true },
   };
 
   constructor() {
@@ -298,6 +300,8 @@ class SextantLive extends LitElement {
     this._options = { circles: false, fingerprint: false, trails: true, grid: "off", labels: true, subzones: true, receiverLabels: false, image: true };
     try { Object.assign(this._options, JSON.parse(localStorage.getItem("sextant.live.options") || "{}")); } catch { /* ignore */ }
     this._history = null; // {ent, from, to, points:[{t,x,y,f}] }
+    this._timeline = null; // {ent, at, stays:[{start,end,floor,room,spot,unheard?,partial?}], last_heard}
+    this._timelineAll = false;
     this._scrub = null;   // seconds, absolute
     this._icons = new Map();
     this._optionsOpen = false; // the map-options sheet, phone-width only
@@ -342,7 +346,24 @@ class SextantLive extends LitElement {
       this.updateComplete.then(() => this.renderRoot.querySelector(".card.detail")?.scrollIntoView({ block: "start", behavior: "smooth" }));
     }
     this._map?.setOptions({ focus: ent });
-    if (ent) { this._loadLinks(); this._loadMarks(ent); } else { this._links = null; this._marks = []; this._map?.setMarks([]); }
+    if (ent) { this._loadLinks(); this._loadMarks(ent); this._loadTimeline(ent); } else { this._links = null; this._marks = []; this._map?.setMarks([]); this._timeline = null; }
+  }
+
+  /** Seconds unheard before a thing is shown as a ghost (tuning stale_after_secs). */
+  _staleAfter() {
+    const own = this.data?.layout?.tuning?.stale_after_secs;
+    const dflt = this.data?.tuning_spec?.stale_after_secs?.default;
+    return typeof own === "number" ? own : typeof dflt === "number" ? dflt : 120;
+  }
+
+  async _loadTimeline(ent) {
+    try {
+      const r = await this.hass.callWS({ type: "sextant/history/timeline", entity: ent, hours: 24 });
+      if (this._selected !== ent) return;   // selection moved on while this was in flight
+      this._timeline = { ent, at: Date.now(), ...r };
+    } catch (_e) {
+      this._timeline = null;   // older backend: the card just leaves the timeline out
+    }
   }
 
   async _loadMarks(ent) {
@@ -406,6 +427,9 @@ class SextantLive extends LitElement {
     if (changed.has("positions") || changed.has("floor") || changed.has("data") || changed.has("_scrub") || changed.has("_history")) this._pushThings();
     if (changed.has("floor") || changed.has("_marks")) this._pushMarks();
     if (changed.has("_options")) this._map.setOptions(this._options);
+    if (changed.has("data")) this._map.setOptions({ staleAfter: this._staleAfter() });
+    // A stay grows every cycle; re-read the timeline once a minute while a thing is focused.
+    if (changed.has("positions") && this._selected && (!this._timeline || Date.now() - this._timeline.at > 60000)) this._loadTimeline(this._selected);
   }
 
   _floorObj() { return (this.data?.layout?.floor || []).find((f) => f.name === this.floor) || null; }
@@ -553,13 +577,13 @@ class SextantLive extends LitElement {
           })}</span>
         </h3>
         <ul class="list">
-          ${rows.map((p) => html`
-            <li class=${p.ent === this._selected ? "selected" : ""} @click=${() => { this._select(p.ent === this._selected ? null : p.ent); if (p.floor && p.floor !== this.floor) this.dispatchEvent(new CustomEvent("floor-changed", { detail: p.floor })); }}>
+          ${rows.map((p) => { const st = staleness(p, this._staleAfter()); return html`
+            <li class="${p.ent === this._selected ? "selected" : ""} ${st.ghost ? "ghost" : ""}" title=${st.ghost ? `Not heard for ${fmtAge(st.age)}: this is where it was last placed` : ""} @click=${() => { this._select(p.ent === this._selected ? null : p.ent); if (p.floor && p.floor !== this.floor) this.dispatchEvent(new CustomEvent("floor-changed", { detail: p.floor })); }}>
               ${this._avatar(p.ent)}
               <span class="name">${this._label(p.ent)}</span>
               <span class="where">${p.zone}${p.sub_zone && p.sub_zone !== "unknown" ? ` · ${p.sub_zone}` : ""}</span>
-              <span class="muted small">${p.floor}</span>
-            </li>`)}
+              <span class="muted small">${st.ghost ? html`<ha-icon class="ghosticon" icon="mdi:ghost-outline"></ha-icon>seen ${shortAge(st.age)} ago · ` : nothing}${p.floor}</span>
+            </li>`; })}
           ${rows.length ? nothing : html`<li class="muted">No positions yet.</li>`}
         </ul>
         ${sel ? html`
@@ -570,8 +594,10 @@ class SextantLive extends LitElement {
               <dt>Spot</dt><dd>${sel.sub_zone && sel.sub_zone !== "unknown" ? sel.sub_zone : "—"}</dd>
               <dt>Floor</dt><dd>${sel.floor}</dd>
               <dt>Proxies</dt><dd>${sel.radii?.length ?? 0} in the solve${sel.anchor ? html`<br><span class="pill ok" title="one proxy reads it within arm's reach and no other comes close: placed on that proxy">anchored to ${proxyName(this.data, sel.anchor)}</span>` : nothing}</dd>
-              <dt>Updated</dt><dd>${fmtAge(Date.now() / 1000 - sel.updated)} ago</dd>
+              ${this._renderHere(sel)}
+              <dt>Updated</dt><dd>${fmtAge(Date.now() / 1000 - sel.updated)} ago${staleness(sel, this._staleAfter()).ghost ? html` <span class="pill warn" title="Nothing has heard it since; the position is where it was last placed">not heard</span>` : nothing}</dd>
             </dl>
+            ${this._renderTimeline(sel)}
             <details class="telemetry">
               <summary>Details <span class="muted small">how sure it is, and why</span></summary>
               <dl>
@@ -593,6 +619,69 @@ class SextantLive extends LitElement {
           </div>` : nothing}
       </aside>
     `;
+  }
+
+  /** The stays from the timeline, with the current one reaching to now while it is still heard. */
+  _stays(sel) {
+    const tl = this._timeline;
+    if (!tl || tl.ent !== sel.ent) return null;
+    const stays = (tl.stays || []).map((s) => ({ ...s }));
+    const last = stays[stays.length - 1];
+    const heard = !staleness(sel, this._staleAfter()).ghost;
+    if (last && !last.unheard && heard) last.end = Math.max(last.end, Date.now() / 1000);
+    return stays;
+  }
+
+  /** "Meg's Cafe for 1h 12m · in Catwalk for 3h" - how long it has been where it is. */
+  _renderHere(sel) {
+    const stays = this._stays(sel);
+    if (!stays) return nothing;
+    const spot = sel.sub_zone && sel.sub_zone !== "unknown" ? sel.sub_zone : null;
+    const i = stays.length - 1;
+    const cur = stays[i];
+    // The recorder can trail the published room by a few seconds; if it has not
+    // caught up, the honest answer is "just got here", not the previous stay's length.
+    if (!cur || cur.unheard || cur.room !== sel.zone || (cur.spot || null) !== spot) {
+      return html`<dt>Here</dt><dd>${spot || sel.zone} <span class="muted small">just arrived</span></dd>`;
+    }
+    let roomStart = cur.start, partial = !!cur.partial;
+    for (let j = i - 1; j >= 0 && !stays[j].unheard && stays[j].room === cur.room && stays[j].floor === cur.floor; j--) {
+      roomStart = stays[j].start; partial = !!stays[j].partial;
+    }
+    const at = (s) => new Date(s * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    const long = (from, p) => html`<b>${fmtAge(cur.end - from)}${p ? "+" : ""}</b> <span class="muted small">since ${at(from)}</span>`;
+    return html`<dt>Here</dt><dd>${spot || sel.zone} for ${long(cur.start, !!cur.partial)}${spot && roomStart < cur.start ? html`<br><span class="muted">in ${sel.zone} for</span> ${long(roomStart, partial)}` : nothing}</dd>`;
+  }
+
+  /** The last day as a band of stays, then the stays newest first. */
+  _renderTimeline(sel) {
+    const stays = this._stays(sel);
+    if (!stays || !stays.length) return nothing;
+    const from = stays[0].start, to = stays[stays.length - 1].end;
+    const span = Math.max(1, to - from);
+    const at = (s) => new Date(s * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    const place = (s) => s.unheard ? "not heard" : `${s.room || "unknown"}${s.spot ? ` · ${s.spot}` : ""}`;
+    const colour = (s) => s.unheard ? "transparent" : `hsl(${thingHue(s.room || "?")}, 55%, ${s.spot ? 42 : 58}%)`;
+    const newest = stays.slice().reverse();
+    const shown = this._timelineAll ? newest : newest.slice(0, 8);
+    const now = Date.now() / 1000;
+    return html`
+      <details class="timeline" open>
+        <summary>Timeline <span class="muted small">last ${fmtAge(span)}${stays[0].partial ? " (all that is kept)" : ""}</span></summary>
+        <div class="band" role="img" aria-label="Where it has been, oldest on the left">
+          ${stays.map((s) => html`<span class="seg ${s.unheard ? "unheard" : ""}" style="flex-grow: ${Math.max(0.002, (s.end - s.start) / span)}; background: ${colour(s)}" title="${at(s.start)}–${at(s.end)} · ${place(s)} · ${fmtAge(s.end - s.start)}"></span>`)}
+        </div>
+        <div class="band-ends muted small"><span>${at(from)}</span><span>${to >= now - 5 ? "now" : at(to)}</span></div>
+        <ol class="stays">
+          ${shown.map((s, n) => html`<li class=${s.unheard ? "muted" : ""}>
+            <span class="swatch" style="background: ${colour(s)}"></span>
+            <span class="when">${at(s.start)}–${n === 0 && s.end >= now - 5 ? "now" : at(s.end)}</span>
+            <span class="what">${place(s)}${s.floor && s.floor !== sel.floor ? html` <span class="muted small">${s.floor}</span>` : nothing}</span>
+            <span class="dur">${fmtAge(s.end - s.start)}${s.partial ? "+" : ""}</span>
+          </li>`)}
+        </ol>
+        ${newest.length > 8 ? html`<button class="linkbtn" @click=${() => { this._timelineAll = !this._timelineAll; }}>${this._timelineAll ? "Show fewer" : `Show all ${newest.length}`}</button>` : nothing}
+      </details>`;
   }
 
   _renderBlend(sel) {
@@ -676,6 +765,21 @@ class SextantLive extends LitElement {
     .list li.selected { outline: 2px solid var(--primary-color); }
     .list .name { font-weight: 600; grid-column: 2; }
     .list .where { grid-column: 3; text-align: right; font-size: 12px; }
+    .list li.ghost { opacity: 0.55; }
+    .list li.ghost .avatar { filter: grayscale(0.6); outline: 1px dashed var(--secondary-text-color); outline-offset: 1px; }
+    .ghosticon { --mdc-icon-size: 14px; vertical-align: -2px; margin-right: 2px; }
+    details.timeline { margin: 8px 0; }
+    details.timeline summary { cursor: pointer; font-weight: 500; }
+    .band { display: flex; height: 14px; border-radius: 4px; overflow: hidden; margin-top: 8px; background: var(--secondary-background-color); gap: 1px; }
+    .band .seg { min-width: 1px; }
+    .band .seg.unheard { background: repeating-linear-gradient(45deg, transparent 0 3px, var(--divider-color) 3px 5px) !important; }
+    .band-ends { display: flex; justify-content: space-between; margin-top: 2px; }
+    ol.stays { list-style: none; padding: 0; margin: 6px 0 0; display: grid; gap: 3px; }
+    ol.stays li { display: grid; grid-template-columns: 10px auto 1fr auto; gap: 8px; align-items: center; font-size: 13px; }
+    ol.stays .swatch { width: 10px; height: 10px; border-radius: 2px; }
+    ol.stays .when { font-variant-numeric: tabular-nums; color: var(--secondary-text-color); white-space: nowrap; }
+    ol.stays .dur { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+    .linkbtn { background: none; border: none; color: var(--primary-color); cursor: pointer; padding: 4px 0; font: inherit; }
     .list .small { grid-column: 2 / 4; }
     .dot { width: 10px; height: 10px; border-radius: 50%; grid-row: 1 / 3; }
     dl { display: grid; grid-template-columns: 90px 1fr; gap: 4px 8px; margin: 8px 0; font-size: 13px; }

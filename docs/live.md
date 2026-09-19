@@ -19,6 +19,24 @@ fingerprint fix, a trail, and hide the plan image. A history scrubber under
 the map replays where a thing has been over the retention window, with a
 room band, playback and a jump-to-time picker.
 
+**Ghosts.** A thing nothing has heard for `stale_after_secs` (two minutes
+unless you change it on the Tuning page) is drawn as a ghost: faint, with a
+dashed outline and *3m ago* under it, and its row in the list fades with a
+ghost icon. What you are looking at is where it *was*; the room and spot
+sensors still say the same, because nothing has contradicted them yet. It
+leaves the map altogether after `position_timeout` (five minutes by
+default). The dashboard card draws ghosts the same way.
+
+**How long it has been there, and where it has been.** The focused thing's
+card says how long it has been where it is - *Meg's Cafe for 1h 12m, since
+2:41 pm*, and when that is a spot, how long it has been in the room around
+it too. Below is the **timeline**: the last day as a band, one colour per
+room (a spot is the darker shade of its room, a stretch nobody heard it is
+hatched), then the stays newest first with their times and lengths. A `+`
+means the stay began before the start of what history keeps, so it is at
+least that long. Stays come from the position history, which records a
+point on every room and spot change.
+
 On a phone the map switches (labels, trails, the grid and so on) collapse
 behind a single options button so they never force sideways scrolling, the
 floor picker and the cycle-age clock move to a bar under the page, and a

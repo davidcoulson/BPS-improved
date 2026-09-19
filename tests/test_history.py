@@ -444,3 +444,60 @@ def test_clear_forgets_memory_and_disk(tmp_path):
     assert body["cleared"] == "*"
     assert h.entities() == []
     assert H.list_day_keys(sextant.history_dir(hass)) == []
+
+
+# --------------------------------------------------------------------------- #
+# Spots, and the timeline the Live page draws
+# --------------------------------------------------------------------------- #
+
+def _walk(h, steps, start=1_000_000.0):
+    """steps: [(seconds_after_start, room, spot), ...] recorded at one position."""
+    for dt, room, spot in steps:
+        h.record(ENT, start + dt, 1.0, 1.0, FLOOR, SCALE, room, spot)
+
+
+def test_a_spot_change_is_recorded_even_when_nothing_moved():
+    h = hist(min_interval=2, heartbeat=600, min_move_m=0.5)
+    _walk(h, [(0, "Bedroom", None), (10, "Bedroom", "Bed"), (11, "Bedroom", "Bed")])
+    q = all_points(h)
+    assert [q["spots"][i] for i in q["sp"]] == ["", "Bed"]    # the change kept; the repeat 1 s later not
+
+
+def test_spots_survive_the_disk_round_trip_and_old_rows_read_as_none():
+    h = hist(min_interval=2, heartbeat=600)
+    _walk(h, [(0, "Bedroom", "Bed"), (30, "Bedroom", None)])
+    rows = [json.loads(line) for lines in h.drain_pending().values() for line in lines]
+    assert rows[0]["sp"] == "Bed" and "sp" not in rows[1]
+    rows.append({"e": ENT, "t": 1_000_060.0, "x": 1, "y": 1, "f": FLOOR, "z": "Hall"})   # written before spots existed
+    back = hist(min_interval=2, heartbeat=600)
+    back.load_rows(rows, now=1_000_100.0)
+    q = all_points(back)
+    assert [q["spots"][i] for i in q["sp"]] == ["Bed", "", ""]
+
+
+def test_timeline_collapses_points_into_stays_that_meet_at_the_crossing():
+    h = hist(min_interval=2, heartbeat=60)
+    _walk(h, [(0, "Bedroom", "Bed"), (60, "Bedroom", "Bed"), (120, "Bedroom", None),
+              (180, "Kitchen", None), (240, "Kitchen", None)])
+    tl = h.timeline(ENT, 0, 2e6)
+    stays = [(s["room"], s["spot"], s["start"] - 1_000_000, s["end"] - 1_000_000) for s in tl["stays"]]
+    assert stays == [("Bedroom", "Bed", 0, 120), ("Bedroom", None, 120, 180), ("Kitchen", None, 180, 240)]
+    assert tl["stays"][0]["partial"] is True        # it starts where the record starts
+    assert tl["last_heard"] == 1_000_240.0
+
+
+def test_timeline_never_claims_a_place_across_a_silence():
+    h = hist(min_interval=2, heartbeat=30)
+    _walk(h, [(0, "Office", None), (30, "Office", None)])
+    _walk(h, [(3000, "Office", None), (3030, "Office", None)])   # unheard for most of an hour
+    stays = h.timeline(ENT, 0, 2e6)["stays"]
+    assert [bool(s.get("unheard")) for s in stays] == [False, True, False]
+    assert stays[0]["end"] - 1_000_000 == 30 and stays[1]["end"] - 1_000_000 == 3000
+
+
+def test_timeline_window_and_empty_cases():
+    h = hist(min_interval=2, heartbeat=60)
+    assert h.timeline("nobody", 0, 1e12)["stays"] == []
+    _walk(h, [(0, "A", None), (100, "B", None), (200, "C", None)])
+    tl = h.timeline(ENT, 1_000_150.0, 2e6)
+    assert [s["room"] for s in tl["stays"]] == ["C"] and tl["stays"][0]["partial"] is False

@@ -394,7 +394,7 @@ def test_every_write_and_bermuda_command_requires_admin():
             "ws_truth_apply", "ws_history_clear", "ws_calibration_action", "ws_adjust_zones",
             "ws_kpi_baseline_save", "ws_kpi_baseline_delete"} <= admin
     assert not any(name.startswith("ws_bermuda_") for name in open_)
-    assert {"ws_layout_get", "ws_history_get", "ws_calibration_status", "ws_selftest",
+    assert {"ws_layout_get", "ws_history_get", "ws_history_timeline", "ws_calibration_status", "ws_selftest",
             "ws_advice", "ws_receivers", "ws_kpi"} <= open_
 
 
@@ -539,3 +539,20 @@ def test_registration_grades_a_draft_or_the_stored_layout(tmp_path):
     run(ws.ws_registration(hass, conn, {"id": 2, "type": "sextant/registration", "layout": draft}))
     graded = conn.results[-1][1]["floors"]["U"]
     assert graded["worst"] == "NE" and graded["rms_m"] > 0.2
+
+
+def test_history_timeline_is_served_for_the_last_hours(tmp_path):
+    import time as _time
+    hass = _hass_with_layout(tmp_path, _layout())
+    h = sextant.get_position_history(hass)
+    now = _time.time()
+    for dt in range(-7200, -59, 60):                  # heard every minute for two hours
+        h.record("cat", now + dt, 1.0, 1.0, "F", 100.0, "Office", "Desk" if dt >= -3600 else None)
+    conn = _Conn()
+    run(ws.ws_history_timeline(hass, conn, {"id": 1, "type": "sextant/history/timeline", "entity": "cat", "hours": 1.5}))
+    result = conn.results[-1][1]
+    # 1.5 h back reaches into the "no spot" stretch but not to where the record starts.
+    assert [(s["room"], s["spot"]) for s in result["stays"]] == [("Office", None), ("Office", "Desk")]
+    assert result["stays"][0]["partial"] is False
+    assert result["stays"][1]["start"] == round(now - 3600, 1)
+    assert result["last_heard"] == round(now - 60, 1)

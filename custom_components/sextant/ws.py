@@ -616,6 +616,26 @@ async def ws_history_get(hass, connection, msg):
     connection.send_result(msg["id"], data)
 
 
+@websocket_api.websocket_command({
+    vol.Required("type"): "sextant/history/timeline",
+    vol.Required("entity"): str,
+    vol.Optional("hours"): vol.All(vol.Coerce(float), vol.Range(min=0.1, max=24 * 31)),
+})
+@websocket_api.async_response
+async def ws_history_timeline(hass, connection, msg):
+    """Where one thing has been, as stays: floor, room, spot, from - to.
+
+    What the Live page's timeline and its "here for" line are drawn from.
+    Covers the last ``hours`` (default 24), capped at what history retains.
+    """
+    hist = _history(hass)
+    now = time.time()
+    span = min(float(msg.get("hours") or 24.0) * 3600.0, hist.cfg["max_age"])
+    data = hist.timeline(msg["entity"], now - span, now)
+    data.update({"now": now, "retained": hist.retained(msg["entity"])})
+    connection.send_result(msg["id"], data)
+
+
 @websocket_api.websocket_command({vol.Required("type"): "sextant/history/clear", vol.Optional("entity"): str})
 @websocket_api.require_admin
 @websocket_api.async_response
@@ -1224,7 +1244,7 @@ async def ws_advice(hass, connection, msg):
 COMMANDS = (
     ws_advice,
     ws_layout_get, ws_layout_save, ws_tuning_set, ws_thing_tune,
-    ws_history_index, ws_history_get, ws_history_clear,
+    ws_history_index, ws_history_get, ws_history_timeline, ws_history_clear,
     ws_calibration_status, ws_calibration_action, ws_selftest, ws_scanner_linking, ws_receivers, ws_beacon_links,
     ws_adjust_zones, ws_registration, ws_scanner_ignore, ws_kpi, ws_kpi_baselines, ws_kpi_baseline_save, ws_kpi_baseline_delete,
     ws_truth_mark, ws_truth_list, ws_truth_delete, ws_truth_evaluate, ws_truth_apply,

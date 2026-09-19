@@ -426,6 +426,12 @@ TUNING_SPEC = {
     "anchor_ratio": (2.0, float, 1.0, 10.0),
     "anchor_secs": (20.0, float, 0.0, 600.0),
     "anchor_release_m": (1.5, float, 0.1, 10.0),
+    # How long a thing may go unheard before the Live page draws it as a
+    # ghost - translucent, with how long ago it was last heard - because the
+    # position shown is then a memory rather than a reading. Display only:
+    # nothing about positioning changes, and position_timeout still decides
+    # when the thing leaves the map altogether.
+    "stale_after_secs": (120.0, float, 15.0, 3600.0),
 }
 
 # Reference fingerprints: receiver-to-receiver ranges, refreshed on a slow
@@ -2292,7 +2298,7 @@ async def update_trilateration_and_zone(hass, new_global_data, entity):
             try:
                 get_position_history(hass).record(
                     entity, time.time(), avg_x / scale, avg_y / scale,
-                    lowest_floor_name, scale, zone)
+                    lowest_floor_name, scale, zone, sub_zone)
             except Exception as e:  # history must never break tracking
                 _LOGGER.debug("Position history record failed for %s: %s", entity, e)
         update_sextant_sensor_state(hass, f"sensor.{entity}_sextant_room", zone)

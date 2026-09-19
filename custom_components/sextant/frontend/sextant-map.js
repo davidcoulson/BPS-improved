@@ -221,6 +221,18 @@ async function resolveImageUrl(url, authFetch) {
   return objectUrl;
 }
 
+/** Seconds as the shortest honest phrase: "45s", "3m", "2h", "1d". */
+export function shortAge(seconds) {
+  const s = Math.max(0, Math.round(seconds));
+  return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : s < 86400 ? `${Math.floor(s / 3600)}h` : `${Math.floor(s / 86400)}d`;
+}
+
+/** How long since a thing's last fix, and whether that makes it a ghost. */
+export function staleness(thing, staleAfter, now = Date.now() / 1000) {
+  const age = typeof thing?.updated === "number" ? Math.max(0, now - thing.updated) : 0;
+  return { age, ghost: staleAfter > 0 && age > staleAfter };
+}
+
 export class SextantMap {
   /**
    * @param {HTMLCanvasElement} canvas
@@ -239,7 +251,8 @@ export class SextantMap {
     this.offline = new Set();
     this.marks = [];   // truth marks of the focused thing on this floor: [{x, y, label}]
     this.suggestions = [];  // advised proxy spots on this floor: [{x, y, label}]
-    this.options = { circles: false, trails: true, fingerprint: false, grid: "off", labels: true, subzones: true, image: true, focus: null };
+    // staleAfter: seconds without a fix after which a thing is drawn as a ghost (0 = never).
+    this.options = { circles: false, trails: true, fingerprint: false, grid: "off", labels: true, subzones: true, image: true, focus: null, staleAfter: 120 };
     this.authFetch = host.fetch || null; // (url) => Promise<Response>, e.g. hass.fetchWithAuth
     this.locks = { zone: false, subzone: false, receiver: false, pin: false }; // edit mode: locked kinds cannot be selected or dragged
     this.mode = "view";
@@ -883,8 +896,13 @@ export class SextantMap {
       const color = thingColor(t.ent, custom);
       const paint = (a, dark = false) => thingRgba(t.ent, custom, a, dark);
       const focused = focus && t.ent === focus;
+      // Not heard for a while: what is drawn is where it WAS. A ghost -
+      // faint, outlined in dashes, labelled with how long ago - rather than a
+      // solid dot claiming a position nobody has confirmed.
+      const { age, ghost } = staleness(t, this.options.staleAfter);
       ctx.save();
       if (focus && !focused) ctx.globalAlpha = 0.28;   // everything but the one you clicked fades back
+      if (ghost) ctx.globalAlpha *= 0.4;
       const trail = this.options.trails ? this.trails.get(t.ent) : null;
       if (trail && trail.length > 1) {
         ctx.beginPath();
@@ -923,11 +941,16 @@ export class SextantMap {
         ctx.strokeStyle = paint(0.9, true); ctx.lineWidth = 3 / k; ctx.setLineDash([8 / k, 5 / k]); ctx.stroke(); ctx.setLineDash([]);
       }
       // Confidence ring: the published conf in (0,1] as the ring's alpha.
-      ctx.beginPath(); ctx.arc(t.cords[0], t.cords[1], r * 1.9, 0, Math.PI * 2);
-      ctx.fillStyle = paint(0.08 + 0.22 * (t.conf ?? 0.5)); ctx.fill();
+      // A ghost has no current confidence to show.
+      if (!ghost) {
+        ctx.beginPath(); ctx.arc(t.cords[0], t.cords[1], r * 1.9, 0, Math.PI * 2);
+        ctx.fillStyle = paint(0.08 + 0.22 * (t.conf ?? 0.5)); ctx.fill();
+      }
       ctx.beginPath(); ctx.arc(t.cords[0], t.cords[1], r, 0, Math.PI * 2);
       ctx.fillStyle = color; ctx.fill();
+      if (ghost) ctx.setLineDash([4 / k, 3 / k]);
       ctx.lineWidth = (selected ? 3 : 2) / k; ctx.strokeStyle = selected ? "#ffd166" : "#ffffff"; ctx.stroke();
+      ctx.setLineDash([]);
       const glyph = t.mdi ? mdiPath(t.mdi, () => this.invalidate()) : null;
       if (t.icon && t.icon.complete && t.icon.naturalWidth) {
         ctx.save(); ctx.beginPath(); ctx.arc(t.cords[0], t.cords[1], r * 0.85, 0, Math.PI * 2); ctx.clip();
@@ -942,7 +965,8 @@ export class SextantMap {
         ctx.textAlign = "center"; ctx.textBaseline = "middle";
         ctx.fillText((t.label || t.ent).slice(0, 2).toUpperCase(), t.cords[0], t.cords[1]);
       }
-      if (this.options.labels || focused) this._label(ctx, t.label || t.ent, t.cords[0], t.cords[1] + r + 9 / k, focused ? 13 : 11, 0.9);
+      const label = ghost ? `${t.label || t.ent} · ${shortAge(age)} ago` : (t.label || t.ent);
+      if (this.options.labels || focused || ghost) this._label(ctx, label, t.cords[0], t.cords[1] + r + 9 / k, focused ? 13 : 11, 0.9);
       ctx.restore();
     }
   }
