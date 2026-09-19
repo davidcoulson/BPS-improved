@@ -948,7 +948,8 @@ class SextantLive extends LitElement {
     .list li.group { display: flex; align-items: center; gap: 6px; padding: 8px 4px 4px; margin-top: 4px; border-top: 1px solid var(--divider-color, #e0e0e0); border-radius: 0; font-weight: 500; }
     .list li.group:first-child { border-top: none; margin-top: 0; }
     .list li.group .chev { --mdc-icon-size: 18px; color: var(--secondary-text-color); }
-    .list li.group .gavatar { width: 30px; height: 30px; border-radius: 50%; overflow: hidden; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; background: var(--secondary-background-color, #eee); }
+    /* The same disc as a thing's avatar: 30 px, white ring, hairline shadow. */
+    .list li.group .gavatar { width: 30px; height: 30px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,0.15); overflow: hidden; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; background: var(--secondary-background-color, #eee); }
     .list li.group .gavatar img { width: 100%; height: 100%; object-fit: cover; }
     .list li.group .gavatar ha-icon { --mdc-icon-size: 18px; color: var(--secondary-text-color); }
     .list li.group .gavatar { flex: none; }
