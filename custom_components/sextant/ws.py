@@ -225,6 +225,13 @@ def merge_editor_layout(current, incoming):
     return merged
 
 
+def _confine_spots(layout):
+    """Clip every spot to its one room; names of the spots that changed."""
+    from .zone_adjust import confine_spots  # noqa: PLC0415 - shapely is heavy
+
+    return [name for floor in layout.get("floor") or [] for name in confine_spots(floor)]
+
+
 @websocket_api.websocket_command({
     vol.Required("type"): "sextant/layout/save",
     vol.Required("layout"): dict,
@@ -250,6 +257,8 @@ async def ws_layout_save(hass, connection, msg):
             return _error(connection, msg, "invalid map to remove")
     async with LAYOUT_LOCK:
         layout = merge_editor_layout(get_layout(hass), layout)
+        # A spot belongs to one room: clip each to its room before it is stored.
+        confined = await hass.async_add_executor_job(_confine_spots, layout)
         await save_layout(hass, layout)
     if remove_target is not None and remove_target.exists():
         try:
@@ -260,7 +269,9 @@ async def ws_layout_save(hass, connection, msg):
         core.refresh_receivers_from_coords(hass, json.dumps(layout))
     except Exception as e:  # noqa: BLE001 - calibration bookkeeping must not fail a save
         _LOGGER.debug("refresh_receivers_from_coords: %s", e)
-    connection.send_result(msg["id"], {"version": get_layout_version(hass)})
+    connection.send_result(
+        msg["id"], {"version": get_layout_version(hass), "confined": confined}
+    )
 
 
 @websocket_api.websocket_command({

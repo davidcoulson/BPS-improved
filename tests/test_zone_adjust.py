@@ -84,3 +84,59 @@ def test_spot_is_clamped_into_its_room_and_rooms_are_untouched():
     assert max(c["x"] for c in clamped["cords"]) <= 400.5
     assert _poly(clamped).area > 0.5 * 100 * 100  # the part inside the room survives
     assert out["zones"] == [room] and out["changes"][0]["name"] == "Sofa"
+
+
+def _spot(x0, y0, x1, y1, name, parent=None):
+    s = _rect(x0, y0, x1, y1, name)
+    s.pop("zone_id")
+    s.update(sub_zone_id=name, type="subzone", parent=parent)
+    return s
+
+
+def _floor(*spots):
+    nogo = _rect(0, 0, 1000, 1000, "N")
+    nogo["no_go"] = True
+    return {"zones": [nogo, _rect(0, 0, 400, 300, "A"), _rect(400, 0, 800, 300, "B")],
+            "subzones": list(spots)}
+
+
+def test_a_spot_drawn_across_a_wall_is_clipped_to_its_room():
+    floor = _floor(_spot(300, 100, 500, 200, "couch", parent="A"))
+    assert za.confine_spots(floor) == ["couch"]
+    s = floor["subzones"][0]
+    assert s["parent"] == "A"
+    assert _poly(s).equals(Polygon([(300, 100), (400, 100), (400, 200), (300, 200)]))
+
+
+def test_a_spot_already_inside_its_room_is_left_exactly_as_it_is():
+    spot = _spot(100, 100, 200, 200, "desk", parent="A")
+    before = [dict(c) for c in spot["cords"]]
+    floor = _floor(spot)
+    assert za.confine_spots(floor) == []
+    assert spot["cords"] == before and spot["parent"] == "A"
+    # A corner on the wall itself is inside, not a reason to rewrite the shape.
+    edge = _spot(300, 100, 400.3, 200, "bed", parent="A")
+    assert za.confine_spots(_floor(edge)) == []
+
+
+def test_a_spot_without_a_room_takes_the_one_it_overlaps_most():
+    floor = _floor(_spot(350, 100, 600, 200, "rug"))
+    assert za.confine_spots(floor) == ["rug"]
+    s = floor["subzones"][0]
+    assert s["parent"] == "B"  # 200 px of it in B, 50 in A; never the no-go
+    assert _poly(s).bounds == (400, 100, 600, 200)
+
+
+def test_a_spot_dragged_into_another_room_follows_it_instead_of_vanishing():
+    floor = _floor(_spot(500, 100, 600, 200, "chair", parent="A"))
+    assert za.confine_spots(floor) == ["chair"]
+    assert floor["subzones"][0]["parent"] == "B"
+    assert _poly(floor["subzones"][0]).area == 100 * 100
+
+
+def test_a_spot_outside_every_room_is_left_alone():
+    spot = _spot(900, 900, 950, 950, "shed")
+    floor = _floor(spot)
+    floor["zones"] = floor["zones"][1:]  # no no-go under it either
+    assert za.confine_spots(floor) == []
+    assert spot["parent"] is None

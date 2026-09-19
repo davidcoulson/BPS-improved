@@ -68,6 +68,20 @@ def test_layout_save_validates_then_persists(tmp_path):
     assert st.get_layout(hass)["floor"][0]["name"] == "F"
 
 
+def test_layout_save_clips_each_spot_to_its_one_room(tmp_path):
+    hass = _hass_with_layout(tmp_path)
+    layout = _layout()
+    square = lambda x0, x1: [{"x": x0, "y": 0}, {"x": x1, "y": 0}, {"x": x1, "y": 100}, {"x": x0, "y": 100}]  # noqa: E731
+    layout["floor"][0]["zones"] = [{"zone_id": "gr", "entity_id": "Great Room", "poly": True, "cords": square(0, 400)}]
+    layout["floor"][0]["subzones"] = [{"sub_zone_id": "c", "entity_id": "Couch", "parent": "gr", "poly": True,
+                                       "cords": square(300, 500)}]
+    conn = _Conn()
+    run(ws.ws_layout_save(hass, conn, {"id": 3, "type": "sextant/layout/save", "layout": layout}))
+    assert conn.results[-1][1]["confined"] == ["Couch"]
+    xs = {c["x"] for c in st.get_layout(hass)["floor"][0]["subzones"][0]["cords"]}
+    assert xs == {300, 400}
+
+
 def test_tuning_set_and_thing_tune_write_the_layout(tmp_path):
     hass = _hass_with_layout(tmp_path, _layout())
     conn = _Conn()

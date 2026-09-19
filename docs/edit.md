@@ -23,7 +23,10 @@ basement, 1 above) for ordering and an election *bias* (1.15 gives the
 ground floor a standing head start; where one number for the whole floor
 is too blunt, see [bias fields](positioning.md)). Padlocks lock rooms, spots and
 proxies against selection so you cannot drag a wall while placing a proxy;
-rooms start locked. A selected spot can be limited to the thing classes it
+rooms start locked. A spot belongs to one room: the room under its first
+corner (or under its middle, if that corner is outside every room). Save
+trims any part that pokes through that room's walls, and a spot dragged
+wholly into another room moves to that room. A selected spot can be limited to the thing classes it
 takes — pick phone, watch and keys on a bedside table, cat on a cat bed —
 and nothing else will be placed there; pick none and it takes anything.
 Person also takes a man, a woman or a child and Pet also takes the dog or

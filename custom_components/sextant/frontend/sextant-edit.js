@@ -309,8 +309,11 @@ class SextantEdit extends LitElement {
       this._selection = { kind: "zone", index: f.zones.length - 1 };
     } else if (tool === "subzone") {
       f.subzones = f.subzones || [];
-      const c = polygonCentroid(pts);
-      const parent = (f.zones || []).find((z) => !z.no_go && this._inside(c, z.cords));
+      // A spot belongs to one room: the one under its first corner (the
+      // centroid's if that corner sits outside every room). Save clips the
+      // spot to that room.
+      const rooms = (f.zones || []).filter((z) => !z.no_go);
+      const parent = rooms.find((z) => this._inside(pts[0], z.cords)) || rooms.find((z) => this._inside(polygonCentroid(pts), z.cords));
       f.subzones.push({ sub_zone_id: uid("subzone"), entity_id: `Spot ${f.subzones.length + 1}`, parent: parent?.zone_id || null, poly: true,
         color: `hsl(${Math.floor(Math.random() * 360)}, 70%, 45%)`, cords: pts, type: "subzone" });
       this._selection = { kind: "subzone", index: f.subzones.length - 1 };
@@ -434,7 +437,12 @@ class SextantEdit extends LitElement {
     this._busy = true;
     const r = await callWS(this, this.hass, { type: "sextant/layout/save", layout: draft, ...(removeMap ? { remove_map: removeMap } : {}) });
     this._busy = false;
-    if (r) { toast(this, "Floor plan saved"); this._dirty = false; this.dispatchEvent(new CustomEvent("layout-changed")); }
+    if (r) {
+      const n = r.confined?.length || 0;
+      toast(this, n ? `Floor plan saved; ${n === 1 ? `${r.confined[0]} was` : `${n} spots were`} fitted inside ${n === 1 ? "its room" : "their rooms"}` : "Floor plan saved");
+      this._dirty = false;
+      this.dispatchEvent(new CustomEvent("layout-changed"));
+    }
   }
 
   _discard() {
