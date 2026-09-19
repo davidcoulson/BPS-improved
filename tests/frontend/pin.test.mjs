@@ -41,3 +41,44 @@ test("a thing is a ghost only once it has gone unheard longer than the threshold
 test("ages read as the shortest honest phrase", () => {
   assert.deepEqual([45, 180, 7300, 200000].map(shortAge), ["45s", "3m", "2h", "2d"]);
 });
+
+// --- right-angle snapping and squaring -----------------------------------------------
+import { snapCorner, squareUp, ORTHO_SNAP_DEG } from "../../custom_components/sextant/frontend/sextant-map.js";
+
+test("a corner near a straight edge snaps onto it; a real diagonal does not", () => {
+  const prev = { x: 0, y: 0 };
+  assert.deepEqual(snapCorner({ x: 5, y: 100 }, prev, null), { x: 0, y: 100, snapped: true });     // ~3 deg off vertical
+  assert.deepEqual(snapCorner({ x: 100, y: -6 }, prev, null), { x: 100, y: 0, snapped: true });    // ~3 deg off horizontal
+  const diag = snapCorner({ x: 100, y: 60 }, prev, null);                                            // 31 deg: deliberate
+  assert.equal(diag.snapped, false);
+  assert.deepEqual([diag.x, diag.y], [100, 60]);
+  assert.ok(ORTHO_SNAP_DEG >= 5 && ORTHO_SNAP_DEG <= 10);
+});
+
+test("a dragged corner takes x from one neighbour and y from the other: a clean right angle", () => {
+  const at = snapCorner({ x: 103, y: 197 }, { x: 100, y: 0 }, { x: 0, y: 200 });
+  assert.deepEqual(at, { x: 100, y: 200, snapped: true });
+});
+
+test("squareUp straightens a wonky L and leaves every corner at 90 degrees", () => {
+  const wonky = [
+    { x: 1313.6, y: 342.9 }, { x: 1312.0, y: 434.8 }, { x: 1403.5, y: 435.0 }, { x: 1398.8, y: 585.2 },
+    { x: 1226.8, y: 594.8 }, { x: 1226.8, y: 703.4 }, { x: 1512.2, y: 703.4 }, { x: 1511.0, y: 341.6 },
+  ];   // the real couch, as drawn
+  const sq = squareUp(wonky);
+  for (let i = 0; i < sq.length; i++) {
+    const a = sq[i], b = sq[(i + 1) % sq.length];
+    assert.ok(a.x === b.x || a.y === b.y, `edge ${i} is not straight: ${JSON.stringify([a, b])}`);
+  }
+  const worst = Math.max(...sq.map((q, i) => Math.hypot(q.x - wonky[i].x, q.y - wonky[i].y)));
+  assert.ok(worst < 8, `a corner moved ${worst} px`);
+});
+
+test("squareUp keeps a diagonal wall and lines up collinear runs", () => {
+  const shape = [{ x: 0, y: 0 }, { x: 100, y: 2 }, { x: 200, y: -1 }, { x: 300, y: 200 }, { x: 1, y: 200 }];
+  const sq = squareUp(shape);
+  assert.equal(sq[0].y, sq[1].y); assert.equal(sq[1].y, sq[2].y);   // one straight top edge, not a step
+  assert.equal(sq[0].x, sq[4].x);                                     // left side straight
+  assert.deepEqual([sq[3].x, sq[3].y], [300, 200]);                   // the diagonal's far end untouched
+  assert.deepEqual(squareUp([{ x: 0, y: 0 }, { x: 1, y: 1 }]), [{ x: 0, y: 0 }, { x: 1, y: 1 }]);
+});

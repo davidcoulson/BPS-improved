@@ -221,6 +221,71 @@ async function resolveImageUrl(url, authFetch) {
   return objectUrl;
 }
 
+/** Within this many degrees of horizontal or vertical, an edge is snapped straight. */
+export const ORTHO_SNAP_DEG = 7;
+
+function nearAxis(dx, dy, tolDeg) {
+  // "v" when the edge is within tolDeg of vertical, "h" of horizontal, else null.
+  const len = Math.hypot(dx, dy);
+  if (len < 1e-9) return null;
+  const s = Math.sin((tolDeg * Math.PI) / 180);
+  if (Math.abs(dx) / len <= s) return "v";
+  if (Math.abs(dy) / len <= s) return "h";
+  return null;
+}
+
+/**
+ * Where a corner should land so its edges to `prev` and `next` come out
+ * straight. An edge already within ORTHO_SNAP_DEG of vertical takes its
+ * neighbour's x, one near horizontal its neighbour's y; a deliberate
+ * diagonal is nowhere near the tolerance and is left exactly as drawn.
+ * Either neighbour may be null (the first corner, or a draft with no
+ * closing corner yet). Returns the point, and which axes snapped.
+ */
+export function snapCorner(p, prev, next, tolDeg = ORTHO_SNAP_DEG) {
+  let x = p.x, y = p.y, sx = false, sy = false;
+  for (const n of [prev, next]) {
+    if (!n) continue;
+    const axis = nearAxis(p.x - n.x, p.y - n.y, tolDeg);
+    if (axis === "v" && !sx) { x = n.x; sx = true; }
+    if (axis === "h" && !sy) { y = n.y; sy = true; }
+  }
+  return { x, y, snapped: sx || sy };
+}
+
+/**
+ * The same polygon with every near-straight edge made exactly straight.
+ *
+ * Corners joined by a near-vertical edge share one x (their mean), corners
+ * joined by a near-horizontal edge one y - taken across whole runs, so two
+ * collinear edges in a row end up on one line rather than a step. Edges
+ * that are really diagonal are left alone. Corners move by at most about
+ * half the tolerance times the edge length.
+ */
+export function squareUp(points, tolDeg = ORTHO_SNAP_DEG + 3) {
+  const n = points.length;
+  if (n < 3) return points.map((q) => ({ ...q }));
+  const groups = (axis) => {
+    const parent = [...Array(n).keys()];
+    const find = (i) => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+    for (let i = 0; i < n; i++) {
+      const a = points[i], b = points[(i + 1) % n];
+      if (nearAxis(b.x - a.x, b.y - a.y, tolDeg) === axis) parent[find(i)] = find((i + 1) % n);
+    }
+    const sums = new Map();
+    for (let i = 0; i < n; i++) {
+      const r = find(i), s = sums.get(r) || { v: 0, c: 0 };
+      s.v += axis === "v" ? points[i].x : points[i].y; s.c += 1; sums.set(r, s);
+    }
+    return (i) => { const s = sums.get(find(i)); return s.c > 1 ? s.v / s.c : null; };
+  };
+  const vx = groups("v"), hy = groups("h");
+  return points.map((q, i) => {
+    const x = vx(i), y = hy(i);
+    return { ...q, x: Math.round((x ?? q.x) * 1000) / 1000, y: Math.round((y ?? q.y) * 1000) / 1000 };
+  });
+}
+
 /** Seconds as the shortest honest phrase: "45s", "3m", "2h", "1d". */
 export function shortAge(seconds) {
   const s = Math.max(0, Math.round(seconds));
@@ -312,11 +377,11 @@ export class SextantMap {
   setLocks(locks) { Object.assign(this.locks, locks || {}); if (this.selection && this.locks[this.selection.kind]) this.selection = null; this.invalidate(); }
   finishDraft() {
     const pts = this.draft;
-    this.draft = null;
+    this.draft = null; this._drawHover = null;
     this.invalidate();
     return pts && pts.length >= 3 ? pts : null;
   }
-  cancelDraft() { this.draft = null; this.invalidate(); }
+  cancelDraft() { this.draft = null; this._drawHover = null; this.invalidate(); }
 
   // --- view --------------------------------------------------------------------
 
@@ -386,7 +451,8 @@ export class SextantMap {
         if (Math.hypot(first.x - p.x, first.y - p.y) < HIT_SLOP * 1.5) { if (this.host.onDrawClose) this.host.onDrawClose(); return; }
       }
       this.draft = this.draft || [];
-      this.draft.push({ x: Math.round(m.x * 1000) / 1000, y: Math.round(m.y * 1000) / 1000 });
+      const at = e.altKey ? m : snapCorner(m, this.draft[this.draft.length - 1] || null, this.draft.length >= 2 ? this.draft[0] : null);
+      this.draft.push({ x: Math.round(at.x * 1000) / 1000, y: Math.round(at.y * 1000) / 1000 });
       if (this.host.onDrawPoint) this.host.onDrawPoint(this.draft);
       this.invalidate();
       return;
@@ -425,6 +491,15 @@ export class SextantMap {
 
   _move(e) {
     const p = this._local(e);
+    if (!this._drag && this.mode === "edit" && this.tool !== "select" && this.draft && this.draft.length) {
+      // The next corner, where a click would put it: snapped, so a right
+      // angle is visible before it is committed.
+      const m = this.toMap(p);
+      this._drawHover = e.altKey ? m : snapCorner(m, this.draft[this.draft.length - 1], this.draft.length >= 2 ? this.draft[0] : null);
+      this.invalidate();
+    } else if (this._drawHover) {
+      this._drawHover = null;
+    }
     if (!this._drag) {
       const hit = this.hitTest(p);
       const key = hit ? `${hit.kind}:${hit.index}:${hit.vertex ?? ""}` : "";
@@ -471,7 +546,10 @@ export class SextantMap {
       const list = hit.kind === "zone" ? f.zones : f.subzones;
       const item = list[hit.index];
       if (hit.vertex != null) {
-        item.cords[hit.vertex] = { x: d.origin[hit.vertex].x + dx, y: d.origin[hit.vertex].y + dy };
+        const raw = { x: d.origin[hit.vertex].x + dx, y: d.origin[hit.vertex].y + dy };
+        const cnt = item.cords.length;
+        const at = e.altKey ? raw : snapCorner(raw, item.cords[(hit.vertex - 1 + cnt) % cnt], item.cords[(hit.vertex + 1) % cnt]);
+        item.cords[hit.vertex] = { x: at.x, y: at.y };
       } else if (hit.edge != null) {
         // Dragging an edge midpoint inserts a vertex there, then drags it.
         const at = hit.edge + 1;
@@ -843,6 +921,14 @@ export class SextantMap {
     pts.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
     ctx.strokeStyle = "#ffd166"; ctx.lineWidth = 2 / k; ctx.setLineDash([6 / k, 4 / k]);
     ctx.stroke(); ctx.setLineDash([]);
+    const h = this._drawHover;
+    if (h) {
+      const last = pts[pts.length - 1];
+      ctx.beginPath(); ctx.moveTo(last.x, last.y); ctx.lineTo(h.x, h.y);
+      ctx.strokeStyle = h.snapped ? "#ff9800" : "rgba(255,209,102,0.6)"; ctx.lineWidth = 1.5 / k;
+      ctx.setLineDash([4 / k, 4 / k]); ctx.stroke(); ctx.setLineDash([]);
+      this._handle(ctx, h, VERTEX_SIZE / k, h.snapped ? "#ff9800" : "#ffd166", "#5a4400");
+    }
     pts.forEach((p, i) => this._handle(ctx, p, (i === 0 ? VERTEX_SIZE * 1.3 : VERTEX_SIZE) / k, "#ffd166", "#5a4400"));
   }
 

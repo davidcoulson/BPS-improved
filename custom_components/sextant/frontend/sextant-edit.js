@@ -8,7 +8,7 @@
  * view, the one thing the websocket does not carry).
  */
 import { LitElement, html, css, nothing } from "./lit.js";
-import { SextantMap, polygonCentroid, snapToVertex } from "./sextant-map.js";
+import { SextantMap, polygonCentroid, snapToVertex, squareUp } from "./sextant-map.js";
 import { sharedStyles, widgetStyles, toast, callWS, confirmDialog, fmtNum, fmtLen, uiField, uiSelect, uiSwitch, uiButton, proxyName, lenUnit, toDisplayLen, fromDisplayLen, fmtScale, isImperial, THING_CLASSES, CLASS_FAMILIES } from "./sextant-ui.js";
 import { mapUrlFor } from "./sextant-panel.js";
 
@@ -340,6 +340,23 @@ class SextantEdit extends LitElement {
     }
   }
 
+  /** Straighten the selected room or spot's near-straight edges (see squareUp). */
+  _squareUp() {
+    const sel = this._selection, f = this._floorObj();
+    if (!sel || !f || (sel.kind !== "zone" && sel.kind !== "subzone")) return;
+    const item = this._listFor(sel.kind, f)[sel.index];
+    const squared = squareUp(item.cords || []);
+    const moved = squared.reduce((m, q, i) => Math.max(m, Math.hypot(q.x - item.cords[i].x, q.y - item.cords[i].y)), 0);
+    if (moved < 0.01) return toast(this, "Already square");
+    this._snapshot();
+    item.cords = squared;
+    this._dirty = true;
+    this._map.invalidate();
+    this.requestUpdate();
+    const m = f.scale ? moved / f.scale : null;
+    toast(this, m != null ? `Squared up; no corner moved more than ${Math.round(m * 100)} cm. Save to keep it` : "Squared up. Save to keep it");
+  }
+
   _deleteSelection() {
     const sel = this._selection, f = this._floorObj();
     if (!sel || !f) return;
@@ -477,7 +494,7 @@ class SextantEdit extends LitElement {
             : this._measure ? "Click the second point." : `Click two points a known distance apart. Current scale: ${fmtScale(f?.scale, this.hass)}`}
         </div>` : nothing}
         ${this._tool === "pin" ? html`<div class="hint">Click a point you can find on every floor: an outside corner, a stair post, a chimney. It lands on a room corner when one is near (Alt places it freely). Then switch floor and pin the same points - the names carry over in order.</div>` : nothing}
-        ${["zone", "subzone", "nogo"].includes(this._tool) ? html`<div class="hint">Click to add corners; click the first corner or double-click to close. ${uiButton({ label: "Cancel", kind: "text", onClick: () => { this._map.cancelDraft(); } })}</div>` : nothing}
+        ${["zone", "subzone", "nogo"].includes(this._tool) ? html`<div class="hint">Click to add corners; click the first corner or double-click to close. An edge close to horizontal or vertical snaps straight (orange); hold Alt to place a corner freely. ${uiButton({ label: "Cancel", kind: "text", onClick: () => { this._map.cancelDraft(); } })}</div>` : nothing}
       </div>
       <aside class="side">
         ${f ? html`
@@ -582,7 +599,7 @@ class SextantEdit extends LitElement {
           <div class="classpick">${this._classPicker(item)}</div>
           <div class="muted small">A ringed group goes together: pick Person or Pet and its kinds count too, shown without the grey background.</div>
         </div>` : nothing}
-      <div class="row"><span class="muted small">${(item.cords?.length ?? 1)} point(s)</span><span class="grow"></span>${uiButton({ label: "Delete", kind: "danger", onClick: () => this._deleteSelection() })}</div>
+      <div class="row"><span class="muted small">${(item.cords?.length ?? 1)} point(s)</span><span class="grow"></span>${sel.kind === "zone" || sel.kind === "subzone" ? uiButton({ label: "Square up", icon: "mdi:vector-square", onClick: () => this._squareUp(), title: "Make every edge that is nearly straight exactly horizontal or vertical. Diagonals stay as drawn" }) : nothing}${uiButton({ label: "Delete", kind: "danger", onClick: () => this._deleteSelection() })}</div>
     </div>`;
   }
 
