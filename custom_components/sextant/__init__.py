@@ -2770,15 +2770,14 @@ def _update_person_sensors(hass):
             row = rows.get(ent)
             if not row or not persons_mod.locates_owner(layout, ent, classes.get(ent)):
                 continue
-            zst = _zone_state.get(ent)
             candidates.append({
                 "ent": ent, "cls": classes.get(ent), "updated": row.get("updated"),
-                "moving": bool(zst) and zst.get("still_since") is None,
                 "arrived": _arrived_at(hass, layout, ent, row, now),
                 "zone": row.get("zone"), "sub_zone": row.get("sub_zone"), "floor": row.get("floor"),
             })
         slug = person.split(".", 1)[1]
-        for suffix, (state, attrs) in persons_mod.states(persons_mod.pick(candidates, now, stale)).items():
+        why = persons_mod.considered(candidates, now)
+        for suffix, (state, attrs) in persons_mod.states(persons_mod.pick(candidates, now, stale), why).items():
             update_sextant_sensor_state(hass, f"sensor.{slug}_{suffix}", state, attrs)
 
 def extract_candidate_floors(new_global_data, tmpentity):

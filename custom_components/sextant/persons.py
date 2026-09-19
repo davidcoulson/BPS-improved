@@ -6,8 +6,10 @@ question is which one speaks for them. The phone left on the couch for an
 hour does not; the watch that just crossed the room does. So:
 
 1. Only things heard recently (within stale_after_secs) and placed in a room.
-2. A thing moving now, or that arrived where it is within RECENT_MOVE_SECS,
-   beats one that has sat there longer - it is being carried. Among those,
+2. A thing that arrived where it is within RECENT_MOVE_SECS beats one that
+   has sat there longer - it is being carried. Arrival is metres moved
+   (settled_since), not the tracker's own "moving" flag: a watch on its
+   nightstand whose fix alternates between two points reads as moving. Among those,
    what is usually on a body wins: a pet's own tag, a watch, a phone.
 3. When nothing is on the move, the thing that arrived where it is most
    recently wins: the phone that came downstairs this morning, not the
@@ -91,8 +93,8 @@ def settled_since(points, here, radius=STAY_RADIUS_M, confirm_secs=MOVE_CONFIRM_
 def pick(things, now: float, stale_after: float):
     """The thing that speaks for its owner now, or None.
 
-    ``things`` are dicts: ent, cls, updated (epoch s), moving (bool),
-    arrived (epoch s: when it reached the room or spot it is in now),
+    ``things`` are dicts: ent, cls, updated (epoch s),
+    arrived (epoch s: when it came within STAY_RADIUS_M of where it is now),
     zone, sub_zone, floor.
     """
     fresh = [
@@ -105,14 +107,25 @@ def pick(things, now: float, stale_after: float):
 
     def key(t):
         arrived = t.get("arrived")
-        age = 0.0 if t.get("moving") else max(0.0, now - arrived) if isinstance(arrived, (int, float)) else float("inf")
+        age = max(0.0, now - arrived) if isinstance(arrived, (int, float)) else float("inf")
         recent = age <= RECENT_MOVE_SECS
         return (not recent, -CARRY_PRIORITY.get(t.get("cls"), 0) if recent else 0, age)
 
     return min(fresh, key=key)
 
 
-def states(best):
+def considered(things, now):
+    """What the choice was between, for the location sensor: each thing that
+    gives its owner's location, where it is and for how many minutes it has
+    stayed there. Shows why the person reads where they do."""
+    return [
+        {"thing": t["ent"], "where": t.get("sub_zone") if t.get("sub_zone") not in (None, "", "unknown") else t.get("zone"),
+         "here_for_min": round((now - t["arrived"]) / 60) if isinstance(t.get("arrived"), (int, float)) else None}
+        for t in things
+    ]
+
+
+def states(best, why=None):
     """(suffix -> (state, attributes)) for a person's sensors from the chosen thing."""
     if best is None:
         blank = {"room": "unknown", "spot": None, "floor": "unknown", "via": None}
@@ -127,7 +140,7 @@ def states(best):
     via = {"via": best["ent"]}
     return {
         "sextant_person_location": (spot or room, {"kind": "spot" if spot else "room", "room": room, "spot": spot,
-                                                   "floor": floor, **via}),
+                                                   "floor": floor, **via, "considered": why or []}),
         "sextant_person_room": (room, via),
         "sextant_person_floor": (floor, via),
     }
