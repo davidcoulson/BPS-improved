@@ -1128,37 +1128,6 @@ async def ws_irk_add(hass, connection, msg):
     return _error(connection, msg, f"Home Assistant refused the key: {reason}")
 
 
-@websocket_api.websocket_command({
-    vol.Required("type"): "sextant/irk/replace",
-    vol.Required("thing"): str,
-    vol.Optional("irk"): str,
-    vol.Optional("dry_run", default=False): bool,
-})
-@websocket_api.require_admin
-@websocket_api.async_response
-async def ws_irk_replace(hass, connection, msg):
-    """Give a phone or watch a new key, keeping every entity and its history (irk_replace.py).
-
-    Without ``irk`` it only says which device the thing is, so the page can
-    show that before anything is changed.
-    """
-    from . import irk_replace  # noqa: PLC0415
-
-    entry = irk_replace.entry_for_thing(hass, msg["thing"])
-    if entry is None:
-        return _error(connection, msg, "This thing is not a Private BLE Device phone or watch")
-    if "irk" not in msg:
-        return connection.send_result(msg["id"], {"device": irk_replace._device_name(hass, entry.data["irk"]) or entry.title})
-    try:
-        result = await irk_replace.async_replace_irk(hass, entry, msg["irk"], dry_run=msg["dry_run"])
-    except irk_replace.IrkReplaceError as e:
-        return _error(connection, msg, str(e))
-    except Exception as e:  # noqa: BLE001 - the registries' own errors quote identifiers, i.e. keys
-        _LOGGER.error("Replacing a key failed: %s", irk_replace.mask(e))
-        return _error(connection, msg, f"Home Assistant refused part of the change: {irk_replace.mask(e)}")
-    connection.send_result(msg["id"], result)
-
-
 @websocket_api.websocket_command({vol.Required("type"): "sextant/bermuda/findmy/remove", vol.Required("address"): str})
 @websocket_api.require_admin
 @websocket_api.async_response
@@ -1353,7 +1322,7 @@ COMMANDS = (
     ws_bermuda_candidates, ws_bermuda_tracked, ws_bermuda_track, ws_bermuda_findmy, ws_bermuda_findmy_add,
     ws_bermuda_findmy_remove, ws_bermuda_options, ws_bermuda_options_set, ws_bermuda_scanners, ws_bermuda_tiles,
     ws_bermuda_scanner_ranging, ws_bermuda_tile_identities, ws_bermuda_tile_bind, ws_bermuda_tile_adopt,
-    ws_irk_add, ws_irk_replace,
+    ws_irk_add,
 )
 
 
