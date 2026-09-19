@@ -69,7 +69,7 @@ you will draw better spots once you have watched where things actually sit.
 When you do: a spot belongs to the room under its first corner and is
 trimmed to that room on Save; measure the furniture and use **Set size**
 rather than drawing it by eye; and if a proxy sits on the furniture itself
-(a nightstand, a desk), pick it as **Proxy on this spot** - a thing that
+(a nightstand, a desk), pick it under **Proxies on this spot** - a thing that
 proxy hears close by counts as on the spot however wide the position
 estimate is ([Edit](edit.md)).
 

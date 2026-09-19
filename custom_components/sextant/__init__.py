@@ -3197,41 +3197,51 @@ def _elect_zone(entity, floor_name, instant_zone, point, kf_state, zone_polys, s
 SPOT_PROXY_MIN_RATIO = 1.25
 
 
-def _spot_proxy_evidence(layout, proxy):
-    """How strongly the proxy on a spot says the thing is on it, 0..1.
+def _spot_proxy_evidence(layout, proxies):
+    """How strongly the proxies on a spot say the thing is on it, 0..1.
 
-    The distance term fades from 1 at spot_proxy_near_m to 0 at
+    ``proxies`` is the spot's own proxy or proxies (a couch with an outlet at
+    each end). The distance term fades from 1 at spot_proxy_near_m to 0 at
     spot_proxy_far_m, so the nearest proxy three metres away says nothing.
-    The ratio term needs every other proxy (any floor) to read farther: 0 when
-    one is within SPOT_PROXY_MIN_RATIO of it, 1 from spot_proxy_ratio.
+    The ratio term needs every proxy NOT on the spot (any floor) to read
+    farther: 0 when one is within SPOT_PROXY_MIN_RATIO, 1 from
+    spot_proxy_ratio. The spot's proxies are not each other's rivals - two
+    outlets on one couch both hearing a thing close is the point - so the
+    evidence is the strongest of them.
     """
-    if not proxy or not isinstance(layout, dict):
+    if isinstance(proxies, str):
+        proxies = (proxies,)
+    if not proxies or not isinstance(layout, dict):
         return 0.0
-    mine, others = None, []
+    mine, others = [], []
     for floor in layout.get("floor") or []:
         for receiver in floor.get("receivers") or []:
             d = receiver.get("distance")
             if not isinstance(d, (int, float)) or isinstance(d, bool) or not d > 0:
                 continue
-            if receiver.get("entity_id") == proxy:
-                mine = float(d)
-            else:
-                others.append(float(d))
-    if mine is None:
+            (mine if receiver.get("entity_id") in proxies else others).append(float(d))
+    if not mine:
         return 0.0
     near = _tuning(layout, "spot_proxy_near_m")
     far = max(_tuning(layout, "spot_proxy_far_m"), near + 0.01)
-    by_distance = min(1.0, max(0.0, (far - mine) / (far - near)))
-    if not others:
-        return by_distance
     full = max(_tuning(layout, "spot_proxy_ratio"), SPOT_PROXY_MIN_RATIO + 0.01)
-    ratio = min(others) / mine
-    by_ratio = min(1.0, max(0.0, (ratio - SPOT_PROXY_MIN_RATIO) / (full - SPOT_PROXY_MIN_RATIO)))
-    return by_distance * by_ratio
+    best = 0.0
+    for d in mine:
+        by_distance = min(1.0, max(0.0, (far - d) / (far - near)))
+        by_ratio = 1.0 if not others else min(1.0, max(0.0, (min(others) / d - SPOT_PROXY_MIN_RATIO) / (full - SPOT_PROXY_MIN_RATIO)))
+        best = max(best, by_distance * by_ratio)
+    return best
+
+
+def _spot_proxies(sub):
+    """The proxies a spot names as sitting on it: ``proxy`` is one name or a list."""
+    raw = sub.get("proxy")
+    names = [raw] if isinstance(raw, str) else raw if isinstance(raw, list) else []
+    return tuple(n for n in names if isinstance(n, str) and n)
 
 
 def _spot_settings(layout, floor_name):
-    """Spot name -> {"proxy", "enter_prob"} for the spots on a floor that set either."""
+    """Spot name -> {"proxies", "enter_prob"} for the spots on a floor that set either."""
     out = {}
     floors = layout.get("floor") if isinstance(layout, dict) else None
     for floor in floors or []:
@@ -3240,9 +3250,9 @@ def _spot_settings(layout, floor_name):
         for sub in floor.get("subzones") or []:
             enter = sub.get("enter_prob")
             enter = float(enter) if isinstance(enter, (int, float)) and not isinstance(enter, bool) and 0.05 <= enter <= 0.95 else None
-            proxy = sub.get("proxy") if isinstance(sub.get("proxy"), str) and sub.get("proxy") else None
-            if enter is not None or proxy is not None:
-                out[sub.get("entity_id")] = {"proxy": proxy, "enter_prob": enter}
+            proxies = _spot_proxies(sub)
+            if enter is not None or proxies:
+                out[sub.get("entity_id")] = {"proxies": proxies, "enter_prob": enter}
     return out
 
 
@@ -3421,7 +3431,7 @@ def _elect_subzone(entity, floor_name, zone, zone_locked, point, kf_state, sub_p
     # the spot's share to at least that, taking the rest proportionally.
     settings = _spot_settings(layout, floor_name)
     for sid, _parent, _poly in polys:
-        p = _spot_proxy_evidence(layout, (settings.get(sid) or {}).get("proxy"))
+        p = _spot_proxy_evidence(layout, (settings.get(sid) or {}).get("proxies"))
         old = shares.get(sid, 0.0)
         if p > old:
             keep = (1.0 - p) / (1.0 - old) if old < 1.0 else 0.0

@@ -1918,3 +1918,17 @@ def test_a_spot_can_set_its_own_entry_share():
     own = _spot_layout(1.6, 5.0, proxy="sofa_px", enter_prob=0.3)
     outs = [_sub("e", (300, 320), t + dt, layout=own) for dt in (0, 10, 20, 31, 45)]
     assert outs[-1] == ("Sofa", "Living")
+
+
+def test_two_proxies_on_one_spot_are_not_each_others_runner_up():
+    # A couch with an outlet at each end: a phone on it is close to both.
+    lay = {"floor": [{"name": "F", "receivers": [
+        {"entity_id": "left", "distance": 0.9}, {"entity_id": "right", "distance": 1.1},
+        {"entity_id": "wall", "distance": 3.0}]}]}
+    ev = sextant._spot_proxy_evidence
+    assert ev(lay, "left") == 0.0                   # alone, "right" is its close rival
+    assert ev(lay, ("left", "right")) == 1.0        # together, only "wall" is a rival
+    assert ev(lay, ["right", "left"]) == 1.0
+    assert sextant._spot_proxies({"proxy": ["a", "", 3, "b"]}) == ("a", "b")
+    assert sextant._spot_proxies({"proxy": "a"}) == ("a",) and sextant._spot_proxies({}) == ()
+

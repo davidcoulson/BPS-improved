@@ -21,10 +21,11 @@ room or spot does the same to a shape drawn before. A selected spot also
 takes its real size: measure the furniture, type the width (across the
 plan) and depth (up the plan) in inches or centimetres, pick the corner to
 keep where it is, and **Set size** makes the spot that exact rectangle.
-**Proxy on this spot** names a proxy sitting on the furniture (a
-nightstand, a desk): when it hears a thing close by and clearly closer than
-every other proxy, that counts as the thing being on the spot, however wide
-the position estimate is. Its weight fades as the reading grows (full within
+**Proxies on this spot** names the proxies sitting on or against the
+furniture (a nightstand, an outlet at each end of a couch): when one hears a
+thing close by and clearly closer than every proxy not on the spot, that
+counts as the thing being on the spot, however wide the position estimate
+is. Its weight fades as the reading grows (full within
 1.2 m, none from 2 m) and as another proxy reads nearly as close, so being
 the nearest proxy from across the room says nothing; the edges are on the
 Tuning page under Spots. **Entry share** overrides the Tuning page's

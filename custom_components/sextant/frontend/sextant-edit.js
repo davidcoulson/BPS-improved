@@ -424,17 +424,23 @@ class SextantEdit extends LitElement {
   /** The proxy on the spot (its readings count as being on it) and the spot's own entry share. */
   _renderSpotEvidence(item, f) {
     const c = polygonCentroid(item.cords || []);
+    const linked = Array.isArray(item.proxy) ? item.proxy : item.proxy ? [item.proxy] : [];
     const near = (f.receivers || []).filter((r) => r.cords)
-      .map((r) => ({ r, d: Math.hypot(r.cords.x - c.x, r.cords.y - c.y) }))
-      .sort((a, b) => a.d - b.d).slice(0, 8);
-    const opts = [{ value: "", label: "none" }, ...near.map(({ r, d }) => ({ value: r.entity_id, label: `${proxyName(this.data, r.address || r.entity_id)}${f.scale ? ` (${fmtLen(d / f.scale, this.hass)} away)` : ""}` }))];
-    if (item.proxy && !near.some(({ r }) => r.entity_id === item.proxy)) opts.push({ value: item.proxy, label: proxyName(this.data, item.proxy) });
+      .map((r) => ({ id: r.entity_id, name: proxyName(this.data, r.address || r.entity_id), d: Math.hypot(r.cords.x - c.x, r.cords.y - c.y) }))
+      .sort((a, b) => a.d - b.d).slice(0, 6);
+    for (const id of linked) if (!near.some((n) => n.id === id)) near.push({ id, name: proxyName(this.data, id), d: null });
+    const toggle = (id) => {
+      const next = linked.includes(id) ? linked.filter((x) => x !== id) : [...linked, id];
+      this._edit("proxy", next.length ? next : undefined);
+    };
     const global = this.data?.layout?.tuning?.subzone_enter_prob ?? this.data?.tuning_spec?.subzone_enter_prob?.default ?? 0.5;
-    return html`<div class="row">
-      ${uiSelect({ label: "Proxy on this spot", value: item.proxy || "", options: opts, onChange: (v) => this._edit("proxy", v || undefined), style: "flex: 1" })}
+    return html`<div class="field"><span class="small">Proxies on this spot</span>
+      <div class="proxypick">${near.map((n) => html`<button class="chip ${linked.includes(n.id) ? "on" : ""}" aria-pressed=${linked.includes(n.id)} @click=${() => toggle(n.id)}
+        title=${linked.includes(n.id) ? "On this spot: click to unlink" : "Click if this proxy sits on the furniture"}>${n.name}${n.d != null && f.scale ? html` <span class="muted">${fmtLen(n.d / f.scale, this.hass)}</span>` : nothing}</button>`)}</div></div>
+    <div class="row">
       ${uiField({ label: "Entry share", type: "number", step: 0.05, min: 0.05, max: 0.95, value: item.enter_prob ?? "", placeholder: `${global} (default)`, onChange: (v) => this._edit("enter_prob", v === "" || v == null ? undefined : Number(v)), style: "width: 150px" })}
     </div>
-    <div class="muted small">A proxy sitting on the furniture: a thing it hears close by, and clearly closer than every other proxy, counts as here. Entry share: how much of a thing's likely position must fall in the spot to enter it; blank uses the Tuning page's value.</div>`;
+    <div class="muted small">Proxies sitting on or against the furniture (a nightstand, both ends of a couch): a thing one of them hears close by, and clearly closer than any proxy not on the spot, counts as here. Entry share: how much of a thing's likely position must fall in the spot to enter it; blank uses the Tuning page's value.</div>`;
   }
 
   _resizeSpot() {
@@ -771,6 +777,10 @@ class SextantEdit extends LitElement {
     .picked-row { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
     .family { display: inline-flex; gap: 1px; padding: 2px; border: 1.5px solid var(--divider-color); border-radius: 11px; }
     /* Sized so both family rings sit on one line of the 320px side panel. */
+    .proxypick { display: flex; flex-wrap: wrap; gap: 4px; margin: 2px 0 4px; }
+    .proxypick .chip { border: 1px solid var(--divider-color, #ccc); border-radius: 14px; padding: 3px 9px; background: transparent; color: var(--primary-text-color); cursor: pointer; font: inherit; font-size: 12px; }
+    .proxypick .chip.on { background: var(--primary-color, #03a9f4); border-color: var(--primary-color, #03a9f4); color: var(--text-primary-color, #fff); }
+    .proxypick .chip.on .muted { color: inherit; opacity: .8; }
     .classpick .cls { padding: 3px; border: 1px solid transparent; border-radius: 7px; background: transparent; line-height: 0; cursor: pointer; color: var(--disabled-text-color, #c4c4c4); }
     .classpick .cls ha-icon { --mdc-icon-size: 20px; }
     .classpick .cls.on { color: var(--primary-text-color); background: var(--secondary-background-color); border-color: var(--divider-color); }
