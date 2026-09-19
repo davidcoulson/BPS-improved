@@ -442,6 +442,10 @@ TUNING_SPEC = {
     # nothing about positioning changes, and position_timeout still decides
     # when the thing leaves the map altogether.
     "stale_after_secs": (120.0, float, 15.0, 3600.0),
+    # Hours of position history kept per thing: the history scrubber, the
+    # timeline and "Where it's been" reach back this far. Applied on the next
+    # cycle; an explicit top-level history_max_age (seconds) still wins.
+    "history_hours": (6.0, float, 1.0, 168.0),
 }
 
 # Reference fingerprints: receiver-to-receiver ranges, refreshed on a slow

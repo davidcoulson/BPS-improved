@@ -501,3 +501,12 @@ def test_timeline_window_and_empty_cases():
     _walk(h, [(0, "A", None), (100, "B", None), (200, "C", None)])
     tl = h.timeline(ENT, 1_000_150.0, 2e6)
     assert [s["room"] for s in tl["stays"]] == ["C"] and tl["stays"][0]["partial"] is False
+
+
+def test_history_hours_from_the_tuning_page_sets_the_window():
+    from sextant import history as hm
+    assert hm.history_config({})["max_age"] == hm.DEFAULT_MAX_AGE
+    assert hm.history_config({"tuning": {"history_hours": 24}})["max_age"] == 24 * 3600
+    assert hm.history_config({"tuning": {"history_hours": 9999}})["max_age"] == hm.MAX_AGE_LIMIT
+    # A hand-set history_max_age is more specific and wins.
+    assert hm.history_config({"history_max_age": 7200, "tuning": {"history_hours": 24}})["max_age"] == 7200

@@ -104,6 +104,13 @@ def history_config(layout):
         else:
             value = float(default)
         cfg[key[len("history_"):]] = value
+    # The Tuning page sets hours; a top-level history_max_age (seconds) set by
+    # hand is more specific and still wins.
+    tuning = src.get("tuning") if isinstance(src.get("tuning"), dict) else {}
+    hours = tuning.get("history_hours")
+    if not isinstance(src.get("history_max_age"), (int, float)) and isinstance(hours, (int, float)) \
+            and not isinstance(hours, bool) and math.isfinite(hours):
+        cfg["max_age"] = min(max(float(hours) * 3600.0, _CFG_SPEC["history_max_age"][1]), _CFG_SPEC["history_max_age"][2])
     enabled = src.get("history_enabled")
     cfg["enabled"] = True if enabled is None else bool(enabled)
     cfg["max_points"] = int(cfg["max_points"])

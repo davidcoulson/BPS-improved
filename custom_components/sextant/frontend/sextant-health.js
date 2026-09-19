@@ -49,6 +49,8 @@ const TUNING_LABELS = {
   floor_tenure_full_secs: ["Full tenure after (s)", "tenure is counted up to this"],
   floor_proximity_weight: ["Proximity weight", "how much nearest-proxy proximity scales a floor's score; 0 judges the fit alone"],
   floor_proximity_k: ["Proxies averaged for proximity", "the k nearest proxies whose distances are averaged"],
+  stale_after_secs: ["Ghost after (s)", "a thing unheard this long is drawn faded on Live, with how long ago it was heard"],
+  history_hours: ["History kept (hours)", "how far back the history scrubber, the timeline and Where it's been reach (1 to 168)"],
   calibration_target: ["Calibration writes to", "sextant = a per-proxy factor in the layout; bermuda = per-scanner RSSI offsets in Bermuda"],
   correction_close_fade: ["Fade stretch up close", "a proxy calibration stretches (factor above 1) pushes a thing lying right beside it away; fade that stretch out at short range"],
   correction_fade_near_m: ["No stretch within (m)", "a reading this close gets none of its proxy's stretch"],
@@ -604,6 +606,7 @@ class SextantHealth extends LitElement {
       ["Near-field anchor", ["anchor_max_m", "anchor_ratio", "anchor_secs", "anchor_release_m"]],
       ["Floors", ["floor_switch_secs", "floor_tenure_bonus", "floor_tenure_full_secs", "floor_proximity_weight", "floor_proximity_k"]],
       ["Calibration", ["calibration_target", "correction_close_fade", "correction_fade_near_m", "correction_fade_far_m"]],
+      ["History and display", ["history_hours", "stale_after_secs"]],
     ];
     const known = new Set(groups.flatMap((g) => g[1]));
     const rest = Object.keys(spec).filter((k) => !known.has(k));

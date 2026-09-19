@@ -87,7 +87,6 @@ it gives the time on this floor, the longest stay in one square, and the
 time on other floors. A reading holds until the next one for at most five
 minutes, and a dropout counts for one minute, so a thing that went quiet
 does not pile hours onto its last square. History keeps 6 hours by
-default (the layout's `history_max_age`, in seconds, up to a week; there
-is no control for it on the Tuning page yet); asking for more says how far
-back it goes.
+default; **History kept (hours)** on the Tuning page raises it, up to a
+week. Asking for more than is kept says how far back it goes.
 
