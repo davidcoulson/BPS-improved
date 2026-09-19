@@ -50,3 +50,13 @@ def test_states_give_the_spot_or_the_room_and_say_which_thing():
 def test_person_sensors_are_never_mistaken_for_an_untracked_things():
     for suffix, _label in persons.PERSON_SENSOR_KINDS:
         assert sensor_mod.thing_of_unique_id(f"{suffix}_david_coulson") is None
+
+
+def test_headphones_keys_and_bags_do_not_locate_their_owner_unless_asked():
+    layout = {"thing_locates_owner": {"pods2": True, "phone2": False}}
+    assert persons.locates_owner(layout, "watch", "watch") and persons.locates_owner(layout, "meg", "cat")
+    assert not persons.locates_owner(layout, "pods", "headphones")
+    assert not persons.locates_owner(layout, "bag", "bag") and not persons.locates_owner(layout, "x", None)
+    assert persons.locates_owner(layout, "pods2", "headphones")      # switched on for this pair
+    assert not persons.locates_owner(layout, "phone2", "phone")      # switched off for this phone
+

@@ -315,6 +315,8 @@ async def ws_tuning_set(hass, connection, msg):
     # Whose it is: a Home Assistant person (person.david). Groups the Live
     # list, and is what a per-person location will be built from.
     vol.Optional("owner"): vol.Any(None, str),
+    # Whether this thing's place may stand for its owner's (None: its class decides).
+    vol.Optional("locates_owner"): vol.Any(None, bool),
     vol.Optional("estimator"): vol.Any(None, "", "geometric", "fingerprint", "fused"),
     vol.Optional("fp_weight"): vol.Any(None, vol.Coerce(float)),
     vol.Optional("color"): vol.Any(None, str),
@@ -425,6 +427,16 @@ async def ws_thing_tune(hass, connection, msg):
                     values.pop(entity, None)
                 data[store] = values
                 changes[key] = value or None
+        if "locates_owner" in msg:
+            values = data.get("thing_locates_owner")
+            if not isinstance(values, dict):
+                values = {}
+            if isinstance(msg["locates_owner"], bool):
+                values[entity] = msg["locates_owner"]
+            else:
+                values.pop(entity, None)
+            data["thing_locates_owner"] = values
+            changes["locates_owner"] = msg["locates_owner"]
         await save_layout(hass, data)
     connection.send_result(msg["id"], {"entity": entity, **changes})
 

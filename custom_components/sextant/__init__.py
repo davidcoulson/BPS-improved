@@ -2724,7 +2724,7 @@ def _update_person_sensors(hass):
         candidates = []
         for ent in things:
             row = rows.get(ent)
-            if not row:
+            if not row or not persons_mod.locates_owner(layout, ent, classes.get(ent)):
                 continue
             candidates.append({
                 "ent": ent, "cls": classes.get(ent), "updated": row.get("updated"),

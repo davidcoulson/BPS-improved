@@ -51,8 +51,11 @@ away with a click. And each owner gets three sensors of their own:
 thing they came from. Automations can then ask where David is rather than
 where his phone is.
 
-Which thing speaks for a person: only things heard recently and placed in
-a room count; one that moved in the last ten minutes beats one that has
+Which thing speaks for a person: only things that **give their owner's
+location** count - by default a watch, a phone, or a person's or pet's own
+tag, not headphones, keys, a bag or other tags, which go along only some of
+the time (the thing dialog switches it either way); of those, only ones
+heard recently and placed in a room; one that moved in the last ten minutes beats one that has
 sat still longer (the phone left on the couch is not you); then what is
 usually on a body - a pet's own tag, a watch, a phone, headphones; then
 whichever moved last.

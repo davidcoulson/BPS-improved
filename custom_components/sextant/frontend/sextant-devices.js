@@ -10,6 +10,9 @@
  */
 import { LitElement, html, css, nothing } from "./lit.js";
 import { pointInPolygon, thingColor } from "./sextant-map.js";
+
+// Mirrors persons.LOCATES_BY_DEFAULT: classes whose place is their owner's place.
+const LOCATES_BY_DEFAULT = new Set(["watch", "phone", "person", "man", "woman", "child", "cat", "dog", "paw"]);
 import { sharedStyles, widgetStyles, fmtAge, fmtNum, toast, callWS, confirmDialog, uiField, uiSelect, uiSwitch, uiButton, thingName, fmtLen, lenUnit, toDisplayLen, fromDisplayLen, THING_CLASSES, classIcon, pronounKey } from "./sextant-ui.js";
 
 const KIND_FILTERS = [["all", "Everything"], ["tile", "Tiles"], ["ibeacon", "iBeacons"], ["device", "Other devices"]];
@@ -232,6 +235,7 @@ class SextantDevices extends LitElement {
       thing_class: layout.thing_classes?.[slug] || "",
       pronouns: layout.thing_pronouns?.[slug] || "",
       owner: layout.thing_owners?.[slug] || "",
+      locates: typeof layout.thing_locates_owner?.[slug] === "boolean" ? (layout.thing_locates_owner[slug] ? "yes" : "no") : "",
       height: toDisplayLen(layout.thing_heights?.[slug], this.hass),
       ref: layout.thing_ref_offsets?.[slug] ?? "",
       icon: layout.thing_icons?.[slug] || "",
@@ -333,6 +337,7 @@ class SextantDevices extends LitElement {
       thing_class: w.thing_class || null,
       pronouns: w.pronouns || null,
       owner: w.owner || null,
+      locates_owner: w.locates === "yes" ? true : w.locates === "no" ? false : null,
       height: w.height === "" || w.height == null ? null : fromDisplayLen(w.height, this.hass),
       ref_offset_db: w.ref === "" || w.ref == null ? null : Number(w.ref),
       icon: w.icon || null,
@@ -387,6 +392,13 @@ class SextantDevices extends LitElement {
             onChange: (v) => { w.owner = v; this.requestUpdate(); }, style: "width: 220px" })}
           <span class="small muted">A Home Assistant person. Their things are grouped together on Live, and the one they are carrying gives them a location sensor of their own.</span>
         </div>
+        ${w.owner ? html`<div class="row">
+          ${uiSelect({ label: "Gives the owner's location", value: w.locates || "", options: [
+            { value: "", label: `From its class (${LOCATES_BY_DEFAULT.has(w.thing_class) ? "yes" : "no"})` },
+            { value: "yes", label: "Yes" }, { value: "no", label: "No" },
+          ], onChange: (v) => { w.locates = v; this.requestUpdate(); }, style: "width: 220px" })}
+          <span class="small muted">Watches, phones and a pet's own tag say where their owner is. Headphones, keys or a bag go along only some of the time, so by default they don't.</span>
+        </div>` : nothing}
         <div class="row colour">
           <span class="avatar-preview" style="background: ${thingColor(w.slug, w.color || null)}" title="how this thing will look">${w.preview || w.icon ? html`<img src=${w.preview || w.icon} alt="">` : classIcon(w.thing_class) ? html`<ha-icon icon=${classIcon(w.thing_class)}></ha-icon>` : html`<span class="initials">${(w.name || w.placeholder || "?").slice(0, 2).toUpperCase()}</span>`}</span>
           <span class="small">Colour</span>

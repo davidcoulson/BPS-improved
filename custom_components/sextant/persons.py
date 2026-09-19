@@ -8,8 +8,11 @@ hour does not; the watch that just crossed the room does. So:
 1. Only things heard recently (within stale_after_secs) and placed in a room.
 2. A thing that moved in the last RECENT_MOVE_SECS beats one that has sat
    still longer - it is being carried.
-3. Then what is usually on a body: a pet's own tag, a watch, a phone,
-   headphones, then anything else.
+3. Then what is usually on a body: a pet's own tag, a watch, a phone.
+
+Only things that give their owner's location take part (locates_owner): by
+class a watch, a phone or a person's or pet's own tag; headphones, keys, a
+bag only when the thing is switched on for it.
 4. Then whichever moved most recently.
 
 Pure: the caller hands in each thing's latest published row.
@@ -21,6 +24,10 @@ from __future__ import annotations
 RECENT_MOVE_SECS = 600.0
 # Higher speaks for its owner first, among things equally recently moved.
 CARRY_PRIORITY = {"cat": 4, "dog": 4, "paw": 4, "watch": 3, "phone": 2, "headphones": 1}
+# Classes whose place is their owner's place, unless the thing says otherwise
+# (thing_locates_owner). Headphones, keys, a bag go with you some of the time;
+# where they are is not where you are.
+LOCATES_BY_DEFAULT = {"watch", "phone", "person", "man", "woman", "child", "cat", "dog", "paw"}
 # The sensors each person gets: (suffix, label).
 PERSON_SENSOR_KINDS = [
     ("sextant_person_location", "Sextant Location"),
@@ -37,6 +44,14 @@ def owners(layout) -> dict[str, list[str]]:
         if isinstance(person, str) and person.startswith("person."):
             out.setdefault(person, []).append(thing)
     return out
+
+
+def locates_owner(layout, ent, cls) -> bool:
+    """Whether this thing's place may stand for its owner's: its own setting, else its class."""
+    own = (layout.get("thing_locates_owner") or {}).get(ent) if isinstance(layout, dict) else None
+    if isinstance(own, bool):
+        return own
+    return cls in LOCATES_BY_DEFAULT
 
 
 def pick(things, now: float, stale_after: float):
