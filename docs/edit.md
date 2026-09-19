@@ -21,6 +21,14 @@ room or spot does the same to a shape drawn before. A selected spot also
 takes its real size: measure the furniture, type the width (across the
 plan) and depth (up the plan) in inches or centimetres, pick the corner to
 keep where it is, and **Set size** makes the spot that exact rectangle.
+**Proxy on this spot** names a proxy sitting on the furniture (a
+nightstand, a desk): when it hears a thing close by and clearly closer than
+every other proxy, that counts as the thing being on the spot, however wide
+the position estimate is. Its weight fades as the reading grows (full within
+1.2 m, none from 2 m) and as another proxy reads nearly as close, so being
+the nearest proxy from across the room says nothing; the edges are on the
+Tuning page under Spots. **Entry share** overrides the Tuning page's
+`subzone_enter_prob` for this spot alone; blank uses it.
 Pinch to zoom on a phone or tablet. Set the scale
 by measuring a known distance. Give a floor a *level* (0 ground, -1
 basement, 1 above) for ordering and an election *bias* (1.15 gives the

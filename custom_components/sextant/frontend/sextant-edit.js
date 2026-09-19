@@ -383,6 +383,22 @@ class SextantEdit extends LitElement {
     </div>`;
   }
 
+  /** The proxy on the spot (its readings count as being on it) and the spot's own entry share. */
+  _renderSpotEvidence(item, f) {
+    const c = polygonCentroid(item.cords || []);
+    const near = (f.receivers || []).filter((r) => r.cords)
+      .map((r) => ({ r, d: Math.hypot(r.cords.x - c.x, r.cords.y - c.y) }))
+      .sort((a, b) => a.d - b.d).slice(0, 8);
+    const opts = [{ value: "", label: "none" }, ...near.map(({ r, d }) => ({ value: r.entity_id, label: `${proxyName(this.data, r.address || r.entity_id)}${f.scale ? ` (${fmtLen(d / f.scale, this.hass)} away)` : ""}` }))];
+    if (item.proxy && !near.some(({ r }) => r.entity_id === item.proxy)) opts.push({ value: item.proxy, label: proxyName(this.data, item.proxy) });
+    const global = this.data?.layout?.tuning?.subzone_enter_prob ?? this.data?.tuning_spec?.subzone_enter_prob?.default ?? 0.5;
+    return html`<div class="row">
+      ${uiSelect({ label: "Proxy on this spot", value: item.proxy || "", options: opts, onChange: (v) => this._edit("proxy", v || undefined), style: "flex: 1" })}
+      ${uiField({ label: "Entry share", type: "number", step: 0.05, min: 0.05, max: 0.95, value: item.enter_prob ?? "", placeholder: `${global} (default)`, onChange: (v) => this._edit("enter_prob", v === "" || v == null ? undefined : Number(v)), style: "width: 150px" })}
+    </div>
+    <div class="muted small">A proxy sitting on the furniture: a thing it hears close by, and clearly closer than every other proxy, counts as here. Entry share: how much of a thing's likely position must fall in the spot to enter it; blank uses the Tuning page's value.</div>`;
+  }
+
   _resizeSpot() {
     const sel = this._selection, f = this._floorObj();
     if (!sel || sel.kind !== "subzone" || !f?.scale) return;
@@ -432,6 +448,7 @@ class SextantEdit extends LitElement {
     else item[field] = value;
     if (item.height === undefined) delete item.height;
     if (item.correction === undefined) delete item.correction;
+    if (item[field] === undefined) delete item[field];
     this._dirty = true;
     this._map.invalidate();
     this.requestUpdate();
@@ -651,7 +668,8 @@ class SextantEdit extends LitElement {
           <div class="classpick">${this._classPicker(item)}</div>
           <div class="muted small">A ringed group goes together: pick Person or Pet and its kinds count too, shown without the grey background.</div>
         </div>
-        ${this._renderSpotSize(item, f)}` : nothing}
+        ${this._renderSpotSize(item, f)}
+        ${this._renderSpotEvidence(item, f)}` : nothing}
       <div class="row"><span class="muted small">${(item.cords?.length ?? 1)} point(s)</span><span class="grow"></span>${sel.kind === "zone" || sel.kind === "subzone" ? uiButton({ label: "Square up", icon: "mdi:vector-square", onClick: () => this._squareUp(), title: "Make every edge that is nearly horizontal, vertical or 45° exactly that. Other angles stay as drawn" }) : nothing}${uiButton({ label: "Delete", kind: "danger", onClick: () => this._deleteSelection() })}</div>
     </div>`;
   }

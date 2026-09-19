@@ -1872,3 +1872,49 @@ def test_mark_references_follow_a_change_of_correction():
         assert sextant._mark_refs(recal)[0]["vector"]["bb"] == 3.0
     finally:
         sextant._set_truth_marks([])
+
+
+# --- a proxy on the spot, and a spot's own entry share ---------------------- #
+def test_spot_proxy_evidence_fades_with_distance_and_with_a_close_runner_up():
+    def lay(mine, other):
+        return {"floor": [{"name": "F", "receivers": [
+            {"entity_id": "table", "distance": mine}, {"entity_id": "wall", "distance": other}]}]}
+    ev = sextant._spot_proxy_evidence
+    assert ev(lay(1.0, 3.0), "table") == 1.0                 # close, clearly nearest
+    assert abs(ev(lay(1.6, 4.0), "table") - 0.5) < 1e-9      # halfway out of 1.2..2.0 m
+    assert ev(lay(3.0, 9.0), "table") == 0.0                 # nearest, but ten feet away
+    assert ev(lay(1.0, 1.2), "table") == 0.0                 # another proxy nearly as close
+    assert 0.0 < ev(lay(1.0, 1.6), "table") < 1.0
+    assert ev(lay(1.0, 3.0), "other") == 0.0 and ev(lay(1.0, 3.0), None) == 0.0
+
+
+def _spot_layout(mine, other, **spot):
+    return {"tuning": {"subzone_switch_secs": 20.0, "zone_prob_smoothing": 0.6},
+            "floor": [{"name": "F", "subzones": [{"entity_id": "Sofa", **spot}],
+                       "receivers": [{"entity_id": "sofa_px", "distance": mine}, {"entity_id": "wall", "distance": other}]}]}
+
+
+def test_a_proxy_on_the_spot_puts_a_thing_there_that_the_estimate_misses():
+    # The fix sits 0.2 m off the sofa: on geometry alone, never the sofa.
+    sextant._subzone_state.clear()
+    lay = _spot_layout(0.9, 3.0, proxy="sofa_px")
+    t = 1000.0
+    outs = [_sub("e", (300, 320), t + dt, layout=lay) for dt in (0, 10, 31)]
+    assert outs[-1] == ("Sofa", "Living")
+    # The same, with the sofa's proxy three metres off: nothing.
+    sextant._subzone_state.clear()
+    far = _spot_layout(3.0, 6.0, proxy="sofa_px")
+    assert all(_sub("e", (300, 320), t + dt, layout=far) == ("unknown", "Living") for dt in (0, 10, 31, 60))
+
+
+def test_a_spot_can_set_its_own_entry_share():
+    # Half the sofa proxy's evidence (1.6 m): 0.5 smoothed up to ~0.39 over three
+    # cycles - short of the default 0.5, enough for a spot that asks for 0.3.
+    sextant._subzone_state.clear()
+    t = 1000.0
+    default = _spot_layout(1.6, 5.0, proxy="sofa_px")
+    assert all(_sub("e", (300, 320), t + dt, layout=default) == ("unknown", "Living") for dt in (0, 10, 31, 60))
+    sextant._subzone_state.clear()
+    own = _spot_layout(1.6, 5.0, proxy="sofa_px", enter_prob=0.3)
+    outs = [_sub("e", (300, 320), t + dt, layout=own) for dt in (0, 10, 20, 31, 45)]
+    assert outs[-1] == ("Sofa", "Living")

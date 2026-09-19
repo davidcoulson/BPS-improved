@@ -375,6 +375,15 @@ TUNING_SPEC = {
     # how far (m) outside its polygon the fix must sit before it is left.
     "subzone_enter_prob": (0.5, float, 0.1, 0.95),
     "subzone_unlock_margin": (1.0, float, 0.0, 5.0),
+    # A spot with a proxy on it (a bedside table, a desk): the proxy hearing the
+    # thing close, and clearly closer than every other proxy, counts as the thing
+    # being in the spot - direct evidence, where the position estimate is as
+    # wide as the furniture. Full weight within spot_proxy_near_m, none from
+    # spot_proxy_far_m; full when every other proxy reads spot_proxy_ratio times
+    # farther, none when one reads within 1.25x (see _spot_proxy_evidence).
+    "spot_proxy_near_m": (1.2, float, 0.1, 5.0),
+    "spot_proxy_far_m": (2.0, float, 0.2, 10.0),
+    "spot_proxy_ratio": (2.0, float, 1.3, 10.0),
     # Floor election dwell (see _elect_floor).
     "floor_switch_secs": (FLOOR_SWITCH_SECS, float, 0.0, 3600.0),
     "floor_tenure_bonus": (0.05, float, 0.0, 0.5),      # extra margin at full tenure
@@ -3139,6 +3148,59 @@ def _elect_zone(entity, floor_name, instant_zone, point, kf_state, zone_polys, s
     return incumbent, False, speed
 
 
+# A proxy is only "clearly nearest" above this ratio to the runner-up.
+SPOT_PROXY_MIN_RATIO = 1.25
+
+
+def _spot_proxy_evidence(layout, proxy):
+    """How strongly the proxy on a spot says the thing is on it, 0..1.
+
+    The distance term fades from 1 at spot_proxy_near_m to 0 at
+    spot_proxy_far_m, so the nearest proxy three metres away says nothing.
+    The ratio term needs every other proxy (any floor) to read farther: 0 when
+    one is within SPOT_PROXY_MIN_RATIO of it, 1 from spot_proxy_ratio.
+    """
+    if not proxy or not isinstance(layout, dict):
+        return 0.0
+    mine, others = None, []
+    for floor in layout.get("floor") or []:
+        for receiver in floor.get("receivers") or []:
+            d = receiver.get("distance")
+            if not isinstance(d, (int, float)) or isinstance(d, bool) or not d > 0:
+                continue
+            if receiver.get("entity_id") == proxy:
+                mine = float(d)
+            else:
+                others.append(float(d))
+    if mine is None:
+        return 0.0
+    near = _tuning(layout, "spot_proxy_near_m")
+    far = max(_tuning(layout, "spot_proxy_far_m"), near + 0.01)
+    by_distance = min(1.0, max(0.0, (far - mine) / (far - near)))
+    if not others:
+        return by_distance
+    full = max(_tuning(layout, "spot_proxy_ratio"), SPOT_PROXY_MIN_RATIO + 0.01)
+    ratio = min(others) / mine
+    by_ratio = min(1.0, max(0.0, (ratio - SPOT_PROXY_MIN_RATIO) / (full - SPOT_PROXY_MIN_RATIO)))
+    return by_distance * by_ratio
+
+
+def _spot_settings(layout, floor_name):
+    """Spot name -> {"proxy", "enter_prob"} for the spots on a floor that set either."""
+    out = {}
+    floors = layout.get("floor") if isinstance(layout, dict) else None
+    for floor in floors or []:
+        if floor.get("name") != floor_name:
+            continue
+        for sub in floor.get("subzones") or []:
+            enter = sub.get("enter_prob")
+            enter = float(enter) if isinstance(enter, (int, float)) and not isinstance(enter, bool) and 0.05 <= enter <= 0.95 else None
+            proxy = sub.get("proxy") if isinstance(sub.get("proxy"), str) and sub.get("proxy") else None
+            if enter is not None or proxy is not None:
+                out[sub.get("entity_id")] = {"proxy": proxy, "enter_prob": enter}
+    return out
+
+
 def _subzone_membership(sub_polys, samples):
     """sub-zone id -> share of sample weight inside it; samples in no
     sub-zone count toward "unknown". Unlike zones, sub-zones do not tile the
@@ -3310,13 +3372,28 @@ def _elect_subzone(entity, floor_name, zone, zone_locked, point, kf_state, sub_p
     else:
         samples = [(center[0], center[1], 1.0)]
     shares = _subzone_membership(polys, samples)
+    # A proxy on the spot is evidence of its own, as strong as it is: it lifts
+    # the spot's share to at least that, taking the rest proportionally.
+    settings = _spot_settings(layout, floor_name)
+    for sid, _parent, _poly in polys:
+        p = _spot_proxy_evidence(layout, (settings.get(sid) or {}).get("proxy"))
+        old = shares.get(sid, 0.0)
+        if p > old:
+            keep = (1.0 - p) / (1.0 - old) if old < 1.0 else 0.0
+            shares = {s: v * keep for s, v in shares.items()}
+            shares[sid] = p
     alpha = _tuning(layout, "zone_prob_smoothing")
     probs = st["probs"]
     for s in set(probs) | set(shares):
         probs[s] = alpha * probs.get(s, 0.0) + (1.0 - alpha) * shares.get(s, 0.0)
     for s in [s for s, p in probs.items() if p < 0.01]:
         del probs[s]
-    enter = _tuning(layout, "subzone_enter_prob")
+    default_enter = _tuning(layout, "subzone_enter_prob")
+
+    def enter_for(sid):
+        own = (settings.get(sid) or {}).get("enter_prob")
+        return default_enter if own is None else own
+
     current = st["value"][0]
     contenders = {s: p for s, p in probs.items() if s != "unknown"}
     best = max(contenders, key=contenders.get) if contenders else None
@@ -3333,14 +3410,17 @@ def _elect_subzone(entity, floor_name, zone, zone_locked, point, kf_state, sub_p
             pt = Point(*center)
             margin_px = _tuning(layout, "subzone_unlock_margin") * (scale if isinstance(scale, (int, float)) and scale > 0 else 0.0)
             still_near = cur_poly.distance(pt) <= margin_px
-            if best is not None and best != current and contenders[best] >= enter and contenders[best] > probs.get(current, 0.0):
+            if best is not None and best != current and contenders[best] >= enter_for(best) and contenders[best] > probs.get(current, 0.0):
                 candidate = (best, zone)
-            elif still_near or probs.get(current, 0.0) >= enter:
+            elif still_near or probs.get(current, 0.0) >= enter_for(current):
                 candidate = st["value"]
             else:
                 candidate = ("unknown", zone)
     else:
-        candidate = (best, zone) if best is not None and contenders[best] >= enter else ("unknown", zone)
+        # Each spot against its own threshold: the best one that clears it.
+        cleared = {s: p for s, p in contenders.items() if p >= enter_for(s)}
+        best = max(cleared, key=cleared.get) if cleared else None
+        candidate = (best, zone) if best is not None else ("unknown", zone)
 
     if candidate == st["value"]:
         st["pending"] = None

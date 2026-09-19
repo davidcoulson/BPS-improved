@@ -46,6 +46,9 @@ distances in metres.
 | `subzone_switch_secs` | 20 | dwell before a spot change |
 | `subzone_enter_prob` | 0.5 | smoothed share needed to enter a spot |
 | `subzone_unlock_margin` | 1.0 | metres outside a spot before leaving it |
+| `spot_proxy_near_m` | 1.2 | a spot's own proxy counts fully within this |
+| `spot_proxy_far_m` | 2.0 | ...and not at all from this far |
+| `spot_proxy_ratio` | 2.0 | every other proxy this many times farther for full weight (none within 1.25×) |
 | `floor_switch_secs` | 60 | a challenger floor must lead this long |
 | `floor_tenure_bonus` | 0.05 | extra margin at full tenure |
 | `floor_tenure_full_secs` | 600 | tenure counted up to this |
