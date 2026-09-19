@@ -636,6 +636,49 @@ async def ws_history_timeline(hass, connection, msg):
     connection.send_result(msg["id"], data)
 
 
+@websocket_api.websocket_command({vol.Required("type"): "sextant/thing/readings", vol.Required("entity"): str})
+@websocket_api.async_response
+async def ws_thing_readings(hass, connection, msg):
+    """Per placed proxy, the reading Sextant would use for one thing, and why not.
+
+    The answer to "Bermuda hears it there, so why does Sextant not use it":
+    for every placed receiver, whether a reading was found by the proxy's
+    address or by its slug, its distance and age, and whether the stale gate
+    would drop it. Also lists every prefix Bermuda's tracked devices publish
+    that resembles this thing's, since two devices sharing a prefix would
+    overwrite each other's readings.
+    """
+    core = _core()
+    ent = msg["entity"]
+    layout = get_layout(hass) or {}
+    max_age = core._reading_max_age(layout)
+    by_address = bermuda_source.async_get_readings_by_address(hass) or {}
+    by_slug = bermuda_source.async_get_readings(hass) or {}
+    rows = []
+    for floor in layout.get("floor", []):
+        for rx in floor.get("receivers", []):
+            address = str(rx.get("address") or "").lower()
+            reading, source = by_address.get((ent, address)), "address"
+            if reading is None:
+                reading, source = by_slug.get((ent, rx.get("entity_id"))), "slug"
+            age = None if reading is None else reading.get("age")
+            rows.append({
+                "floor": floor.get("name"),
+                "receiver": rx.get("entity_id"),
+                "address": address or None,
+                "source": source if reading is not None else None,
+                "distance": None if reading is None else reading.get("distance"),
+                "age": age,
+                "stale": bool(max_age and age is not None and age > max_age),
+            })
+    stem = ent.rsplit("_", 1)[0]
+    prefixes = sorted({p for p, _a in by_address if p == ent or p.startswith(stem)})
+    connection.send_result(msg["id"], {
+        "entity": ent, "max_age": max_age, "receivers": rows, "similar_prefixes": prefixes,
+        "address_keys_for_entity": sum(1 for p, _a in by_address if p == ent),
+    })
+
+
 @websocket_api.websocket_command({vol.Required("type"): "sextant/history/clear", vol.Optional("entity"): str})
 @websocket_api.require_admin
 @websocket_api.async_response
@@ -1244,7 +1287,7 @@ async def ws_advice(hass, connection, msg):
 COMMANDS = (
     ws_advice,
     ws_layout_get, ws_layout_save, ws_tuning_set, ws_thing_tune,
-    ws_history_index, ws_history_get, ws_history_timeline, ws_history_clear,
+    ws_history_index, ws_history_get, ws_history_timeline, ws_history_clear, ws_thing_readings,
     ws_calibration_status, ws_calibration_action, ws_selftest, ws_scanner_linking, ws_receivers, ws_beacon_links,
     ws_adjust_zones, ws_registration, ws_scanner_ignore, ws_kpi, ws_kpi_baselines, ws_kpi_baseline_save, ws_kpi_baseline_delete,
     ws_truth_mark, ws_truth_list, ws_truth_delete, ws_truth_evaluate, ws_truth_apply,
