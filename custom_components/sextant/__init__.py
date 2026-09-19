@@ -460,6 +460,10 @@ TUNING_SPEC = {
     # timeline and Activity reach back this far. Applied on the next
     # cycle; an explicit top-level history_max_age (seconds) still wins.
     "history_hours": (6.0, float, 1.0, 168.0),
+    # Who may read where things have been (the scrubber, timeline and Activity):
+    # everyone signed in, or admins only. Live positions and the sensors stay
+    # visible to every user either way, as all Home Assistant entities are.
+    "history_admin_only": (False, bool),
 }
 
 # Reference fingerprints: receiver-to-receiver ranges, refreshed on a slow
@@ -2611,6 +2615,7 @@ async def prune_stale_positions(hass):
         _floor_since.pop(ent, None)
         getattr(update_trilateration_and_zone, "last_floor", {}).pop(ent, None)
         getattr(update_trilateration_and_zone, "last_r_values", {}).pop(ent, None)
+        _arrivals.pop(ent, None)
         _LOGGER.info("Thing %s not seen for %ss; clearing its position", ent, timeout)
         update_sextant_sensor_state(hass, f"sensor.{ent}_sextant_room", "unknown")
         update_sextant_sensor_state(hass, f"sensor.{ent}_sextant_floor", "unknown")
@@ -2760,10 +2765,18 @@ def _update_person_sensors(hass):
     """Each owner's location from the thing that speaks for them (persons.py)."""
     layout = get_layout(hass)
     by_person = persons_mod.owners(layout)
-    if not by_person:
-        return
     from . import sensor as sensor_mod  # noqa: PLC0415 - the platform imports this module
 
+    # Someone who no longer owns anything loses their sensors; only looked at
+    # when the set of owners changes, so steady state costs a comparison.
+    owning = frozenset(by_person)
+    if hass.data.get("sextant_person_owners") != owning:
+        sensor_mod.prune_person_sensors(hass, owning)
+        hass.data["sextant_person_owners"] = owning
+    for ent in [e for e in _arrivals if not any(e in things for things in by_person.values())]:
+        del _arrivals[ent]
+    if not by_person:
+        return
     sensor_mod.ensure_person_sensors(hass, list(by_person))
     rows = {r.get("ent"): r for r in (hass.data.get(DOMAIN, {}).get("apitricords") or []) if isinstance(r, dict)}
     classes = layout.get("thing_classes") or {}
@@ -4354,6 +4367,7 @@ async def async_setup(hass, config):
                 from . import ws as ws_mod  # noqa: PLC0415
 
                 ws_mod.RUNNING_VERSION = str(integration.version) if integration.version else None
+                ws_mod.RUNNING_CODE = await hass.async_add_executor_job(ws_mod.code_signature)
                 await panel_custom.async_register_panel(
                     hass,
                     frontend_url_path="sextant",
@@ -4440,17 +4454,11 @@ async def async_unload_entry(hass: HomeAssistant, entry):
 
     cleanup_legacy_sextant_registry_and_states(hass)
 
-    entity_registry = er.async_get(hass)
-
-    # Find and remove all entities that belong to "sextant"
-    entities_to_remove = [
-        entity.entity_id for entity in entity_registry.entities.values()
-        if entity.platform == "sextant"
-    ]
-
-    for entity_id in entities_to_remove:
-        _LOGGER.info(f"Removes sensor: {entity_id}")
-        entity_registry.async_remove(entity_id)
+    # The registry entries stay. Unloading the platform below takes the
+    # entities out of the state machine, and Home Assistant itself clears a
+    # config entry's registry entries when the entry is REMOVED. Deleting them
+    # here ran on every reload and options change: it threw away per-entity
+    # settings (area, name, disabled) and rewrote the whole registry twice.
 
     try: # Attempt to unload platforms
         unload_ok = await hass.config_entries.async_unload_platforms(entry, ["sensor"])
@@ -4535,6 +4543,13 @@ class SextantFrontendView(HomeAssistantView):
 
         _LOGGER.debug("Serving file: %s", frontend_path)
 
+        # This view needs no login, so it must never leave its folder. Home
+        # Assistant's request filter already rejects an encoded "../", but
+        # that is its defence, not ours: only a plain file name, directly
+        # inside the frontend folder, is served.
+        if Path(file_name).name != file_name or frontend_path.parent != FRONTEND_PATH:
+            return web.Response(status=404, text="File not found")
+
         if not frontend_path.is_file():
             _LOGGER.error(f"Requested file not found: {frontend_path}")
             return web.Response(status=404, text="File not found")
@@ -4574,6 +4589,11 @@ class SextantMapImageView(HomeAssistantView):
             return web.Response(status=404, text="No such map")
         response = web.FileResponse(path=str(target))
         response.headers["Cache-Control"] = "private, no-cache"
+        # An .svg can carry script, and this is Home Assistant's own origin:
+        # sandboxed, it renders as an image and runs nothing even when opened
+        # in a tab of its own.
+        response.headers["Content-Security-Policy"] = "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:"
+        response.headers["X-Content-Type-Options"] = "nosniff"
         return response
 
 

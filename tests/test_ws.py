@@ -585,3 +585,22 @@ def test_thing_tune_sets_and_clears_an_owner_and_pronouns(tmp_path):
     run(ws.ws_thing_tune(hass, conn, {"id": 2, "type": "sextant/thing/tune", "entity": "watch", "owner": ""}))
     assert st.get_layout(hass)["thing_owners"] == {}
 
+
+def test_history_can_be_kept_to_admins(tmp_path):
+    layout = _layout()
+    layout["tuning"] = {"history_admin_only": True}
+    hass = _hass_with_layout(tmp_path, layout)
+    guest, admin = _Conn(), _Conn()
+    guest.user = types.SimpleNamespace(is_admin=False)
+    admin.user = types.SimpleNamespace(is_admin=True)
+    run(ws.ws_history_index(hass, guest, {"id": 1, "type": "sextant/history/index"}))
+    assert guest.errors and "administrators" in guest.errors[0][2] and not guest.results
+    run(ws.ws_history_index(hass, admin, {"id": 2, "type": "sextant/history/index"}))
+    assert admin.results and not admin.errors
+    # Off (the default): everyone signed in may read it.
+    open_hass = _hass_with_layout(tmp_path / "open", _layout())
+    anyone = _Conn()
+    anyone.user = types.SimpleNamespace(is_admin=False)
+    run(ws.ws_history_index(open_hass, anyone, {"id": 3, "type": "sextant/history/index"}))
+    assert anyone.results and not anyone.errors
+

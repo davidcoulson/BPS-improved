@@ -64,6 +64,7 @@ distances in metres.
 | `correction_fade_near_m` | 1.0 | a reading this close gets none of the stretch |
 | `correction_fade_far_m` | 2.5 | from this far the stretch applies in full |
 | `history_hours` | 6 | hours of position history kept (scrubber, timeline, Activity), 1 to 168 |
+| `history_admin_only` | off | only administrators may read where things have been (scrubber, timeline, Activity) |
 | `stale_after_secs` | 120 | unheard this long, a thing is drawn as a ghost on Live (display only) |
 
 Two more live at the top level of the layout: `position_timeout` (seconds

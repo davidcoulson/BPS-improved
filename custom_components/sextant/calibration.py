@@ -182,8 +182,10 @@ async def save_calibration_state(hass) -> None:
         "saved_at": time.time(),
         "results": cal["results"],
         "applied": cal["applied"],
+        # To the millimetre: the readings are RSSI-derived and good to decimetres
+        # at best, and 17-digit floats made this file 5 MB for a 58-proxy house.
         "samples": {
-            key: list(values)[-STATE_SAMPLES_PER_PAIR:]
+            key: [round(v, 3) for v in list(values)[-STATE_SAMPLES_PER_PAIR:]]
             for key, values in cal["samples"].items()
         },
     }

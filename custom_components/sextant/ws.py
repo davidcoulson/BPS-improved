@@ -87,6 +87,26 @@ def _manifest_version() -> str | None:
 # Home Assistant restarts; comparing the two tells the panel whether a reload
 # is enough or a restart is needed.
 RUNNING_VERSION = None
+# A digest of the integration's Python sources as loaded (set at setup). The
+# frontend is served from disk and needs only a page reload after an update;
+# only when this differs from the files on disk does Home Assistant have to
+# restart, and the panel says so.
+RUNNING_CODE = None
+
+
+def code_signature() -> str | None:
+    """sha256 over the package's .py files, in name order (blocking: call in the executor)."""
+    import hashlib  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+
+    try:
+        digest = hashlib.sha256()
+        for path in sorted(Path(__file__).parent.glob("*.py")):
+            digest.update(path.name.encode())
+            digest.update(path.read_bytes())
+        return digest.hexdigest()
+    except OSError:
+        return None
 
 
 def _thing_names(hass, entities, layout=None) -> dict:
@@ -178,6 +198,7 @@ async def ws_layout_get(hass, connection, msg):
         # newer than the page only needs a reload.
         "app_version": await hass.async_add_executor_job(_manifest_version),
         "running_version": RUNNING_VERSION,
+        "restart_needed": RUNNING_CODE is not None and await hass.async_add_executor_job(code_signature) != RUNNING_CODE,
         "scanners": {
             addr: {"slug": info.get("slug"), "name": info.get("name"), "area": info.get("area_name"),
                    "is_remote": info.get("is_remote")}
@@ -616,6 +637,16 @@ async def ws_truth_apply(hass, connection, msg):
 # --- history -----------------------------------------------------------------
 
 
+def _history_denied(hass, connection, msg) -> bool:
+    """True (and an error sent) when history is for admins only and the caller is not one."""
+    if not _core()._tuning(get_layout(hass), "history_admin_only"):
+        return False
+    if getattr(getattr(connection, "user", None), "is_admin", False):
+        return False
+    _error(connection, msg, "Location history is for administrators on this install")
+    return True
+
+
 def _history(hass):
     core = _core()
     hist = core.get_position_history(hass)
@@ -627,6 +658,8 @@ def _history(hass):
 @websocket_api.websocket_command({vol.Required("type"): "sextant/history/index"})
 @websocket_api.async_response
 async def ws_history_index(hass, connection, msg):
+    if _history_denied(hass, connection, msg):
+        return
     core = _core()
     hist = _history(hass)
     files, size = await hass.async_add_executor_job(history_mod.disk_usage, core.history_dir(hass))
@@ -647,6 +680,8 @@ async def ws_history_index(hass, connection, msg):
 })
 @websocket_api.async_response
 async def ws_history_get(hass, connection, msg):
+    if _history_denied(hass, connection, msg):
+        return
     core = _core()
     hist = _history(hass)
     now = time.time()
@@ -672,6 +707,8 @@ async def ws_history_timeline(hass, connection, msg):
     What the Live page's timeline and its "here for" line are drawn from.
     Covers the last ``hours`` (default 24), capped at what history retains.
     """
+    if _history_denied(hass, connection, msg):
+        return
     hist = _history(hass)
     now = time.time()
     span = min(float(msg.get("hours") or 24.0) * 3600.0, hist.cfg["max_age"])

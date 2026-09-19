@@ -15,16 +15,9 @@ import { LitElement, html, css, nothing } from "./lit.js";
 import { SextantMap, thingColor, thingHue, staleness, shortAge, heatCells } from "./sextant-map.js";
 import { sharedStyles, widgetStyles, fmtAge, fmtNum, toast, confirmDialog, ensureHaComponents, uiSwitch, uiSelect, uiButton, callWS, sortFloors, thingName, proxyName, fmtLen, fmtSpeed, classIcon, pronounsFor } from "./sextant-ui.js";
 
-// The backend registers the panel at /sextant/v/<version>/sextant-panel.js
-// (older releases used ?v=<version>), so a page loaded before an update carries
-// the old version here while layout/get reports the new one; the version comes
-// from our own URL, never from a constant that has to be bumped per release.
-const PANEL_VERSION = (() => {
-  try {
-    const u = new URL(import.meta.url);
-    return u.pathname.match(/\/sextant\/v\/([^/]+)\//)?.[1] ?? u.searchParams.get("v");
-  } catch { return null; }
-})();
+// What this page is running: the version of the files it was loaded from
+// (sextant-version.js), not the one in its URL - see that file.
+import { VERSION as PANEL_VERSION } from "./sextant-version.js";
 import "./sextant-devices.js";
 import "./sextant-health.js";
 import "./sextant-edit.js";
@@ -179,20 +172,19 @@ class SextantPanel extends LitElement {
   }
 
   /**
-   * After an update: HACS swaps the files, but Home Assistant keeps running
-   * (and serving the panel of) the old version until it restarts, so a reload
-   * alone cannot help then. Only once it runs the new version does a reload
-   * fetch the new page.
+   * After an update HACS has swapped the files on disk. The frontend is
+   * served from disk, so a reload is all a page needs; Home Assistant only
+   * has to restart when the Python code changed too (restart_needed compares
+   * the code on disk with what was loaded).
    */
   _renderVersionBanner() {
-    const installed = this._data?.app_version, running = this._data?.running_version || installed;
-    if (!installed || !PANEL_VERSION) return nothing;
-    if (installed !== running) {
-      return html`<div class="banner update">Sextant ${installed} is installed; Home Assistant is still running ${running}. Restart Home Assistant to finish the update.
+    const installed = this._data?.app_version;
+    if (this._data?.restart_needed) {
+      return html`<div class="banner update">Sextant ${installed || ""} is installed, and its backend changed. Restart Home Assistant to finish the update.
         ${this.hass?.user?.is_admin ? html`<button @click=${() => this._restartHa()}>Restart</button>` : nothing}</div>`;
     }
-    if (running !== PANEL_VERSION) {
-      return html`<div class="banner update">Sextant ${running} is running; this page is still ${PANEL_VERSION}. <button @click=${() => window.location.reload()}>Reload</button></div>`;
+    if (installed && PANEL_VERSION && installed !== PANEL_VERSION) {
+      return html`<div class="banner update">Sextant ${installed} is installed; this page is still ${PANEL_VERSION}. <button @click=${() => window.location.reload()}>Reload</button></div>`;
     }
     return nothing;
   }

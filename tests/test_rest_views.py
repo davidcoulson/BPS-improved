@@ -100,3 +100,28 @@ def test_icon_upload_stores_a_sanitised_name_under_www(tmp_path):
 
 def test_icon_upload_without_a_file_is_a_400(tmp_path):
     assert _upload(_hass(tmp_path), None).status == 400
+
+
+def test_the_unauthenticated_frontend_view_never_leaves_its_folder(tmp_path, monkeypatch):
+    # No login is needed for it, so it cannot lean on Home Assistant's request
+    # filter alone: a decoded "../" must be refused here too.
+    hass = _hass(tmp_path)
+    view = sextant.SextantFrontendView()
+    request = _Request(hass, {})
+    served = []
+    monkeypatch.setattr(sextant.web, "FileResponse", lambda path: served.append(path) or types.SimpleNamespace(status=200, headers={}))
+    assert run(view.get(request, "sextant-ui.js")).status == 200
+    for name in ("../manifest.json", "../../../secrets.yaml", "sub/../sextant-ui.js", "/etc/passwd", ".."):
+        assert run(view.get(request, name)).status == 404, name
+    assert len(served) == 1
+
+
+def test_svg_maps_are_served_sandboxed(tmp_path, monkeypatch):
+    hass = _hass(tmp_path)
+    maps = tmp_path / "sextant_maps"
+    maps.mkdir()
+    (maps / "Ground.svg").write_text("<svg xmlns='http://www.w3.org/2000/svg'><script>1</script></svg>")
+    monkeypatch.setattr(sextant.web, "FileResponse", lambda path: types.SimpleNamespace(status=200, headers={}))
+    response = run(sextant.SextantMapImageView().get(_Request(hass, {}), "Ground.svg"))
+    assert response.headers["Content-Security-Policy"].startswith("sandbox")
+    assert response.headers["X-Content-Type-Options"] == "nosniff"
